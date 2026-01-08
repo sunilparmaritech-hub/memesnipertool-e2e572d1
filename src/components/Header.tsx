@@ -23,6 +23,7 @@ const Header = () => {
 
     if (isAdmin) {
       baseItems.push({ label: "Admin", path: "/admin" });
+      baseItems.push({ label: "Analytics", path: "/admin/analytics" });
     }
 
     return baseItems;

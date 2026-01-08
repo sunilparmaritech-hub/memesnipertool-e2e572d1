@@ -9,6 +9,7 @@ import Index from "./pages/Index";
 import Scanner from "./pages/Scanner";
 import Portfolio from "./pages/Portfolio";
 import Admin from "./pages/Admin";
+import AdminAnalytics from "./pages/AdminAnalytics";
 import UserSettings from "./pages/UserSettings";
 import MemeSniperSettings from "./pages/MemeSniperSettings";
 import RiskCompliance from "./pages/RiskCompliance";
@@ -79,6 +80,14 @@ const App = () => (
               element={
                 <ProtectedRoute requireAdmin>
                   <Admin />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/admin/analytics"
+              element={
+                <ProtectedRoute requireAdmin>
+                  <AdminAnalytics />
                 </ProtectedRoute>
               }
             />

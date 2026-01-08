@@ -1,4 +1,5 @@
-import Header from "@/components/Header";
+import TradingHeader from "@/components/trading/TradingHeader";
+import { useWallet } from "@/hooks/useWallet";
 import { Button } from "@/components/ui/button";
 import { useState } from "react";
 import { useAuth } from "@/contexts/AuthContext";
@@ -39,15 +40,24 @@ const UserSettings = () => {
     { id: "wallet", label: "Wallet", icon: Wallet },
   ];
 
+  const { wallet, connectPhantom, disconnect } = useWallet();
+
+  const handleConnectWallet = async () => {
+    if (wallet.isConnected) {
+      await disconnect();
+    } else {
+      await connectPhantom();
+    }
+  };
+
   return (
     <div className="min-h-screen bg-background">
-      <Header />
-
-      {/* Background Effects */}
-      <div className="fixed inset-0 pointer-events-none overflow-hidden">
-        <div className="absolute top-1/4 right-1/4 w-96 h-96 bg-primary/5 rounded-full blur-3xl" />
-        <div className="absolute bottom-1/3 left-1/3 w-96 h-96 bg-accent/5 rounded-full blur-3xl" />
-      </div>
+      <TradingHeader
+        walletConnected={wallet.isConnected}
+        walletAddress={wallet.address || undefined}
+        network={wallet.network}
+        onConnectWallet={handleConnectWallet}
+      />
 
       <main className="relative pt-20 md:pt-24 pb-8">
         <div className="container mx-auto px-4">

@@ -59,6 +59,39 @@ export type Database = {
         }
         Relationships: []
       }
+      api_health_metrics: {
+        Row: {
+          api_type: string
+          created_at: string
+          endpoint: string | null
+          error_message: string | null
+          id: string
+          is_success: boolean | null
+          response_time_ms: number | null
+          status_code: number | null
+        }
+        Insert: {
+          api_type: string
+          created_at?: string
+          endpoint?: string | null
+          error_message?: string | null
+          id?: string
+          is_success?: boolean | null
+          response_time_ms?: number | null
+          status_code?: number | null
+        }
+        Update: {
+          api_type?: string
+          created_at?: string
+          endpoint?: string | null
+          error_message?: string | null
+          id?: string
+          is_success?: boolean | null
+          response_time_ms?: number | null
+          status_code?: number | null
+        }
+        Relationships: []
+      }
       copy_trades: {
         Row: {
           action: string
@@ -311,6 +344,39 @@ export type Database = {
           require_ownership_renounced?: boolean | null
           updated_at?: string
           user_id?: string
+        }
+        Relationships: []
+      }
+      system_logs: {
+        Row: {
+          created_at: string
+          event_category: string
+          event_type: string
+          id: string
+          message: string | null
+          metadata: Json | null
+          severity: string | null
+          user_id: string | null
+        }
+        Insert: {
+          created_at?: string
+          event_category: string
+          event_type: string
+          id?: string
+          message?: string | null
+          metadata?: Json | null
+          severity?: string | null
+          user_id?: string | null
+        }
+        Update: {
+          created_at?: string
+          event_category?: string
+          event_type?: string
+          id?: string
+          message?: string | null
+          metadata?: Json | null
+          severity?: string | null
+          user_id?: string | null
         }
         Relationships: []
       }

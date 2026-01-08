@@ -17,6 +17,7 @@ const Header = () => {
       { label: "Dashboard", path: "/" },
       { label: "Scanner", path: "/scanner" },
       { label: "Portfolio", path: "/portfolio" },
+      { label: "Sniper Settings", path: "/sniper-settings" },
       { label: "Settings", path: "/settings" },
     ];
 

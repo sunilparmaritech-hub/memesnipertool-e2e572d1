@@ -110,6 +110,54 @@ export type Database = {
         }
         Relationships: []
       }
+      user_sniper_settings: {
+        Row: {
+          category_filters: string[]
+          created_at: string
+          id: string
+          max_concurrent_trades: number
+          min_liquidity: number
+          priority: Database["public"]["Enums"]["sniping_priority"]
+          profit_take_percentage: number
+          stop_loss_percentage: number
+          token_blacklist: string[]
+          token_whitelist: string[]
+          trade_amount: number
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          category_filters?: string[]
+          created_at?: string
+          id?: string
+          max_concurrent_trades?: number
+          min_liquidity?: number
+          priority?: Database["public"]["Enums"]["sniping_priority"]
+          profit_take_percentage?: number
+          stop_loss_percentage?: number
+          token_blacklist?: string[]
+          token_whitelist?: string[]
+          trade_amount?: number
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          category_filters?: string[]
+          created_at?: string
+          id?: string
+          max_concurrent_trades?: number
+          min_liquidity?: number
+          priority?: Database["public"]["Enums"]["sniping_priority"]
+          profit_take_percentage?: number
+          stop_loss_percentage?: number
+          token_blacklist?: string[]
+          token_whitelist?: string[]
+          trade_amount?: number
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
@@ -139,6 +187,7 @@ export type Database = {
         | "trade_execution"
         | "rpc_provider"
       app_role: "admin" | "user"
+      sniping_priority: "normal" | "fast" | "turbo"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -278,6 +327,7 @@ export const Constants = {
         "rpc_provider",
       ],
       app_role: ["admin", "user"],
+      sniping_priority: ["normal", "fast", "turbo"],
     },
   },
 } as const

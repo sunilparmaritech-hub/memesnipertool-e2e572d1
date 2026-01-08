@@ -2,8 +2,11 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import TradingHeader from "@/components/trading/TradingHeader";
 import TokenScannerPanel from "@/components/trading/TokenScannerPanel";
 import LiquidityBotPanel from "@/components/trading/LiquidityBotPanel";
+import StatsGrid from "@/components/dashboard/StatsGrid";
+import WalletBanner from "@/components/dashboard/WalletBanner";
+import ActiveTradesCard from "@/components/dashboard/ActiveTradesCard";
+import QuickActionsCard from "@/components/dashboard/QuickActionsCard";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { usePositions } from "@/hooks/usePositions";
 import { useTokenScanner } from "@/hooks/useTokenScanner";
@@ -12,26 +15,18 @@ import { useCopyTrades } from "@/hooks/useCopyTrades";
 import { useWallet } from "@/hooks/useWallet";
 import { useAutoSniper } from "@/hooks/useAutoSniper";
 import { useToast } from "@/hooks/use-toast";
-import { PriceChart, PortfolioChart } from "@/components/charts/PriceCharts";
+import { PortfolioChart } from "@/components/charts/PriceCharts";
 import { 
-  TrendingUp, 
-  TrendingDown, 
-  DollarSign, 
-  Activity, 
-  Wallet,
-  Clock,
   RefreshCw,
   Loader2,
-  ArrowUpRight,
-  ArrowDownRight,
-  Copy,
-  ExternalLink,
   LayoutDashboard,
   Bot,
+  Copy,
+  TrendingUp,
 } from "lucide-react";
-import { formatDistanceToNow } from "date-fns";
 import { Link } from "react-router-dom";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Badge } from "@/components/ui/badge";
 
 const formatCurrency = (value: number) => {
   if (Math.abs(value) >= 1000000) return `$${(value / 1000000).toFixed(2)}M`;
@@ -39,7 +34,6 @@ const formatCurrency = (value: number) => {
   return `$${value.toFixed(2)}`;
 };
 
-// Generate mock portfolio history
 const generatePortfolioData = () => {
   const data = [];
   let value = 100;
@@ -169,197 +163,133 @@ const Index = () => {
         onConnectWallet={handleConnectWallet}
       />
       
-      <main className="pt-20 pb-6 px-4">
+      <main className="pt-20 pb-8 px-4">
         <div className="container mx-auto">
-          {/* Tab Switcher */}
-          <Tabs value={activeTab} onValueChange={setActiveTab} className="mb-6">
+          <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
             <div className="flex items-center justify-between gap-4 flex-wrap">
-              <TabsList className="bg-secondary/50">
-                <TabsTrigger value="dashboard" className="gap-2">
+              <TabsList className="bg-secondary/60 p-1">
+                <TabsTrigger value="dashboard" className="gap-2 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
                   <LayoutDashboard className="w-4 h-4" />
                   Dashboard
                 </TabsTrigger>
-                <TabsTrigger value="scanner" className="gap-2">
+                <TabsTrigger value="scanner" className="gap-2 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
                   <Bot className="w-4 h-4" />
                   Token Scanner
                 </TabsTrigger>
               </TabsList>
               
-              <div className="flex items-center gap-2">
-                <Button variant="outline" size="sm" onClick={() => refreshBalance()} disabled={!wallet.isConnected}>
-                  <RefreshCw className="w-4 h-4 mr-1" />
-                  Refresh
-                </Button>
-              </div>
+              <Button variant="outline" size="sm" onClick={() => refreshBalance()} disabled={!wallet.isConnected}>
+                <RefreshCw className="w-4 h-4 mr-1.5" />
+                Refresh
+              </Button>
             </div>
 
-            {/* Dashboard Tab */}
-            <TabsContent value="dashboard" className="mt-6">
-              {/* Wallet Info Banner */}
-              {wallet.isConnected && (
-                <Card className="mb-6 border-primary/20 bg-gradient-to-r from-primary/5 to-transparent">
-                  <CardContent className="p-4">
-                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                      <div className="flex items-center gap-3">
-                        <div className="p-2 rounded-lg bg-primary/20">
-                          <Wallet className="w-5 h-5 text-primary" />
-                        </div>
-                        <div>
-                          <p className="text-xs text-muted-foreground">Connected Wallet</p>
-                          <p className="font-mono text-sm text-foreground">
-                            {wallet.address?.slice(0, 8)}...{wallet.address?.slice(-6)}
-                          </p>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-6">
-                        <div className="text-center">
-                          <p className="text-xs text-muted-foreground">Balance</p>
-                          <p className="font-semibold text-foreground">{wallet.balance || '0'}</p>
-                        </div>
-                        <div className="text-center">
-                          <p className="text-xs text-muted-foreground">Network</p>
-                          <Badge variant="outline" className="capitalize">{wallet.network}</Badge>
-                        </div>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
+            <TabsContent value="dashboard" className="space-y-6 mt-0">
+              {wallet.isConnected && wallet.address && (
+                <WalletBanner 
+                  address={wallet.address} 
+                  balance={wallet.balance || '0'} 
+                  network={wallet.network} 
+                />
               )}
 
-              {/* Stats Grid */}
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-                <Card>
-                  <CardContent className="p-4">
-                    <div className="flex items-center gap-3">
-                      <div className="p-2 rounded-lg bg-blue-500/20">
-                        <DollarSign className="w-5 h-5 text-blue-400" />
-                      </div>
-                      <div>
-                        <p className="text-xs text-muted-foreground">Portfolio Value</p>
-                        <p className="text-xl font-bold text-foreground">{formatCurrency(totalValue)}</p>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-
-                <Card>
-                  <CardContent className="p-4">
-                    <div className="flex items-center gap-3">
-                      <div className={`p-2 rounded-lg ${totalPnL >= 0 ? 'bg-success/20' : 'bg-destructive/20'}`}>
-                        {totalPnL >= 0 ? (
-                          <TrendingUp className="w-5 h-5 text-success" />
-                        ) : (
-                          <TrendingDown className="w-5 h-5 text-destructive" />
-                        )}
-                      </div>
-                      <div>
-                        <p className="text-xs text-muted-foreground">Total P&L</p>
-                        <p className={`text-xl font-bold ${totalPnL >= 0 ? 'text-success' : 'text-destructive'}`}>
-                          {totalPnL >= 0 ? '+' : ''}{formatCurrency(totalPnL)}
-                          <span className="text-sm ml-1">({totalPnLPercent.toFixed(1)}%)</span>
-                        </p>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-
-                <Card>
-                  <CardContent className="p-4">
-                    <div className="flex items-center gap-3">
-                      <div className="p-2 rounded-lg bg-primary/20">
-                        <Activity className="w-5 h-5 text-primary" />
-                      </div>
-                      <div>
-                        <p className="text-xs text-muted-foreground">Active Trades</p>
-                        <p className="text-xl font-bold text-foreground">{openPositions.length}</p>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-
-                <Card>
-                  <CardContent className="p-4">
-                    <div className="flex items-center gap-3">
-                      <div className="p-2 rounded-lg bg-muted">
-                        <Clock className="w-5 h-5 text-muted-foreground" />
-                      </div>
-                      <div>
-                        <p className="text-xs text-muted-foreground">Completed</p>
-                        <p className="text-xl font-bold text-foreground">{closedPositions.length}</p>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              </div>
+              <StatsGrid
+                totalValue={totalValue}
+                totalPnL={totalPnL}
+                totalPnLPercent={totalPnLPercent}
+                openPositionsCount={openPositions.length}
+                closedPositionsCount={closedPositions.length}
+              />
 
               <div className="grid lg:grid-cols-3 gap-6">
-                {/* Main Content */}
                 <div className="lg:col-span-2 space-y-6">
-                  {/* Portfolio Chart */}
-                  <Card>
+                  <Card className="bg-card/80 backdrop-blur-sm border-border/50">
                     <CardHeader className="pb-2">
-                      <CardTitle className="text-base font-semibold">Portfolio Performance (7D)</CardTitle>
+                      <CardTitle className="text-base font-semibold flex items-center gap-2">
+                        <TrendingUp className="w-4 h-4 text-primary" />
+                        Portfolio Performance (7D)
+                      </CardTitle>
                     </CardHeader>
                     <CardContent>
-                      <PortfolioChart data={portfolioData} height={180} />
+                      <PortfolioChart data={portfolioData} height={200} />
                     </CardContent>
                   </Card>
 
-                  {/* Active Trades */}
-                  <Card>
-                    <CardHeader className="pb-2 flex flex-row items-center justify-between">
-                      <CardTitle className="text-base font-semibold">Active Trades</CardTitle>
-                      <Link to="/portfolio">
-                        <Button variant="ghost" size="sm">View All</Button>
-                      </Link>
+                  <ActiveTradesCard 
+                    positions={openPositions} 
+                    loading={positionsLoading}
+                    onStartSnipping={() => setActiveTab("scanner")}
+                  />
+                </div>
+
+                <div className="space-y-6">
+                  <Card className="bg-card/80 backdrop-blur-sm border-border/50">
+                    <CardHeader className="pb-3">
+                      <CardTitle className="text-base font-semibold flex items-center gap-2">
+                        <Copy className="w-4 h-4 text-purple-400" />
+                        Recent Copy Trades
+                      </CardTitle>
                     </CardHeader>
                     <CardContent>
-                      {positionsLoading ? (
+                      {copyLoading ? (
                         <div className="flex items-center justify-center py-8">
-                          <Loader2 className="w-6 h-6 animate-spin text-primary" />
+                          <Loader2 className="w-5 h-5 animate-spin text-primary" />
                         </div>
-                      ) : openPositions.length === 0 ? (
-                        <div className="text-center py-8 text-muted-foreground">
-                          <Activity className="w-10 h-10 mx-auto mb-2 opacity-50" />
-                          <p>No active trades</p>
-                          <Button variant="link" size="sm" onClick={() => setActiveTab("scanner")}>
-                            Start sniping →
-                          </Button>
-                        </div>
+                      ) : copyTrades.length === 0 ? (
+                        <p className="text-center py-6 text-sm text-muted-foreground">No copy trades yet</p>
                       ) : (
-                        <div className="space-y-3">
-                          {openPositions.slice(0, 4).map((position) => {
-                            const isProfit = (position.profit_loss_percent || 0) >= 0;
-                            return (
-                              <div key={position.id} className="flex items-center justify-between p-3 bg-secondary/30 rounded-lg">
-                                <div className="flex items-center gap-3">
-                                  <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center">
-                                    <span className="text-xs font-bold text-primary">
-                                      {position.token_symbol.slice(0, 2)}
-                                    </span>
-                                  </div>
-                                  <div>
-                                    <p className="font-medium text-foreground">{position.token_symbol}</p>
-                                    <p className="text-xs text-muted-foreground">
-                                      {formatDistanceToNow(new Date(position.created_at), { addSuffix: true })}
-                                    </p>
-                                  </div>
-                                </div>
-                                <div className="text-right">
-                                  <p className={`font-semibold ${isProfit ? 'text-success' : 'text-destructive'}`}>
-                                    {isProfit ? '+' : ''}{(position.profit_loss_percent || 0).toFixed(2)}%
-                                  </p>
-                                  <p className="text-xs text-muted-foreground">
-                                    {formatCurrency(position.current_value)}
-                                  </p>
-                                </div>
+                        <div className="space-y-2">
+                          {copyTrades.slice(0, 5).map((trade) => (
+                            <div key={trade.id} className="flex items-center justify-between p-2.5 bg-secondary/40 rounded-lg">
+                              <div>
+                                <p className="text-sm font-medium text-foreground">{trade.token_symbol}</p>
+                                <p className="text-xs text-muted-foreground">{trade.leader_name || 'Unknown'}</p>
                               </div>
-                            );
-                          })}
+                              <Badge variant={trade.action === 'buy' ? 'default' : 'secondary'} className="text-xs">
+                                {trade.action}
+                              </Badge>
+                            </div>
+                          ))}
                         </div>
                       )}
                     </CardContent>
                   </Card>
+
+                  <QuickActionsCard onOpenScanner={() => setActiveTab("scanner")} />
+                </div>
+              </div>
+            </TabsContent>
+
+            <TabsContent value="scanner" className="mt-0">
+              <div className="grid lg:grid-cols-[1fr,400px] gap-6 h-[calc(100vh-160px)]">
+                <TokenScannerPanel
+                  tokens={tokens}
+                  loading={tokensLoading}
+                  onScan={handleScan}
+                  scanSpeed={scanSpeed}
+                  onSpeedChange={setScanSpeed}
+                  isPaused={isPaused}
+                  onPauseToggle={() => setIsPaused(!isPaused)}
+                />
+                
+                <LiquidityBotPanel
+                  settings={settings}
+                  saving={saving}
+                  onUpdateField={updateField}
+                  onSave={handleSaveSettings}
+                  isActive={isBotActive}
+                  onToggleActive={handleToggleBotActive}
+                />
+              </div>
+            </TabsContent>
+          </Tabs>
+        </div>
+      </main>
+    </div>
+  );
+};
+
+export default Index;
 
                   {/* Recent Completed Trades */}
                   <Card>

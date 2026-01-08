@@ -16,6 +16,9 @@ import {
   RefreshCw,
   ChevronDown,
   Loader2,
+  TrendingUp,
+  TrendingDown,
+  Zap,
 } from "lucide-react";
 
 interface TokenScannerPanelProps {
@@ -29,104 +32,104 @@ interface TokenScannerPanelProps {
 }
 
 const formatLiquidity = (value: number) => {
-  if (value >= 1000000) return `$${(value / 1000000).toFixed(0)}M liq`;
-  if (value >= 1000) return `$${(value / 1000).toFixed(0)}K liq`;
-  return `$${value.toFixed(0)} liq`;
+  if (value >= 1000000) return `$${(value / 1000000).toFixed(1)}M`;
+  if (value >= 1000) return `$${(value / 1000).toFixed(0)}K`;
+  return `$${value.toFixed(0)}`;
 };
 
 const TokenRow = ({ token, index }: { token: ScannedToken; index: number }) => {
   const [expanded, setExpanded] = useState(false);
   const isPositive = token.priceChange24h >= 0;
   
-  // Generate initials from token name
   const initials = token.symbol.slice(0, 2).toUpperCase();
   
-  // Determine safety status based on risk score
-  const getSafetyIcons = () => {
+  const getSafetyStatus = () => {
     const honeypotSafe = token.riskScore < 50;
     const taxSafe = token.riskScore < 40;
     const liquidityLocked = token.liquidityLocked;
     
     return (
-      <div className="flex items-center gap-1.5">
+      <div className="flex items-center gap-1">
         {honeypotSafe ? (
-          <ShieldCheck className="w-4 h-4 text-success" />
+          <div className="p-1 rounded bg-success/20">
+            <ShieldCheck className="w-3.5 h-3.5 text-success" />
+          </div>
         ) : (
-          <ShieldX className="w-4 h-4 text-destructive" />
-        )}
-        {taxSafe ? (
-          <ShieldCheck className="w-4 h-4 text-success" />
-        ) : (
-          <ShieldX className="w-4 h-4 text-warning" />
+          <div className="p-1 rounded bg-destructive/20">
+            <ShieldX className="w-3.5 h-3.5 text-destructive" />
+          </div>
         )}
         {liquidityLocked ? (
-          <Lock className="w-4 h-4 text-success" />
+          <div className="p-1 rounded bg-success/20">
+            <Lock className="w-3.5 h-3.5 text-success" />
+          </div>
         ) : (
-          <Lock className="w-4 h-4 text-muted-foreground" />
+          <div className="p-1 rounded bg-muted">
+            <Lock className="w-3.5 h-3.5 text-muted-foreground" />
+          </div>
         )}
-        <RefreshCw className="w-4 h-4 text-success animate-spin" style={{ animationDuration: '3s' }} />
+        {taxSafe && (
+          <div className="p-1 rounded bg-primary/20">
+            <Zap className="w-3.5 h-3.5 text-primary" />
+          </div>
+        )}
       </div>
     );
   };
 
-  // Generate background color based on index for avatar
   const avatarColors = [
     'bg-primary/20 text-primary',
     'bg-blue-500/20 text-blue-400',
     'bg-purple-500/20 text-purple-400',
     'bg-orange-500/20 text-orange-400',
     'bg-pink-500/20 text-pink-400',
+    'bg-cyan-500/20 text-cyan-400',
   ];
   const avatarClass = avatarColors[index % avatarColors.length];
 
-  // Get DEX badge
   const getDexBadge = () => {
     const dex = token.source?.toLowerCase() || 'raydium';
-    if (dex.includes('jupiter')) return 'jupiter';
-    if (dex.includes('raydium')) return 'raydium';
-    return 'raydium';
+    if (dex.includes('jupiter')) return { name: 'Jupiter', class: 'bg-success/15 text-success border-success/30' };
+    if (dex.includes('raydium')) return { name: 'Raydium', class: 'bg-purple-500/15 text-purple-400 border-purple-500/30' };
+    if (dex.includes('orca')) return { name: 'Orca', class: 'bg-blue-500/15 text-blue-400 border-blue-500/30' };
+    return { name: 'DEX', class: 'bg-muted text-muted-foreground' };
   };
 
-  const dexName = getDexBadge();
+  const dex = getDexBadge();
 
   return (
-    <div className="border-b border-border/50 last:border-b-0">
+    <div className="border-b border-border/30 last:border-b-0">
       <div 
-        className="flex items-center gap-3 p-3 hover:bg-secondary/30 transition-colors cursor-pointer"
+        className="flex items-center gap-3 p-3.5 hover:bg-secondary/40 transition-colors cursor-pointer"
         onClick={() => setExpanded(!expanded)}
       >
         {/* Avatar */}
-        <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm ${avatarClass}`}>
+        <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold text-sm ${avatarClass}`}>
           {initials}
         </div>
         
         {/* Token Info */}
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <span className="font-semibold text-foreground">{token.name.slice(0, 15)}</span>
-            <span className="text-muted-foreground text-sm">{token.symbol}</span>
-            <Badge 
-              className={`text-[10px] px-1.5 py-0 ${
-                dexName === 'jupiter' 
-                  ? 'bg-success/20 text-success border-success/30' 
-                  : 'bg-orange-500/20 text-orange-400 border-orange-500/30'
-              }`}
-            >
-              {dexName}
+          <div className="flex items-center gap-2 mb-0.5">
+            <span className="font-semibold text-foreground text-sm">{token.name.slice(0, 14)}</span>
+            <span className="text-muted-foreground text-xs">{token.symbol}</span>
+            <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${dex.class}`}>
+              {dex.name}
             </Badge>
           </div>
           <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
             <span className="font-mono">{token.address.slice(0, 4)}...{token.address.slice(-4)}</span>
-            <ExternalLink className="w-3 h-3" />
+            <ExternalLink className="w-3 h-3 hover:text-primary cursor-pointer" />
           </div>
         </div>
         
         {/* Safety Icons */}
-        {getSafetyIcons()}
+        {getSafetyStatus()}
         
         {/* Price Change */}
         <div className="text-right min-w-[80px]">
-          <div className={`font-bold ${isPositive ? 'text-success' : 'text-destructive'}`}>
+          <div className={`flex items-center justify-end gap-1 font-bold text-sm ${isPositive ? 'text-success' : 'text-destructive'}`}>
+            {isPositive ? <TrendingUp className="w-3.5 h-3.5" /> : <TrendingDown className="w-3.5 h-3.5" />}
             {isPositive ? '+' : ''}{token.priceChange24h.toFixed(1)}%
           </div>
           <div className="text-xs text-muted-foreground">
@@ -140,20 +143,26 @@ const TokenRow = ({ token, index }: { token: ScannedToken; index: number }) => {
       
       {/* Expanded Details */}
       {expanded && (
-        <div className="px-3 pb-3 pl-16 grid grid-cols-3 gap-4 text-xs animate-fade-in">
-          <div>
-            <span className="text-muted-foreground">Buyers:</span>
-            <span className="ml-2 text-foreground">{token.earlyBuyers}</span>
-          </div>
-          <div>
-            <span className="text-muted-foreground">Lock:</span>
-            <span className="ml-2 text-foreground">{token.lockPercentage || 0}%</span>
-          </div>
-          <div>
-            <span className="text-muted-foreground">Risk:</span>
-            <span className={`ml-2 ${token.riskScore < 40 ? 'text-success' : token.riskScore < 70 ? 'text-warning' : 'text-destructive'}`}>
-              {token.riskScore}/100
-            </span>
+        <div className="px-4 pb-4 pl-[60px] animate-fade-in">
+          <div className="grid grid-cols-4 gap-3 p-3 bg-secondary/30 rounded-lg text-xs">
+            <div>
+              <span className="text-muted-foreground block mb-0.5">Buyers</span>
+              <span className="text-foreground font-semibold">{token.earlyBuyers}</span>
+            </div>
+            <div>
+              <span className="text-muted-foreground block mb-0.5">Lock %</span>
+              <span className="text-foreground font-semibold">{token.lockPercentage || 0}%</span>
+            </div>
+            <div>
+              <span className="text-muted-foreground block mb-0.5">Position</span>
+              <span className="text-primary font-semibold">#{token.buyerPosition || '-'}</span>
+            </div>
+            <div>
+              <span className="text-muted-foreground block mb-0.5">Risk</span>
+              <span className={`font-semibold ${token.riskScore < 40 ? 'text-success' : token.riskScore < 70 ? 'text-warning' : 'text-destructive'}`}>
+                {token.riskScore}/100
+              </span>
+            </div>
           </div>
         </div>
       )}
@@ -179,39 +188,39 @@ export default function TokenScannerPanel({
   );
 
   return (
-    <div className="bg-card rounded-xl border border-border overflow-hidden h-full flex flex-col">
+    <div className="bg-card/80 backdrop-blur-sm rounded-xl border border-border/50 overflow-hidden h-full flex flex-col">
       {/* Header */}
-      <div className="p-4 border-b border-border">
-        <div className="flex items-center justify-between mb-3">
+      <div className="p-4 border-b border-border/50">
+        <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg bg-primary/20 flex items-center justify-center">
+            <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center border border-primary/20">
               <Shield className="w-5 h-5 text-primary" />
             </div>
             <div>
-              <h2 className="font-bold text-foreground text-lg">AI Token Scanner</h2>
-              <p className="text-xs text-muted-foreground">Monitoring Raydium, Jupiter & Orca pools</p>
+              <h2 className="font-bold text-foreground text-lg">Token Scanner</h2>
+              <p className="text-xs text-muted-foreground">Real-time DEX monitoring</p>
             </div>
           </div>
           
-          {/* Speed Selector & Pause */}
+          {/* Controls */}
           <div className="flex items-center gap-2">
-            <div className="flex bg-secondary rounded-lg p-0.5">
+            <div className="flex bg-secondary/60 rounded-lg p-0.5">
               {(['slow', 'normal', 'fast'] as const).map((speed) => (
                 <button
                   key={speed}
                   onClick={() => onSpeedChange(speed)}
-                  className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                  className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
                     scanSpeed === speed 
-                      ? 'bg-success text-success-foreground' 
+                      ? 'bg-primary text-primary-foreground shadow-sm' 
                       : 'text-muted-foreground hover:text-foreground'
                   }`}
                 >
-                  {speed}
+                  {speed.charAt(0).toUpperCase() + speed.slice(1)}
                 </button>
               ))}
             </div>
             
-            <Button variant="ghost" size="icon" className="text-muted-foreground">
+            <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-foreground">
               <Filter className="w-4 h-4" />
             </Button>
             
@@ -219,44 +228,45 @@ export default function TokenScannerPanel({
               variant={isPaused ? "default" : "outline"} 
               size="sm"
               onClick={onPauseToggle}
-              className={isPaused ? "bg-destructive hover:bg-destructive/90" : ""}
+              className={isPaused ? "bg-warning hover:bg-warning/90 text-warning-foreground" : ""}
             >
-              {isPaused ? <Play className="w-4 h-4 mr-1" /> : <Pause className="w-4 h-4 mr-1" />}
+              {isPaused ? <Play className="w-4 h-4 mr-1.5" /> : <Pause className="w-4 h-4 mr-1.5" />}
               {isPaused ? "Resume" : "Pause"}
             </Button>
           </div>
         </div>
         
         {/* Status Bar */}
-        <div className="flex items-center gap-2 text-sm">
-          <div className="flex items-center gap-1.5">
-            <div className={`w-2 h-2 rounded-full ${loading ? 'bg-success animate-pulse' : isPaused ? 'bg-warning' : 'bg-success'}`} />
-            <span className="text-muted-foreground">
-              {loading ? 'Scanning...' : isPaused ? 'Paused' : 'Active'}
-            </span>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3 text-sm">
+            <div className="flex items-center gap-1.5">
+              <div className={`w-2.5 h-2.5 rounded-full ${loading ? 'bg-success animate-pulse' : isPaused ? 'bg-warning' : 'bg-success'}`} />
+              <span className="text-muted-foreground font-medium">
+                {loading ? 'Scanning...' : isPaused ? 'Paused' : 'Active'}
+              </span>
+            </div>
           </div>
-          <span className="text-muted-foreground">•</span>
-          <span className="text-foreground font-medium">{tokens.length} tokens detected</span>
+          <span className="text-foreground font-semibold text-sm">{tokens.length} tokens</span>
         </div>
         
         {/* Progress Bar */}
         <div className="mt-3 h-1 bg-secondary rounded-full overflow-hidden">
           <div 
-            className="h-full bg-success rounded-full transition-all duration-300"
+            className={`h-full rounded-full transition-all duration-500 ${loading ? 'bg-primary animate-pulse' : 'bg-success'}`}
             style={{ width: loading ? '60%' : '100%' }}
           />
         </div>
       </div>
       
       {/* Search */}
-      <div className="p-3 border-b border-border/50">
+      <div className="p-3 border-b border-border/30">
         <div className="relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
           <Input
             placeholder="Search tokens, addresses..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            className="pl-9 bg-secondary/50 border-border/50"
+            className="pl-10 bg-secondary/40 border-border/30 h-10"
           />
         </div>
       </div>
@@ -264,14 +274,17 @@ export default function TokenScannerPanel({
       {/* Token List */}
       <div className="flex-1 overflow-y-auto">
         {loading && tokens.length === 0 ? (
-          <div className="flex items-center justify-center py-12">
-            <Loader2 className="w-6 h-6 animate-spin text-primary" />
+          <div className="flex flex-col items-center justify-center py-16">
+            <Loader2 className="w-8 h-8 animate-spin text-primary mb-3" />
+            <p className="text-sm text-muted-foreground">Scanning for new tokens...</p>
           </div>
         ) : filteredTokens.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
-            <Shield className="w-10 h-10 mb-2 opacity-50" />
-            <p>No tokens found</p>
-            <Button variant="ghost" size="sm" onClick={onScan} className="mt-2">
+          <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
+            <Shield className="w-12 h-12 mb-3 opacity-30" />
+            <p className="font-medium mb-1">No tokens found</p>
+            <p className="text-sm text-muted-foreground mb-3">Try adjusting your filters</p>
+            <Button variant="outline" size="sm" onClick={onScan}>
+              <RefreshCw className="w-4 h-4 mr-2" />
               Scan Now
             </Button>
           </div>

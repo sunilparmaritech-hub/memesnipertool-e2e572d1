@@ -209,6 +209,111 @@ export type Database = {
         }
         Relationships: []
       }
+      risk_check_logs: {
+        Row: {
+          buy_tax: number | null
+          chain: string | null
+          checked_at: string
+          id: string
+          is_blacklisted: boolean | null
+          is_honeypot: boolean | null
+          liquidity_locked: boolean | null
+          lock_percentage: number | null
+          owner_renounced: boolean | null
+          passed_checks: boolean | null
+          rejection_reasons: string[] | null
+          risk_score: number | null
+          sell_tax: number | null
+          token_address: string
+          token_symbol: string | null
+          user_id: string
+        }
+        Insert: {
+          buy_tax?: number | null
+          chain?: string | null
+          checked_at?: string
+          id?: string
+          is_blacklisted?: boolean | null
+          is_honeypot?: boolean | null
+          liquidity_locked?: boolean | null
+          lock_percentage?: number | null
+          owner_renounced?: boolean | null
+          passed_checks?: boolean | null
+          rejection_reasons?: string[] | null
+          risk_score?: number | null
+          sell_tax?: number | null
+          token_address: string
+          token_symbol?: string | null
+          user_id: string
+        }
+        Update: {
+          buy_tax?: number | null
+          chain?: string | null
+          checked_at?: string
+          id?: string
+          is_blacklisted?: boolean | null
+          is_honeypot?: boolean | null
+          liquidity_locked?: boolean | null
+          lock_percentage?: number | null
+          owner_renounced?: boolean | null
+          passed_checks?: boolean | null
+          rejection_reasons?: string[] | null
+          risk_score?: number | null
+          sell_tax?: number | null
+          token_address?: string
+          token_symbol?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
+      risk_settings: {
+        Row: {
+          circuit_breaker_enabled: boolean | null
+          circuit_breaker_loss_threshold: number | null
+          circuit_breaker_time_window_minutes: number | null
+          circuit_breaker_triggered_at: string | null
+          created_at: string
+          emergency_stop_active: boolean | null
+          id: string
+          max_risk_score: number | null
+          max_tax_percent: number | null
+          require_liquidity_locked: boolean | null
+          require_ownership_renounced: boolean | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          circuit_breaker_enabled?: boolean | null
+          circuit_breaker_loss_threshold?: number | null
+          circuit_breaker_time_window_minutes?: number | null
+          circuit_breaker_triggered_at?: string | null
+          created_at?: string
+          emergency_stop_active?: boolean | null
+          id?: string
+          max_risk_score?: number | null
+          max_tax_percent?: number | null
+          require_liquidity_locked?: boolean | null
+          require_ownership_renounced?: boolean | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          circuit_breaker_enabled?: boolean | null
+          circuit_breaker_loss_threshold?: number | null
+          circuit_breaker_time_window_minutes?: number | null
+          circuit_breaker_triggered_at?: string | null
+          created_at?: string
+          emergency_stop_active?: boolean | null
+          id?: string
+          max_risk_score?: number | null
+          max_tax_percent?: number | null
+          require_liquidity_locked?: boolean | null
+          require_ownership_renounced?: boolean | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       user_roles: {
         Row: {
           created_at: string

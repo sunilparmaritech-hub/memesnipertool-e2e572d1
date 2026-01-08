@@ -11,6 +11,7 @@ import Portfolio from "./pages/Portfolio";
 import Admin from "./pages/Admin";
 import UserSettings from "./pages/UserSettings";
 import MemeSniperSettings from "./pages/MemeSniperSettings";
+import RiskCompliance from "./pages/RiskCompliance";
 import Auth from "./pages/Auth";
 import NotFound from "./pages/NotFound";
 
@@ -62,6 +63,14 @@ const App = () => (
               element={
                 <ProtectedRoute>
                   <MemeSniperSettings />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/risk"
+              element={
+                <ProtectedRoute>
+                  <RiskCompliance />
                 </ProtectedRoute>
               }
             />

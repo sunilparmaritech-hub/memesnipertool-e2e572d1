@@ -8,3 +8,6 @@ verify_jwt = false
 
 [functions.auto-exit]
 verify_jwt = false
+
+[functions.risk-check]
+verify_jwt = false

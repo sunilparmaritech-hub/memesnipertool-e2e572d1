@@ -59,6 +59,51 @@ export type Database = {
         }
         Relationships: []
       }
+      copy_trades: {
+        Row: {
+          action: string
+          amount: number
+          created_at: string
+          id: string
+          leader_address: string
+          leader_name: string | null
+          price: number
+          status: string
+          token_address: string
+          token_symbol: string
+          tx_id: string | null
+          user_id: string
+        }
+        Insert: {
+          action: string
+          amount: number
+          created_at?: string
+          id?: string
+          leader_address: string
+          leader_name?: string | null
+          price: number
+          status?: string
+          token_address: string
+          token_symbol: string
+          tx_id?: string | null
+          user_id: string
+        }
+        Update: {
+          action?: string
+          amount?: number
+          created_at?: string
+          id?: string
+          leader_address?: string
+          leader_name?: string | null
+          price?: number
+          status?: string
+          token_address?: string
+          token_symbol?: string
+          tx_id?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
       positions: {
         Row: {
           amount: number

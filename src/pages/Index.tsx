@@ -1,58 +1,118 @@
 import Header from "@/components/Header";
-import TokenCard from "@/components/TokenCard";
-import StatsCard from "@/components/StatsCard";
-import LiveFeed from "@/components/LiveFeed";
 import { Button } from "@/components/ui/button";
-import { Search, Filter, Zap, TrendingUp, DollarSign, Activity, Rocket } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { usePositions, Position } from "@/hooks/usePositions";
+import { useTokenScanner, ScannedToken } from "@/hooks/useTokenScanner";
+import { useSniperSettings } from "@/hooks/useSniperSettings";
+import { useCopyTrades, CopyTrade } from "@/hooks/useCopyTrades";
+import { useWallet } from "@/hooks/useWallet";
+import { PriceChart, PortfolioChart } from "@/components/charts/PriceCharts";
+import { 
+  TrendingUp, 
+  TrendingDown, 
+  DollarSign, 
+  Activity, 
+  Zap,
+  Wallet,
+  Shield,
+  Clock,
+  Users,
+  RefreshCw,
+  Loader2,
+  ArrowUpRight,
+  ArrowDownRight,
+  Copy,
+  ExternalLink,
+} from "lucide-react";
+import { useState, useEffect, useMemo } from "react";
+import { formatDistanceToNow } from "date-fns";
+import { Link } from "react-router-dom";
 
-const mockTokens = [
-  {
-    name: "Pepe The Frog",
-    symbol: "PEPE",
-    price: "$0.00001234",
-    priceChange: 124.5,
-    volume: "$12.5M",
-    liquidity: "$2.8M",
-    holders: 45230,
-    age: "2h 15m",
-    riskScore: "low" as const,
-  },
-  {
-    name: "Wojak Finance",
-    symbol: "WOJAK",
-    price: "$0.00000089",
-    priceChange: -12.3,
-    volume: "$890K",
-    liquidity: "$450K",
-    holders: 1250,
-    age: "45m",
-    riskScore: "medium" as const,
-  },
-  {
-    name: "Moon Rocket",
-    symbol: "MOON",
-    price: "$0.00000456",
-    priceChange: 567.8,
-    volume: "$5.2M",
-    liquidity: "$1.1M",
-    holders: 8900,
-    age: "1h 30m",
-    riskScore: "high" as const,
-  },
-  {
-    name: "Degen Cat",
-    symbol: "DCAT",
-    price: "$0.00000321",
-    priceChange: 45.2,
-    volume: "$2.1M",
-    liquidity: "$780K",
-    holders: 3400,
-    age: "3h 45m",
-    riskScore: "low" as const,
-  },
-];
+const formatCurrency = (value: number) => {
+  if (Math.abs(value) >= 1000000) return `$${(value / 1000000).toFixed(2)}M`;
+  if (Math.abs(value) >= 1000) return `$${(value / 1000).toFixed(1)}K`;
+  return `$${value.toFixed(2)}`;
+};
+
+const getRiskBadge = (score: number) => {
+  if (score < 40) return <Badge className="bg-green-500/20 text-green-400 border-green-500/30">Low Risk</Badge>;
+  if (score < 70) return <Badge className="bg-yellow-500/20 text-yellow-400 border-yellow-500/30">Medium</Badge>;
+  return <Badge className="bg-red-500/20 text-red-400 border-red-500/30">High Risk</Badge>;
+};
+
+// Generate mock chart data for tokens
+const generatePriceData = (basePrice: number, positive: boolean) => {
+  const data = [];
+  let price = basePrice * (positive ? 0.7 : 1.3);
+  for (let i = 0; i < 24; i++) {
+    const change = (Math.random() - (positive ? 0.3 : 0.7)) * basePrice * 0.1;
+    price = Math.max(price + change, basePrice * 0.1);
+    data.push({ time: `${i}h`, price });
+  }
+  return data;
+};
+
+// Generate mock portfolio history
+const generatePortfolioData = () => {
+  const data = [];
+  let value = 100;
+  for (let i = 6; i >= 0; i--) {
+    const date = new Date();
+    date.setDate(date.getDate() - i);
+    const change = (Math.random() - 0.4) * 20;
+    value = Math.max(value + change, 50);
+    data.push({ 
+      date: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+      value: value,
+      pnl: value - 100,
+    });
+  }
+  return data;
+};
 
 const Index = () => {
+  const { openPositions, closedPositions, loading: positionsLoading } = usePositions();
+  const { tokens, loading: tokensLoading, scanTokens, getTopOpportunities } = useTokenScanner();
+  const { settings } = useSniperSettings();
+  const { trades: copyTrades, loading: copyLoading } = useCopyTrades();
+  const { wallet, refreshBalance } = useWallet();
+  
+  const [portfolioData] = useState(generatePortfolioData);
+
+  // Auto-scan on mount
+  useEffect(() => {
+    if (settings?.min_liquidity) {
+      scanTokens(settings.min_liquidity);
+    }
+  }, [settings?.min_liquidity]);
+
+  // Calculate dashboard stats
+  const totalValue = useMemo(() => 
+    openPositions.reduce((sum, p) => sum + p.current_value, 0), 
+    [openPositions]
+  );
+  
+  const totalPnL = useMemo(() => 
+    openPositions.reduce((sum, p) => sum + p.profit_loss_value, 0),
+    [openPositions]
+  );
+  
+  const totalPnLPercent = useMemo(() => {
+    const entryTotal = openPositions.reduce((sum, p) => sum + p.entry_value, 0);
+    return entryTotal > 0 ? (totalPnL / entryTotal) * 100 : 0;
+  }, [openPositions, totalPnL]);
+
+  const trendingTokens = useMemo(() => 
+    tokens.slice(0, 5).map(t => ({
+      ...t,
+      chartData: generatePriceData(t.priceUsd, t.priceChange24h >= 0)
+    })),
+    [tokens]
+  );
+
+  const topOpportunities = getTopOpportunities(3);
+
   return (
     <div className="min-h-screen bg-background">
       <Header />
@@ -65,115 +125,369 @@ const Index = () => {
 
       <main className="relative pt-20 md:pt-24 pb-8">
         <div className="container mx-auto px-4">
-          {/* Hero Section */}
-          <section className="py-8 md:py-12 text-center">
-            <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-primary/10 border border-primary/20 mb-6 animate-fade-in">
-              <Zap className="w-4 h-4 text-primary" />
-              <span className="text-sm font-medium text-primary">AI-Powered Token Discovery</span>
+          {/* Page Header */}
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
+            <div>
+              <h1 className="text-2xl md:text-3xl font-bold text-foreground mb-1">
+                Dashboard
+              </h1>
+              <p className="text-muted-foreground">
+                Real-time overview of your trading activity
+              </p>
             </div>
-            <h1 className="text-3xl md:text-5xl lg:text-6xl font-bold mb-4 animate-fade-in">
-              <span className="text-foreground">Snipe Meme Tokens</span>
-              <br />
-              <span className="text-gradient">Before They Moon</span>
-            </h1>
-            <p className="text-muted-foreground text-lg md:text-xl max-w-2xl mx-auto mb-8 animate-fade-in">
-              Real-time token scanning, risk analysis, and one-click trading powered by external APIs. Non-custodial & secure.
-            </p>
-            <div className="flex flex-col sm:flex-row gap-4 justify-center animate-fade-in">
-              <Button variant="glow" size="xl">
-                <Rocket className="w-5 h-5" />
-                Start Sniping
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" onClick={refreshBalance} disabled={!wallet.isConnected}>
+                <RefreshCw className="w-4 h-4 mr-1" />
+                Refresh
               </Button>
-              <Button variant="outline" size="xl">
-                View Scanner
-              </Button>
-            </div>
-          </section>
-
-          {/* Stats Grid */}
-          <section className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-            <StatsCard
-              title="Tokens Scanned"
-              value="12,847"
-              change="+124 today"
-              changeType="positive"
-              icon={Activity}
-            />
-            <StatsCard
-              title="Profitable Trades"
-              value="89.2%"
-              change="+2.1%"
-              changeType="positive"
-              icon={TrendingUp}
-            />
-            <StatsCard
-              title="Total Volume"
-              value="$4.2M"
-              change="+$892K"
-              changeType="positive"
-              icon={DollarSign}
-            />
-            <StatsCard
-              title="Active Wallets"
-              value="2,341"
-              change="+156"
-              changeType="positive"
-              icon={Zap}
-            />
-          </section>
-
-          {/* Main Content */}
-          <div className="grid lg:grid-cols-3 gap-6">
-            {/* Token List */}
-            <div className="lg:col-span-2 space-y-4">
-              {/* Search & Filter */}
-              <div className="flex flex-col sm:flex-row gap-3">
-                <div className="relative flex-1">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
-                  <input
-                    type="text"
-                    placeholder="Search tokens..."
-                    className="w-full h-11 pl-10 pr-4 bg-secondary/50 border border-border rounded-lg text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary/50 transition-all"
-                  />
-                </div>
-                <Button variant="outline" className="h-11 px-4">
-                  <Filter className="w-4 h-4 mr-2" />
-                  Filters
+              <Link to="/scanner">
+                <Button variant="glow" size="sm">
+                  <Zap className="w-4 h-4 mr-1" />
+                  Scanner
                 </Button>
-              </div>
-
-              {/* Token Grid */}
-              <div className="grid sm:grid-cols-2 gap-4">
-                {mockTokens.map((token, index) => (
-                  <TokenCard key={index} {...token} />
-                ))}
-              </div>
+              </Link>
             </div>
+          </div>
 
-            {/* Sidebar */}
-            <div className="space-y-4">
-              <LiveFeed />
-              
-              {/* Quick Actions */}
-              <div className="glass rounded-xl p-4 md:p-5">
-                <h3 className="font-semibold text-foreground mb-4">Quick Settings</h3>
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between p-3 bg-secondary/30 rounded-lg">
-                    <span className="text-sm text-muted-foreground">Auto-Buy</span>
-                    <div className="w-10 h-6 bg-primary/20 rounded-full relative cursor-pointer">
-                      <div className="absolute left-1 top-1 w-4 h-4 bg-primary rounded-full" />
+          {/* Wallet Info Banner */}
+          {wallet.isConnected && (
+            <Card className="mb-6 border-primary/20 bg-gradient-to-r from-primary/5 to-transparent">
+              <CardContent className="p-4">
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2 rounded-lg bg-primary/20">
+                      <Wallet className="w-5 h-5 text-primary" />
+                    </div>
+                    <div>
+                      <p className="text-xs text-muted-foreground">Connected Wallet</p>
+                      <p className="font-mono text-sm text-foreground">
+                        {wallet.address?.slice(0, 8)}...{wallet.address?.slice(-6)}
+                      </p>
                     </div>
                   </div>
-                  <div className="flex items-center justify-between p-3 bg-secondary/30 rounded-lg">
-                    <span className="text-sm text-muted-foreground">Max Slippage</span>
-                    <span className="font-mono text-sm text-foreground">5%</span>
-                  </div>
-                  <div className="flex items-center justify-between p-3 bg-secondary/30 rounded-lg">
-                    <span className="text-sm text-muted-foreground">Default Buy</span>
-                    <span className="font-mono text-sm text-foreground">0.1 SOL</span>
+                  <div className="flex items-center gap-6">
+                    <div className="text-center">
+                      <p className="text-xs text-muted-foreground">Balance</p>
+                      <p className="font-semibold text-foreground">{wallet.balance || '0'}</p>
+                    </div>
+                    <div className="text-center">
+                      <p className="text-xs text-muted-foreground">Network</p>
+                      <Badge variant="outline" className="capitalize">{wallet.network}</Badge>
+                    </div>
                   </div>
                 </div>
-              </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Stats Grid */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+            <Card>
+              <CardContent className="p-4">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 rounded-lg bg-blue-500/20">
+                    <DollarSign className="w-5 h-5 text-blue-400" />
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Portfolio Value</p>
+                    <p className="text-xl font-bold text-foreground">{formatCurrency(totalValue)}</p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardContent className="p-4">
+                <div className="flex items-center gap-3">
+                  <div className={`p-2 rounded-lg ${totalPnL >= 0 ? 'bg-green-500/20' : 'bg-red-500/20'}`}>
+                    {totalPnL >= 0 ? (
+                      <TrendingUp className="w-5 h-5 text-green-400" />
+                    ) : (
+                      <TrendingDown className="w-5 h-5 text-red-400" />
+                    )}
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Total P&L</p>
+                    <p className={`text-xl font-bold ${totalPnL >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                      {totalPnL >= 0 ? '+' : ''}{formatCurrency(totalPnL)}
+                      <span className="text-sm ml-1">({totalPnLPercent.toFixed(1)}%)</span>
+                    </p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardContent className="p-4">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 rounded-lg bg-primary/20">
+                    <Activity className="w-5 h-5 text-primary" />
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Active Trades</p>
+                    <p className="text-xl font-bold text-foreground">{openPositions.length}</p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardContent className="p-4">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 rounded-lg bg-muted">
+                    <Clock className="w-5 h-5 text-muted-foreground" />
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Completed Trades</p>
+                    <p className="text-xl font-bold text-foreground">{closedPositions.length}</p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+
+          <div className="grid lg:grid-cols-3 gap-6">
+            {/* Main Content - Left Column */}
+            <div className="lg:col-span-2 space-y-6">
+              {/* Portfolio Chart */}
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-base font-semibold">Portfolio Performance (7D)</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <PortfolioChart data={portfolioData} height={180} />
+                </CardContent>
+              </Card>
+
+              {/* Active Trades */}
+              <Card>
+                <CardHeader className="pb-2 flex flex-row items-center justify-between">
+                  <CardTitle className="text-base font-semibold">Active Trades</CardTitle>
+                  <Link to="/portfolio">
+                    <Button variant="ghost" size="sm">View All</Button>
+                  </Link>
+                </CardHeader>
+                <CardContent>
+                  {positionsLoading ? (
+                    <div className="flex items-center justify-center py-8">
+                      <Loader2 className="w-6 h-6 animate-spin text-primary" />
+                    </div>
+                  ) : openPositions.length === 0 ? (
+                    <div className="text-center py-8 text-muted-foreground">
+                      <Activity className="w-10 h-10 mx-auto mb-2 opacity-50" />
+                      <p>No active trades</p>
+                      <Link to="/scanner">
+                        <Button variant="link" size="sm">Start sniping →</Button>
+                      </Link>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {openPositions.slice(0, 4).map((position) => {
+                        const isProfit = position.profit_loss_percent >= 0;
+                        return (
+                          <div key={position.id} className="flex items-center justify-between p-3 bg-secondary/30 rounded-lg">
+                            <div className="flex items-center gap-3">
+                              <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center">
+                                <span className="text-xs font-bold text-primary">
+                                  {position.token_symbol.slice(0, 2)}
+                                </span>
+                              </div>
+                              <div>
+                                <p className="font-medium text-foreground">{position.token_symbol}</p>
+                                <p className="text-xs text-muted-foreground">
+                                  {formatDistanceToNow(new Date(position.created_at), { addSuffix: true })}
+                                </p>
+                              </div>
+                            </div>
+                            <div className="text-right">
+                              <p className={`font-semibold ${isProfit ? 'text-green-500' : 'text-red-500'}`}>
+                                {isProfit ? '+' : ''}{position.profit_loss_percent.toFixed(2)}%
+                              </p>
+                              <p className="text-xs text-muted-foreground">
+                                {formatCurrency(position.current_value)}
+                              </p>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Completed Trades */}
+              <Card>
+                <CardHeader className="pb-2 flex flex-row items-center justify-between">
+                  <CardTitle className="text-base font-semibold">Recent Completed Trades</CardTitle>
+                  <Link to="/portfolio">
+                    <Button variant="ghost" size="sm">View All</Button>
+                  </Link>
+                </CardHeader>
+                <CardContent>
+                  {closedPositions.length === 0 ? (
+                    <div className="text-center py-6 text-muted-foreground">
+                      <p className="text-sm">No completed trades yet</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {closedPositions.slice(0, 5).map((position) => {
+                        const isProfit = position.profit_loss_percent >= 0;
+                        return (
+                          <div key={position.id} className="flex items-center justify-between p-2 hover:bg-secondary/20 rounded-lg transition-colors">
+                            <div className="flex items-center gap-2">
+                              {isProfit ? (
+                                <ArrowUpRight className="w-4 h-4 text-green-500" />
+                              ) : (
+                                <ArrowDownRight className="w-4 h-4 text-red-500" />
+                              )}
+                              <span className="font-medium text-foreground">{position.token_symbol}</span>
+                              <Badge variant="outline" className="text-xs">
+                                {position.exit_reason?.replace('_', ' ') || 'closed'}
+                              </Badge>
+                            </div>
+                            <div className="text-right">
+                              <span className={`font-mono text-sm ${isProfit ? 'text-green-500' : 'text-red-500'}`}>
+                                {isProfit ? '+' : ''}{position.profit_loss_percent.toFixed(1)}%
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* Right Sidebar */}
+            <div className="space-y-6">
+              {/* Top Trending Tokens with Charts */}
+              <Card>
+                <CardHeader className="pb-2 flex flex-row items-center justify-between">
+                  <CardTitle className="text-base font-semibold">Trending Memecoins</CardTitle>
+                  <Link to="/scanner">
+                    <Button variant="ghost" size="sm">See All</Button>
+                  </Link>
+                </CardHeader>
+                <CardContent>
+                  {tokensLoading ? (
+                    <div className="flex items-center justify-center py-8">
+                      <Loader2 className="w-6 h-6 animate-spin text-primary" />
+                    </div>
+                  ) : trendingTokens.length === 0 ? (
+                    <div className="text-center py-6 text-muted-foreground">
+                      <p className="text-sm">Scan for tokens to see trending</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      {trendingTokens.map((token) => (
+                        <div key={token.id} className="space-y-2">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium text-foreground">{token.symbol}</span>
+                              {getRiskBadge(token.riskScore)}
+                            </div>
+                            <div className="text-right">
+                              <p className={`text-sm font-mono ${token.priceChange24h >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                                {token.priceChange24h >= 0 ? '+' : ''}{token.priceChange24h.toFixed(1)}%
+                              </p>
+                            </div>
+                          </div>
+                          <PriceChart 
+                            data={token.chartData} 
+                            height={60} 
+                            color={token.priceChange24h >= 0 ? '#22c55e' : '#ef4444'}
+                          />
+                          <div className="flex items-center justify-between text-xs text-muted-foreground">
+                            <span>Liq: {formatCurrency(token.liquidity)}</span>
+                            <span className="flex items-center gap-1">
+                              <Shield className="w-3 h-3" />
+                              Risk: {token.riskScore}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Top Snipe Opportunities */}
+              {topOpportunities.length > 0 && (
+                <Card className="border-green-500/20 bg-green-500/5">
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-base font-semibold flex items-center gap-2">
+                      <Zap className="w-4 h-4 text-green-500" />
+                      Snipe Opportunities
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="space-y-2">
+                      {topOpportunities.map((token) => (
+                        <div key={token.id} className="flex items-center justify-between p-2 bg-green-500/10 rounded-lg">
+                          <div>
+                            <p className="font-medium text-foreground">{token.symbol}</p>
+                            <p className="text-xs text-muted-foreground">Position #{token.buyerPosition}</p>
+                          </div>
+                          <Link to="/scanner">
+                            <Button variant="outline" size="sm">
+                              <Zap className="w-3 h-3 mr-1" />
+                              Snipe
+                            </Button>
+                          </Link>
+                        </div>
+                      ))}
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+
+              {/* Copy Trading Activity */}
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-base font-semibold flex items-center gap-2">
+                    <Copy className="w-4 h-4" />
+                    Copy Trading Log
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {copyLoading ? (
+                    <div className="flex items-center justify-center py-6">
+                      <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+                    </div>
+                  ) : copyTrades.length === 0 ? (
+                    <div className="text-center py-6 text-muted-foreground">
+                      <Users className="w-8 h-8 mx-auto mb-2 opacity-50" />
+                      <p className="text-sm">No copy trades yet</p>
+                      <p className="text-xs">Copy top traders to see activity here</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-2 max-h-[200px] overflow-y-auto">
+                      {copyTrades.slice(0, 10).map((trade) => (
+                        <div key={trade.id} className="flex items-center justify-between p-2 bg-secondary/30 rounded-lg text-sm">
+                          <div className="flex items-center gap-2">
+                            <Badge 
+                              variant="outline" 
+                              className={trade.action === 'buy' ? 'text-green-500 border-green-500/30' : 'text-red-500 border-red-500/30'}
+                            >
+                              {trade.action.toUpperCase()}
+                            </Badge>
+                            <span className="font-medium">{trade.token_symbol}</span>
+                          </div>
+                          <div className="text-right text-xs">
+                            <p className="text-muted-foreground">
+                              {trade.leader_name || trade.leader_address.slice(0, 6) + '...'}
+                            </p>
+                            <p className="text-muted-foreground">
+                              {formatDistanceToNow(new Date(trade.created_at), { addSuffix: true })}
+                            </p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
             </div>
           </div>
         </div>

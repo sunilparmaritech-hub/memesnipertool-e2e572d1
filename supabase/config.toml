@@ -1,1 +1,4 @@
 project_id = "pnabdsgbkvriwevcksca"
+
+[functions.token-scanner]
+verify_jwt = false

@@ -280,21 +280,30 @@ serve(async (req) => {
     const body = await req.json().catch(() => ({}));
     const { tokens = [], executeOnApproval = false } = body;
 
+    // Default settings to use if user hasn't configured any
+    const defaultSettings: UserSettings = {
+      user_id: user.id,
+      min_liquidity: 300,
+      profit_take_percentage: 100,
+      stop_loss_percentage: 20,
+      trade_amount: 0.1,
+      max_concurrent_trades: 3,
+      priority: 'normal',
+      category_filters: ['animals', 'parody', 'trend', 'utility'],
+      token_blacklist: [],
+      token_whitelist: [],
+    };
+
     // Fetch user's sniper settings
-    const { data: userSettings, error: settingsError } = await supabase
+    const { data: userSettings } = await supabase
       .from('user_sniper_settings')
       .select('*')
       .eq('user_id', user.id)
       .single();
 
-    if (settingsError || !userSettings) {
-      return new Response(
-        JSON.stringify({ error: 'User settings not found. Please configure sniper settings first.' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
-    const settings = userSettings as UserSettings;
+    // Use user settings if found, otherwise use defaults
+    const settings: UserSettings = userSettings || defaultSettings;
+    console.log(`Using settings for user ${user.id}:`, userSettings ? 'custom' : 'defaults');
 
     // Fetch API configurations
     const { data: apiConfigs } = await supabase

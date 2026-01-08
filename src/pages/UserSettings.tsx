@@ -2,6 +2,7 @@ import Header from "@/components/Header";
 import { Button } from "@/components/ui/button";
 import { useState } from "react";
 import { useAuth } from "@/contexts/AuthContext";
+import { WalletConnect } from "@/components/WalletConnect";
 import {
   Settings,
   Wallet,
@@ -15,7 +16,6 @@ import {
 const UserSettings = () => {
   const { user } = useAuth();
   const [activeTab, setActiveTab] = useState("sniping");
-  const [walletConnected, setWalletConnected] = useState(false);
 
   const [snipingSettings, setSnipingSettings] = useState({
     maxSlippage: "5",
@@ -350,69 +350,31 @@ const UserSettings = () => {
                       Wallet Connection
                     </h2>
                     <p className="text-sm text-muted-foreground mb-6">
-                      Connect your wallet to execute trades. Your keys are never stored.
+                      Connect your wallet to execute trades. Your private keys never leave your wallet.
                     </p>
 
-                    {walletConnected ? (
-                      <div className="space-y-4">
-                        <div className="p-4 bg-success/10 border border-success/20 rounded-lg">
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-3">
-                              <Wallet className="w-5 h-5 text-success" />
-                              <div>
-                                <p className="font-medium text-success">Wallet Connected</p>
-                                <p className="text-sm text-muted-foreground font-mono">
-                                  0x1a2b3c4d5e6f7890abcdef1234567890abcdef12
-                                </p>
-                              </div>
-                            </div>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => {}}
-                            >
-                              <Copy className="w-4 h-4" />
-                            </Button>
-                          </div>
+                    <WalletConnect />
+
+                    <div className="mt-6 pt-6 border-t border-border">
+                      <h3 className="font-medium text-foreground mb-3">Supported Wallets</h3>
+                      <div className="grid sm:grid-cols-3 gap-3">
+                        <div className="p-3 bg-secondary/30 rounded-lg text-center">
+                          <span className="text-2xl mb-2 block">👻</span>
+                          <p className="text-sm font-medium text-foreground">Phantom</p>
+                          <p className="text-xs text-muted-foreground">Solana</p>
                         </div>
-                        <div className="grid sm:grid-cols-2 gap-4">
-                          <div className="p-4 bg-secondary/30 rounded-lg">
-                            <p className="text-sm text-muted-foreground mb-1">Balance</p>
-                            <p className="text-2xl font-bold text-foreground font-mono">
-                              4.52 SOL
-                            </p>
-                          </div>
-                          <div className="p-4 bg-secondary/30 rounded-lg">
-                            <p className="text-sm text-muted-foreground mb-1">USD Value</p>
-                            <p className="text-2xl font-bold text-foreground font-mono">
-                              $892.45
-                            </p>
-                          </div>
+                        <div className="p-3 bg-secondary/30 rounded-lg text-center">
+                          <span className="text-2xl mb-2 block">🦊</span>
+                          <p className="text-sm font-medium text-foreground">MetaMask</p>
+                          <p className="text-xs text-muted-foreground">ETH / BSC</p>
                         </div>
-                        <Button
-                          variant="destructive"
-                          onClick={() => setWalletConnected(false)}
-                          className="w-full"
-                        >
-                          Disconnect Wallet
-                        </Button>
+                        <div className="p-3 bg-secondary/30 rounded-lg text-center">
+                          <span className="text-2xl mb-2 block">🔗</span>
+                          <p className="text-sm font-medium text-foreground">WalletConnect</p>
+                          <p className="text-xs text-muted-foreground">Multi-chain</p>
+                        </div>
                       </div>
-                    ) : (
-                      <div className="text-center py-8">
-                        <Wallet className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                        <p className="text-muted-foreground mb-4">
-                          No wallet connected. Connect your wallet to start trading.
-                        </p>
-                        <Button
-                          variant="glow"
-                          size="lg"
-                          onClick={() => setWalletConnected(true)}
-                        >
-                          <Wallet className="w-4 h-4" />
-                          Connect Wallet
-                        </Button>
-                      </div>
-                    )}
+                    </div>
                   </div>
                 </div>
               )}

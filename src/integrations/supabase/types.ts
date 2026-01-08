@@ -137,6 +137,30 @@ export type Database = {
         }
         Relationships: []
       }
+      disclaimer_acknowledgments: {
+        Row: {
+          acknowledged_at: string
+          id: string
+          ip_address: string | null
+          user_agent: string | null
+          user_id: string
+        }
+        Insert: {
+          acknowledged_at?: string
+          id?: string
+          ip_address?: string | null
+          user_agent?: string | null
+          user_id: string
+        }
+        Update: {
+          acknowledged_at?: string
+          id?: string
+          ip_address?: string | null
+          user_agent?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
       positions: {
         Row: {
           amount: number

@@ -1,6 +1,8 @@
 import { Navigate, useLocation } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { Loader2 } from "lucide-react";
+import { useDisclaimerAcknowledgment } from "@/hooks/useDisclaimerAcknowledgment";
+import DisclaimerDialog from "@/components/DisclaimerDialog";
 
 interface ProtectedRouteProps {
   children: React.ReactNode;
@@ -10,8 +12,9 @@ interface ProtectedRouteProps {
 const ProtectedRoute = ({ children, requireAdmin = false }: ProtectedRouteProps) => {
   const { user, loading, isAdmin } = useAuth();
   const location = useLocation();
+  const { hasAcknowledged, isLoading: disclaimerLoading, acknowledgeDisclaimer } = useDisclaimerAcknowledgment();
 
-  if (loading) {
+  if (loading || disclaimerLoading) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="flex flex-col items-center gap-4">
@@ -28,6 +31,16 @@ const ProtectedRoute = ({ children, requireAdmin = false }: ProtectedRouteProps)
 
   if (requireAdmin && !isAdmin) {
     return <Navigate to="/" replace />;
+  }
+
+  // Show disclaimer dialog if user hasn't acknowledged yet
+  if (hasAcknowledged === false) {
+    return (
+      <>
+        <DisclaimerDialog open={true} onAcknowledge={acknowledgeDisclaimer} />
+        <div className="min-h-screen bg-background" />
+      </>
+    );
   }
 
   return <>{children}</>;

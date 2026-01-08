@@ -1,6 +1,8 @@
 import Header from "@/components/Header";
 import { Button } from "@/components/ui/button";
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useAuth } from "@/contexts/AuthContext";
+import { supabase } from "@/integrations/supabase/client";
 import {
   Settings,
   Key,
@@ -12,7 +14,10 @@ import {
   EyeOff,
   CheckCircle,
   AlertCircle,
+  Users,
+  Crown,
 } from "lucide-react";
+import { toast } from "sonner";
 
 interface ApiConfig {
   name: string;
@@ -22,9 +27,20 @@ interface ApiConfig {
   description: string;
 }
 
+interface UserProfile {
+  user_id: string;
+  email: string;
+  display_name: string | null;
+  role: "admin" | "user";
+}
+
 const Admin = () => {
+  const { isAdmin } = useAuth();
   const [showKeys, setShowKeys] = useState<Record<string, boolean>>({});
   const [activeTab, setActiveTab] = useState("api");
+  const [users, setUsers] = useState<UserProfile[]>([]);
+  const [loadingUsers, setLoadingUsers] = useState(false);
+
   const [apiConfigs, setApiConfigs] = useState<ApiConfig[]>([
     {
       name: "DexScreener API",
@@ -65,14 +81,69 @@ const Admin = () => {
     takeProfit: "100",
   });
 
+  useEffect(() => {
+    if (activeTab === "users" && isAdmin) {
+      fetchUsers();
+    }
+  }, [activeTab, isAdmin]);
+
+  const fetchUsers = async () => {
+    setLoadingUsers(true);
+    try {
+      const { data: profiles, error: profilesError } = await supabase
+        .from("profiles")
+        .select("user_id, email, display_name");
+
+      if (profilesError) throw profilesError;
+
+      const { data: roles, error: rolesError } = await supabase
+        .from("user_roles")
+        .select("user_id, role");
+
+      if (rolesError) throw rolesError;
+
+      const usersWithRoles = profiles?.map((profile) => ({
+        ...profile,
+        role: (roles?.find((r) => r.user_id === profile.user_id)?.role || "user") as "admin" | "user",
+      })) || [];
+
+      setUsers(usersWithRoles);
+    } catch (err) {
+      console.error("Error fetching users:", err);
+      toast.error("Failed to load users");
+    } finally {
+      setLoadingUsers(false);
+    }
+  };
+
+  const updateUserRole = async (userId: string, newRole: "admin" | "user") => {
+    try {
+      const { error } = await supabase
+        .from("user_roles")
+        .update({ role: newRole })
+        .eq("user_id", userId);
+
+      if (error) throw error;
+
+      setUsers((prev) =>
+        prev.map((u) => (u.user_id === userId ? { ...u, role: newRole } : u))
+      );
+      toast.success(`User role updated to ${newRole}`);
+    } catch (err) {
+      console.error("Error updating role:", err);
+      toast.error("Failed to update user role");
+    }
+  };
+
   const toggleShowKey = (name: string) => {
     setShowKeys((prev) => ({ ...prev, [name]: !prev[name] }));
   };
 
   const tabs = [
     { id: "api", label: "API Settings", icon: Key },
-    { id: "trading", label: "Trading", icon: Zap },
-    { id: "notifications", label: "Notifications", icon: Bell },
+    { id: "trading", label: "Risk Settings", icon: Zap },
+    { id: "users", label: "User Management", icon: Users },
+    { id: "notifications", label: "Monitoring", icon: Bell },
     { id: "security", label: "Security", icon: Shield },
   ];
 
@@ -97,14 +168,14 @@ const Admin = () => {
           {/* Page Header */}
           <div className="flex items-center gap-3 mb-8">
             <div className="p-2.5 rounded-lg bg-primary/10">
-              <Settings className="w-6 h-6 text-primary" />
+              <Crown className="w-6 h-6 text-primary" />
             </div>
             <div>
               <h1 className="text-2xl md:text-3xl font-bold text-foreground">
-                Admin Settings
+                Admin Control Panel
               </h1>
               <p className="text-muted-foreground">
-                Configure APIs, trading parameters, and security
+                Full access to API configuration, risk settings, and user management
               </p>
             </div>
           </div>
@@ -231,15 +302,15 @@ const Admin = () => {
                 </div>
               )}
 
-              {/* Trading Tab */}
+              {/* Trading/Risk Settings Tab */}
               {activeTab === "trading" && (
                 <div className="space-y-4 animate-fade-in">
                   <div className="glass rounded-xl p-5">
                     <h2 className="text-lg font-semibold text-foreground mb-2">
-                      Trading Parameters
+                      Global Risk Settings
                     </h2>
                     <p className="text-sm text-muted-foreground mb-6">
-                      Configure default trading parameters and automation settings.
+                      Configure platform-wide trading parameters and risk limits.
                     </p>
 
                     <div className="grid sm:grid-cols-2 gap-4">
@@ -311,14 +382,14 @@ const Admin = () => {
 
                     <div className="mt-6 pt-6 border-t border-border">
                       <h3 className="font-medium text-foreground mb-4">
-                        Automation Settings
+                        Platform Automation
                       </h3>
                       <div className="space-y-4">
                         <div className="flex items-center justify-between p-4 bg-secondary/30 rounded-lg">
                           <div>
-                            <p className="font-medium text-foreground">Auto-Buy</p>
+                            <p className="font-medium text-foreground">Global Auto-Buy</p>
                             <p className="text-sm text-muted-foreground">
-                              Automatically buy tokens matching your criteria
+                              Enable auto-buy for all users by default
                             </p>
                           </div>
                           <button
@@ -343,9 +414,9 @@ const Admin = () => {
                         </div>
                         <div className="flex items-center justify-between p-4 bg-secondary/30 rounded-lg">
                           <div>
-                            <p className="font-medium text-foreground">Auto-Sell</p>
+                            <p className="font-medium text-foreground">Global Auto-Sell</p>
                             <p className="text-sm text-muted-foreground">
-                              Automatically sell at stop-loss or take-profit
+                              Enable auto-sell at stop-loss/take-profit by default
                             </p>
                           </div>
                           <button
@@ -375,27 +446,96 @@ const Admin = () => {
                   <div className="flex justify-end">
                     <Button variant="glow">
                       <Save className="w-4 h-4" />
-                      Save Trading Settings
+                      Save Risk Settings
                     </Button>
                   </div>
                 </div>
               )}
 
-              {/* Notifications Tab */}
+              {/* User Management Tab */}
+              {activeTab === "users" && (
+                <div className="space-y-4 animate-fade-in">
+                  <div className="glass rounded-xl p-5">
+                    <h2 className="text-lg font-semibold text-foreground mb-2">
+                      User Management
+                    </h2>
+                    <p className="text-sm text-muted-foreground mb-6">
+                      Manage user roles and permissions. Admins have full access, Users have limited access.
+                    </p>
+
+                    {loadingUsers ? (
+                      <div className="text-center py-8 text-muted-foreground">
+                        Loading users...
+                      </div>
+                    ) : users.length === 0 ? (
+                      <div className="text-center py-8 text-muted-foreground">
+                        No users found
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        {users.map((user) => (
+                          <div
+                            key={user.user_id}
+                            className="flex items-center justify-between p-4 bg-secondary/30 rounded-lg border border-border"
+                          >
+                            <div className="flex items-center gap-3">
+                              <div className="w-10 h-10 rounded-full bg-primary/20 flex items-center justify-center">
+                                <span className="text-primary font-semibold">
+                                  {user.email?.[0]?.toUpperCase() || "U"}
+                                </span>
+                              </div>
+                              <div>
+                                <p className="font-medium text-foreground">
+                                  {user.display_name || user.email}
+                                </p>
+                                <p className="text-sm text-muted-foreground">{user.email}</p>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-3">
+                              <span
+                                className={`px-3 py-1 rounded-full text-xs font-medium ${
+                                  user.role === "admin"
+                                    ? "bg-primary/10 text-primary border border-primary/20"
+                                    : "bg-secondary text-muted-foreground"
+                                }`}
+                              >
+                                {user.role.toUpperCase()}
+                              </span>
+                              <select
+                                value={user.role}
+                                onChange={(e) =>
+                                  updateUserRole(user.user_id, e.target.value as "admin" | "user")
+                                }
+                                className="h-9 px-3 bg-background border border-border rounded-lg text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+                              >
+                                <option value="user">User</option>
+                                <option value="admin">Admin</option>
+                              </select>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Monitoring/Notifications Tab */}
               {activeTab === "notifications" && (
                 <div className="glass rounded-xl p-5 animate-fade-in">
                   <h2 className="text-lg font-semibold text-foreground mb-2">
-                    Notification Settings
+                    System Monitoring
                   </h2>
                   <p className="text-sm text-muted-foreground mb-6">
-                    Configure how you receive alerts and notifications.
+                    Configure alerts and monitoring for platform activity.
                   </p>
                   <div className="space-y-4">
                     {[
-                      "New token alerts",
-                      "Price movement alerts",
-                      "Trade execution",
-                      "Whale activity",
+                      "New user registrations",
+                      "High-value transactions",
+                      "API errors & failures",
+                      "Unusual trading activity",
+                      "System health alerts",
                     ].map((item, index) => (
                       <div
                         key={index}
@@ -415,20 +555,19 @@ const Admin = () => {
               {activeTab === "security" && (
                 <div className="glass rounded-xl p-5 animate-fade-in">
                   <h2 className="text-lg font-semibold text-foreground mb-2">
-                    Security Settings
+                    Platform Security
                   </h2>
                   <p className="text-sm text-muted-foreground mb-6">
-                    Manage security preferences and wallet permissions.
+                    Manage security settings and access controls.
                   </p>
 
                   <div className="p-4 bg-success/5 border border-success/20 rounded-lg mb-6">
                     <div className="flex items-center gap-3">
                       <Shield className="w-5 h-5 text-success" />
                       <div>
-                        <p className="font-medium text-success">Non-Custodial Mode</p>
+                        <p className="font-medium text-success">Non-Custodial Platform</p>
                         <p className="text-sm text-muted-foreground">
-                          Your wallet keys are never stored. All transactions require your
-                          signature.
+                          User wallet keys are never stored. All transactions require user signature.
                         </p>
                       </div>
                     </div>
@@ -438,10 +577,10 @@ const Admin = () => {
                     <div className="flex items-center justify-between p-4 bg-secondary/30 rounded-lg">
                       <div>
                         <p className="font-medium text-foreground">
-                          Transaction Confirmation
+                          Require 2FA for Admins
                         </p>
                         <p className="text-sm text-muted-foreground">
-                          Require confirmation for all trades
+                          Enforce two-factor authentication for admin accounts
                         </p>
                       </div>
                       <button className="w-12 h-7 bg-primary rounded-full relative">
@@ -450,14 +589,27 @@ const Admin = () => {
                     </div>
                     <div className="flex items-center justify-between p-4 bg-secondary/30 rounded-lg">
                       <div>
-                        <p className="font-medium text-foreground">Max Trade Limit</p>
+                        <p className="font-medium text-foreground">Session Timeout</p>
                         <p className="text-sm text-muted-foreground">
-                          Set maximum SOL per trade
+                          Auto-logout after inactivity (minutes)
                         </p>
                       </div>
                       <input
                         type="number"
-                        defaultValue="1"
+                        defaultValue="30"
+                        className="w-24 h-10 px-3 bg-background border border-border rounded-lg text-foreground font-mono text-right focus:outline-none focus:ring-2 focus:ring-primary/50"
+                      />
+                    </div>
+                    <div className="flex items-center justify-between p-4 bg-secondary/30 rounded-lg">
+                      <div>
+                        <p className="font-medium text-foreground">Max Trade Limit (SOL)</p>
+                        <p className="text-sm text-muted-foreground">
+                          Platform-wide maximum per trade
+                        </p>
+                      </div>
+                      <input
+                        type="number"
+                        defaultValue="10"
                         className="w-24 h-10 px-3 bg-background border border-border rounded-lg text-foreground font-mono text-right focus:outline-none focus:ring-2 focus:ring-primary/50"
                       />
                     </div>

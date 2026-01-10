@@ -82,7 +82,7 @@ serve(async (req) => {
     const errors: string[] = [];
     const apiErrors: ApiError[] = [];
 
-    // Helper function to log API health
+    // Helper function to log API health and update api_configurations status
     const logApiHealth = async (
       apiType: string,
       endpoint: string,
@@ -92,6 +92,7 @@ serve(async (req) => {
       errorMessage?: string
     ) => {
       try {
+        // Log to api_health_metrics
         await supabase.from('api_health_metrics').insert({
           api_type: apiType,
           endpoint,
@@ -100,6 +101,18 @@ serve(async (req) => {
           is_success: isSuccess,
           error_message: errorMessage || null,
         });
+
+        // Update api_configurations status
+        const newStatus = isSuccess ? 'active' : (statusCode === 429 ? 'rate_limited' : 'error');
+        await supabase
+          .from('api_configurations')
+          .update({ 
+            status: newStatus,
+            last_checked_at: new Date().toISOString()
+          })
+          .eq('api_type', apiType);
+        
+        console.log(`Updated ${apiType} status to: ${newStatus}`);
       } catch (e) {
         console.error('Failed to log API health:', e);
       }

@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, ReactNode, useCallback, useEffect } from 'react';
+import { createContext, useContext, useState, ReactNode, useCallback, useEffect, useRef } from 'react';
 import { useAppMode } from './AppModeContext';
 
 // Demo position matching the real Position interface
@@ -39,6 +39,7 @@ interface DemoPortfolioContextType {
   setDemoBalance: (balance: number) => void;
   deductBalance: (amount: number) => boolean;
   addBalance: (amount: number) => void;
+  resetDemoPortfolio: () => void;
   
   // Positions
   demoPositions: DemoPosition[];
@@ -50,7 +51,7 @@ interface DemoPortfolioContextType {
   openDemoPositions: DemoPosition[];
   closedDemoPositions: DemoPosition[];
   
-  // Portfolio history
+  // Portfolio history - now dynamically updated
   portfolioHistory: Record<string, PortfolioData[]>;
   selectedPeriod: '1H' | '24H' | '7D' | '30D';
   setSelectedPeriod: (period: '1H' | '24H' | '7D' | '30D') => void;
@@ -60,80 +61,21 @@ interface DemoPortfolioContextType {
   totalValue: number;
   totalPnL: number;
   totalPnLPercent: number;
+  
+  // Performance stats
+  winRate: number;
+  avgPnL: number;
+  bestTrade: number;
+  worstTrade: number;
+  totalTrades: number;
+  wins: number;
+  losses: number;
 }
 
 const INITIAL_DEMO_BALANCE = 5000; // 5000 SOL
 const DEMO_STORAGE_KEY = 'demo_portfolio_state';
 
 const DemoPortfolioContext = createContext<DemoPortfolioContextType | undefined>(undefined);
-
-// Generate portfolio history for different time periods
-const generatePortfolioHistory = (baseValue: number): Record<string, PortfolioData[]> => {
-  const now = new Date();
-  
-  // 1H - every 2 minutes
-  const data1H: PortfolioData[] = [];
-  let value1H = baseValue * 0.98;
-  for (let i = 30; i >= 0; i--) {
-    const time = new Date(now.getTime() - i * 2 * 60 * 1000);
-    const change = (Math.random() - 0.45) * (baseValue * 0.002);
-    value1H = Math.max(value1H + change, baseValue * 0.9);
-    data1H.push({
-      date: time.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
-      value: value1H,
-      pnl: value1H - baseValue,
-    });
-  }
-  
-  // 24H - every hour
-  const data24H: PortfolioData[] = [];
-  let value24H = baseValue * 0.95;
-  for (let i = 24; i >= 0; i--) {
-    const time = new Date(now.getTime() - i * 60 * 60 * 1000);
-    const change = (Math.random() - 0.4) * (baseValue * 0.01);
-    value24H = Math.max(value24H + change, baseValue * 0.85);
-    data24H.push({
-      date: time.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
-      value: value24H,
-      pnl: value24H - baseValue,
-    });
-  }
-  
-  // 7D - every 6 hours
-  const data7D: PortfolioData[] = [];
-  let value7D = baseValue * 0.9;
-  for (let i = 28; i >= 0; i--) {
-    const time = new Date(now.getTime() - i * 6 * 60 * 60 * 1000);
-    const change = (Math.random() - 0.35) * (baseValue * 0.02);
-    value7D = Math.max(value7D + change, baseValue * 0.7);
-    data7D.push({
-      date: time.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-      value: value7D,
-      pnl: value7D - baseValue,
-    });
-  }
-  
-  // 30D - daily
-  const data30D: PortfolioData[] = [];
-  let value30D = baseValue * 0.8;
-  for (let i = 30; i >= 0; i--) {
-    const time = new Date(now.getTime() - i * 24 * 60 * 60 * 1000);
-    const change = (Math.random() - 0.3) * (baseValue * 0.03);
-    value30D = Math.max(value30D + change, baseValue * 0.5);
-    data30D.push({
-      date: time.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-      value: value30D,
-      pnl: value30D - baseValue,
-    });
-  }
-  
-  return {
-    '1H': data1H,
-    '24H': data24H,
-    '7D': data7D,
-    '30D': data30D,
-  };
-};
 
 export function DemoPortfolioProvider({ children }: { children: ReactNode }) {
   const { isDemo } = useAppMode();
@@ -165,25 +107,159 @@ export function DemoPortfolioProvider({ children }: { children: ReactNode }) {
     return [];
   });
   
+  // Portfolio history snapshots - stored in localStorage
+  const [portfolioSnapshots, setPortfolioSnapshots] = useState<{ timestamp: number; value: number }[]>(() => {
+    const saved = localStorage.getItem(DEMO_STORAGE_KEY);
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        return parsed.snapshots ?? [{ timestamp: Date.now(), value: INITIAL_DEMO_BALANCE }];
+      } catch {
+        return [{ timestamp: Date.now(), value: INITIAL_DEMO_BALANCE }];
+      }
+    }
+    return [{ timestamp: Date.now(), value: INITIAL_DEMO_BALANCE }];
+  });
+  
   const [selectedPeriod, setSelectedPeriod] = useState<'1H' | '24H' | '7D' | '30D'>('24H');
-  const [portfolioHistory] = useState(() => generatePortfolioHistory(INITIAL_DEMO_BALANCE));
+  
+  // Refs for interval
+  const snapshotIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  
+  // Calculate open/closed positions
+  const openDemoPositions = demoPositions.filter(p => p.status === 'open');
+  const closedDemoPositions = demoPositions.filter(p => p.status === 'closed');
+  
+  // Calculate totals
+  const positionValue = openDemoPositions.reduce((sum, p) => sum + p.current_value, 0);
+  const totalValue = positionValue + (demoBalance * 150); // Convert SOL to USD (approx)
+  const totalPnL = openDemoPositions.reduce((sum, p) => sum + (p.profit_loss_value || 0), 0);
+  const entryTotal = openDemoPositions.reduce((sum, p) => sum + p.entry_value, 0);
+  const totalPnLPercent = entryTotal > 0 ? (totalPnL / entryTotal) * 100 : 0;
+  
+  // Performance stats from closed positions
+  const wins = closedDemoPositions.filter(p => (p.profit_loss_percent || 0) > 0).length;
+  const losses = closedDemoPositions.filter(p => (p.profit_loss_percent || 0) <= 0).length;
+  const totalTrades = closedDemoPositions.length;
+  const winRate = totalTrades > 0 ? (wins / totalTrades) * 100 : 0;
+  
+  const avgPnL = totalTrades > 0 
+    ? closedDemoPositions.reduce((sum, p) => sum + (p.profit_loss_percent || 0), 0) / totalTrades 
+    : 0;
+    
+  const bestTrade = closedDemoPositions.length > 0 
+    ? Math.max(...closedDemoPositions.map(p => p.profit_loss_percent || 0))
+    : 0;
+    
+  const worstTrade = closedDemoPositions.length > 0 
+    ? Math.min(...closedDemoPositions.map(p => p.profit_loss_percent || 0))
+    : 0;
+  
+  // Take a snapshot of current portfolio value
+  const takeSnapshot = useCallback(() => {
+    const currentValue = totalValue;
+    setPortfolioSnapshots(prev => {
+      const now = Date.now();
+      const newSnapshots = [...prev, { timestamp: now, value: currentValue }];
+      // Keep last 30 days of snapshots (1 per minute = ~43200 entries max, let's limit to 1000)
+      return newSnapshots.slice(-1000);
+    });
+  }, [totalValue]);
+  
+  // Take snapshots periodically
+  useEffect(() => {
+    if (!isDemo) return;
+    
+    // Take a snapshot every minute
+    snapshotIntervalRef.current = setInterval(() => {
+      takeSnapshot();
+    }, 60000);
+    
+    return () => {
+      if (snapshotIntervalRef.current) {
+        clearInterval(snapshotIntervalRef.current);
+      }
+    };
+  }, [isDemo, takeSnapshot]);
+  
+  // Generate portfolio history from snapshots
+  const generatePortfolioHistory = useCallback((): Record<string, PortfolioData[]> => {
+    const now = Date.now();
+    const baseValue = INITIAL_DEMO_BALANCE * 150; // In USD
+    
+    // Helper to format snapshots into chart data
+    const formatSnapshots = (
+      maxAge: number, 
+      dateFormatter: (date: Date) => string,
+      targetPoints: number
+    ): PortfolioData[] => {
+      const relevantSnapshots = portfolioSnapshots.filter(s => now - s.timestamp <= maxAge);
+      
+      if (relevantSnapshots.length === 0) {
+        // Generate placeholder data based on current value
+        const data: PortfolioData[] = [];
+        for (let i = targetPoints; i >= 0; i--) {
+          const time = new Date(now - (i * maxAge / targetPoints));
+          const variance = (Math.random() - 0.5) * 0.02 * totalValue;
+          data.push({
+            date: dateFormatter(time),
+            value: totalValue + variance,
+            pnl: variance,
+          });
+        }
+        // Set last point to actual current value
+        if (data.length > 0) {
+          data[data.length - 1].value = totalValue;
+          data[data.length - 1].pnl = totalValue - baseValue;
+        }
+        return data;
+      }
+      
+      // Sample snapshots to target number of points
+      const step = Math.max(1, Math.floor(relevantSnapshots.length / targetPoints));
+      const sampledSnapshots = relevantSnapshots.filter((_, i) => i % step === 0);
+      
+      return sampledSnapshots.map(s => ({
+        date: dateFormatter(new Date(s.timestamp)),
+        value: s.value,
+        pnl: s.value - baseValue,
+      }));
+    };
+    
+    return {
+      '1H': formatSnapshots(
+        60 * 60 * 1000, 
+        (d) => d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+        30
+      ),
+      '24H': formatSnapshots(
+        24 * 60 * 60 * 1000,
+        (d) => d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+        24
+      ),
+      '7D': formatSnapshots(
+        7 * 24 * 60 * 60 * 1000,
+        (d) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+        28
+      ),
+      '30D': formatSnapshots(
+        30 * 24 * 60 * 60 * 1000,
+        (d) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+        30
+      ),
+    };
+  }, [portfolioSnapshots, totalValue]);
+  
+  const portfolioHistory = generatePortfolioHistory();
   
   // Persist to localStorage
   useEffect(() => {
     localStorage.setItem(DEMO_STORAGE_KEY, JSON.stringify({
       balance: demoBalance,
       positions: demoPositions,
+      snapshots: portfolioSnapshots,
     }));
-  }, [demoBalance, demoPositions]);
-  
-  // Calculate totals
-  const openDemoPositions = demoPositions.filter(p => p.status === 'open');
-  const closedDemoPositions = demoPositions.filter(p => p.status === 'closed');
-  
-  const totalValue = openDemoPositions.reduce((sum, p) => sum + p.current_value, 0) + demoBalance;
-  const totalPnL = openDemoPositions.reduce((sum, p) => sum + (p.profit_loss_value || 0), 0);
-  const entryTotal = openDemoPositions.reduce((sum, p) => sum + p.entry_value, 0);
-  const totalPnLPercent = entryTotal > 0 ? (totalPnL / entryTotal) * 100 : 0;
+  }, [demoBalance, demoPositions, portfolioSnapshots]);
   
   const deductBalance = useCallback((amount: number) => {
     if (demoBalance >= amount) {
@@ -197,6 +273,12 @@ export function DemoPortfolioProvider({ children }: { children: ReactNode }) {
     setDemoBalance(prev => prev + amount);
   }, []);
   
+  const resetDemoPortfolio = useCallback(() => {
+    setDemoBalance(INITIAL_DEMO_BALANCE);
+    setDemoPositions([]);
+    setPortfolioSnapshots([{ timestamp: Date.now(), value: INITIAL_DEMO_BALANCE * 150 }]);
+  }, []);
+  
   const addDemoPosition = useCallback((position: Omit<DemoPosition, 'id' | 'user_id' | 'created_at' | 'updated_at'>) => {
     const newPosition: DemoPosition = {
       ...position,
@@ -207,8 +289,9 @@ export function DemoPortfolioProvider({ children }: { children: ReactNode }) {
     };
     
     setDemoPositions(prev => [newPosition, ...prev]);
+    takeSnapshot(); // Take snapshot on trade
     return newPosition;
-  }, []);
+  }, [takeSnapshot]);
   
   const updateDemoPosition = useCallback((id: string, updates: Partial<DemoPosition>) => {
     setDemoPositions(prev => prev.map(p => 
@@ -238,7 +321,8 @@ export function DemoPortfolioProvider({ children }: { children: ReactNode }) {
       }
       return p;
     }));
-  }, []);
+    takeSnapshot(); // Take snapshot on trade close
+  }, [takeSnapshot]);
   
   const getCurrentPortfolioData = useCallback(() => {
     return portfolioHistory[selectedPeriod] || portfolioHistory['24H'];
@@ -249,6 +333,7 @@ export function DemoPortfolioProvider({ children }: { children: ReactNode }) {
     setDemoBalance,
     deductBalance,
     addBalance,
+    resetDemoPortfolio,
     demoPositions,
     addDemoPosition,
     updateDemoPosition,
@@ -262,6 +347,14 @@ export function DemoPortfolioProvider({ children }: { children: ReactNode }) {
     totalValue,
     totalPnL,
     totalPnLPercent,
+    // Performance stats
+    winRate,
+    avgPnL,
+    bestTrade,
+    worstTrade,
+    totalTrades,
+    wins,
+    losses,
   };
   
   return (

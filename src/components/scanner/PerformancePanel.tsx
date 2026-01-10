@@ -8,6 +8,8 @@ interface PerformancePanelProps {
   bestTrade: number;
   worstTrade: number;
   totalTrades: number;
+  wins?: number;
+  losses?: number;
 }
 
 export default function PerformancePanel({
@@ -17,6 +19,8 @@ export default function PerformancePanel({
   bestTrade = 0,
   worstTrade = 0,
   totalTrades = 0,
+  wins = 0,
+  losses = 0,
 }: Partial<PerformancePanelProps>) {
   return (
     <Card className="bg-card/80 backdrop-blur-sm border-border/50">
@@ -38,7 +42,7 @@ export default function PerformancePanel({
             <div className="text-2xl font-bold text-success font-mono">
               {winRate.toFixed(1)}%
             </div>
-            <p className="text-xs text-muted-foreground">0W / 0L</p>
+            <p className="text-xs text-muted-foreground">{wins}W / {losses}L</p>
           </div>
           <div>
             <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-1">
@@ -60,7 +64,7 @@ export default function PerformancePanel({
               Best Trade
             </div>
             <div className="text-lg font-bold text-success font-mono">
-              +{bestTrade.toFixed(1)}%
+              {bestTrade > 0 ? '+' : ''}{bestTrade.toFixed(1)}%
             </div>
           </div>
           <div className="p-3 bg-destructive/10 rounded-lg border border-destructive/20">

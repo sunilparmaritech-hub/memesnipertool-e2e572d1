@@ -9,12 +9,14 @@ import RecentActivity from "@/components/dashboard/RecentActivity";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 import { usePositions } from "@/hooks/usePositions";
 import { useWallet } from "@/hooks/useWallet";
 import { useAppMode } from "@/contexts/AppModeContext";
 import { useDemoPortfolio } from "@/contexts/DemoPortfolioContext";
 import { PortfolioChart } from "@/components/charts/PriceCharts";
-import { TrendingUp, ArrowUpRight, FlaskConical, Coins } from "lucide-react";
+import { TrendingUp, ArrowUpRight, FlaskConical, Coins, RotateCcw } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
 
 const formatCurrency = (value: number) => {
   if (Math.abs(value) >= 1000000) return `$${(value / 1000000).toFixed(2)}M`;
@@ -26,6 +28,7 @@ const Index = () => {
   const { openPositions: realOpenPositions, closedPositions: realClosedPositions, loading: positionsLoading } = usePositions();
   const { wallet } = useWallet();
   const { isDemo } = useAppMode();
+  const { toast } = useToast();
   
   // Demo portfolio context
   const {
@@ -39,6 +42,7 @@ const Index = () => {
     totalValue: demoTotalValue,
     totalPnL: demoTotalPnL,
     totalPnLPercent: demoTotalPnLPercent,
+    resetDemoPortfolio,
   } = useDemoPortfolio();
 
   // Use demo or real positions based on mode
@@ -77,6 +81,15 @@ const Index = () => {
     return initial > 0 ? ((current - initial) / initial) * 100 : 0;
   }, [portfolioData, totalValue]);
 
+  // Reset demo handler
+  const handleResetDemo = () => {
+    resetDemoPortfolio();
+    toast({
+      title: "Demo Reset",
+      description: "Demo balance reset to 5,000 SOL. All positions cleared.",
+    });
+  };
+
   return (
     <AppLayout>
       <div className="container mx-auto max-w-7xl px-4 space-y-6">
@@ -84,12 +97,23 @@ const Index = () => {
         {isDemo && (
           <Alert className="bg-warning/10 border-warning/30">
             <FlaskConical className="h-4 w-4 text-warning" />
-            <AlertTitle className="text-warning flex items-center gap-2">
-              Demo Mode Active
-              <Badge className="bg-warning/20 text-warning border-warning/30 ml-2">
-                <Coins className="w-3 h-3 mr-1" />
-                {demoBalance.toFixed(0)} SOL
-              </Badge>
+            <AlertTitle className="text-warning flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                Demo Mode Active
+                <Badge className="bg-warning/20 text-warning border-warning/30 ml-2">
+                  <Coins className="w-3 h-3 mr-1" />
+                  {demoBalance.toFixed(0)} SOL
+                </Badge>
+              </div>
+              <Button 
+                variant="outline" 
+                size="sm" 
+                className="h-7 text-xs border-warning/30 text-warning hover:bg-warning/20"
+                onClick={handleResetDemo}
+              >
+                <RotateCcw className="w-3 h-3 mr-1" />
+                Reset
+              </Button>
             </AlertTitle>
             <AlertDescription className="text-warning/80">
               You're trading with simulated {demoBalance.toFixed(0)} SOL. Switch to Live mode for real trading.

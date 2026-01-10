@@ -12,13 +12,14 @@ import { useTokenScanner } from "@/hooks/useTokenScanner";
 import { useSniperSettings } from "@/hooks/useSniperSettings";
 import { useAutoSniper, TokenData } from "@/hooks/useAutoSniper";
 import { useAutoExit } from "@/hooks/useAutoExit";
+import { useDemoAutoExit } from "@/hooks/useDemoAutoExit";
 import { useWallet } from "@/hooks/useWallet";
 import { usePositions } from "@/hooks/usePositions";
 import { useToast } from "@/hooks/use-toast";
 import { useNotifications } from "@/hooks/useNotifications";
 import { useAppMode } from "@/contexts/AppModeContext";
 import { useDemoPortfolio } from "@/contexts/DemoPortfolioContext";
-import { Wallet, TrendingUp, Zap, Activity, AlertTriangle, X, FlaskConical, Coins } from "lucide-react";
+import { Wallet, TrendingUp, Zap, Activity, AlertTriangle, X, FlaskConical, Coins, RotateCcw } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 
@@ -50,7 +51,19 @@ const Scanner = () => {
     totalValue: demoTotalValue,
     totalPnL: demoTotalPnL,
     totalPnLPercent: demoTotalPnLPercent,
+    resetDemoPortfolio,
+    // Performance stats
+    winRate: demoWinRate,
+    avgPnL: demoAvgPnL,
+    bestTrade: demoBestTrade,
+    worstTrade: demoWorstTrade,
+    totalTrades: demoTotalTrades,
+    wins: demoWins,
+    losses: demoLosses,
   } = useDemoPortfolio();
+  
+  // Demo auto-exit monitor
+  const { startDemoMonitor, stopDemoMonitor } = useDemoAutoExit();
 
   const [isBotActive, setIsBotActive] = useState(false);
   const [scanSpeed, setScanSpeed] = useState<'slow' | 'normal' | 'fast'>('normal');
@@ -297,6 +310,8 @@ const Scanner = () => {
       processedTokensRef.current.clear();
       
       if (isDemo) {
+        // Start demo auto-exit monitor
+        startDemoMonitor(5000); // Check every 5 seconds for demo
         toast({
           title: "Demo Mode Active",
           description: `Bot running with ${demoBalance.toFixed(0)} SOL demo balance. No real trades.`,
@@ -315,8 +330,10 @@ const Scanner = () => {
         type: 'success',
       });
     } else {
-      // Stop auto-exit monitor when bot is deactivated
-      if (!isDemo) {
+      // Stop auto-exit monitors
+      if (isDemo) {
+        stopDemoMonitor();
+      } else {
         stopAutoExitMonitor();
       }
       
@@ -333,6 +350,15 @@ const Scanner = () => {
       description: active 
         ? (isDemo ? `Bot will simulate trades with ${demoBalance.toFixed(0)} SOL` : "Bot will automatically enter/exit trades when conditions are met")
         : "Automatic trading has been paused",
+    });
+  };
+  
+  // Reset demo balance handler
+  const handleResetDemo = () => {
+    resetDemoPortfolio();
+    toast({
+      title: "Demo Reset",
+      description: "Demo balance reset to 5,000 SOL. All positions cleared.",
     });
   };
 
@@ -356,12 +382,23 @@ const Scanner = () => {
           {isDemo && (
             <Alert className="bg-warning/10 border-warning/30">
               <FlaskConical className="h-4 w-4 text-warning" />
-              <AlertTitle className="text-warning flex items-center gap-2">
-                Demo Mode Active
-                <Badge className="bg-warning/20 text-warning border-warning/30 ml-2">
-                  <Coins className="w-3 h-3 mr-1" />
-                  {demoBalance.toFixed(0)} SOL
-                </Badge>
+              <AlertTitle className="text-warning flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  Demo Mode Active
+                  <Badge className="bg-warning/20 text-warning border-warning/30 ml-2">
+                    <Coins className="w-3 h-3 mr-1" />
+                    {demoBalance.toFixed(0)} SOL
+                  </Badge>
+                </div>
+                <Button 
+                  variant="outline" 
+                  size="sm" 
+                  className="h-7 text-xs border-warning/30 text-warning hover:bg-warning/20"
+                  onClick={handleResetDemo}
+                >
+                  <RotateCcw className="w-3 h-3 mr-1" />
+                  Reset
+                </Button>
               </AlertTitle>
               <AlertDescription className="text-warning/80">
                 You're trading with simulated {demoBalance.toFixed(0)} SOL. Switch to Live mode for real trading.
@@ -513,14 +550,16 @@ const Scanner = () => {
                 onToggleActive={handleToggleBotActive}
               />
 
-              {/* Performance Panel */}
+              {/* Performance Panel - use demo stats in demo mode */}
               <PerformancePanel
-                winRate={winRate}
-                totalPnL={totalPnLPercent}
-                avgPnL={totalPnLPercent / Math.max(closedPositions.length, 1)}
-                bestTrade={Math.max(...closedPositions.map(p => p.profit_loss_percent || 0), 0)}
-                worstTrade={Math.min(...closedPositions.map(p => p.profit_loss_percent || 0), 0)}
-                totalTrades={closedPositions.length}
+                winRate={isDemo ? demoWinRate : winRate}
+                totalPnL={isDemo ? demoTotalPnLPercent : totalPnLPercent}
+                avgPnL={isDemo ? demoAvgPnL : (totalPnLPercent / Math.max(closedPositions.length, 1))}
+                bestTrade={isDemo ? demoBestTrade : Math.max(...closedPositions.map(p => p.profit_loss_percent || 0), 0)}
+                worstTrade={isDemo ? demoWorstTrade : Math.min(...closedPositions.map(p => p.profit_loss_percent || 0), 0)}
+                totalTrades={isDemo ? demoTotalTrades : closedPositions.length}
+                wins={isDemo ? demoWins : closedPositions.filter(p => (p.profit_loss_percent || 0) > 0).length}
+                losses={isDemo ? demoLosses : closedPositions.filter(p => (p.profit_loss_percent || 0) <= 0).length}
               />
 
               {/* Active Positions */}

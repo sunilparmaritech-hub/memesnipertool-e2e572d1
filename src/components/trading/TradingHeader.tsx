@@ -65,7 +65,7 @@ export default function TradingHeader({
   const getNavItems = (): NavItem[] => {
     const baseItems: NavItem[] = [
       { label: "Dashboard", path: "/", icon: LayoutDashboard },
-      { label: "Scanner", path: "/scanner", icon: Bot },
+      { label: "Token Scanner", path: "/scanner", icon: Zap },
       { label: "Portfolio", path: "/portfolio", icon: Briefcase },
       { label: "Risk", path: "/risk", icon: Shield },
       { label: "Settings", path: "/sniper-settings", icon: Settings },

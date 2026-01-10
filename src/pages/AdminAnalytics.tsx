@@ -43,6 +43,8 @@ const formatCurrency = (value: number) => {
 };
 
 const AdminAnalytics = () => {
+  // All hooks must be called first, before any conditional logic
+  const { wallet, connectPhantom, disconnect } = useWallet();
   const {
     analytics,
     apiConfigs,
@@ -71,8 +73,6 @@ const AdminAnalytics = () => {
     name: name.charAt(0).toUpperCase() + name.slice(1),
     value,
   }));
-
-  const { wallet, connectPhantom, disconnect } = useWallet();
 
   const handleConnectWallet = async () => {
     if (wallet.isConnected) {

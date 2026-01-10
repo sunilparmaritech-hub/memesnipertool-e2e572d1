@@ -22,6 +22,8 @@ import {
   Bot,
   Copy,
   TrendingUp,
+  ArrowUpRight,
+  Sparkles,
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -35,16 +37,16 @@ const formatCurrency = (value: number) => {
 
 const generatePortfolioData = () => {
   const data = [];
-  let value = 100;
+  let value = 1000;
   for (let i = 6; i >= 0; i--) {
     const date = new Date();
     date.setDate(date.getDate() - i);
-    const change = (Math.random() - 0.4) * 20;
-    value = Math.max(value + change, 50);
+    const change = (Math.random() - 0.4) * 100;
+    value = Math.max(value + change, 500);
     data.push({ 
       date: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
       value: value,
-      pnl: value - 100,
+      pnl: value - 1000,
     });
   }
   return data;
@@ -122,6 +124,13 @@ const Index = () => {
     return entryTotal > 0 ? (totalPnL / entryTotal) * 100 : 0;
   }, [openPositions, totalPnL]);
 
+  // Calculate today's performance
+  const todayPerformance = useMemo(() => {
+    const initial = portfolioData[0]?.value || 1000;
+    const current = portfolioData[portfolioData.length - 1]?.value || 1000;
+    return ((current - initial) / initial) * 100;
+  }, [portfolioData]);
+
   const handleScan = useCallback(() => {
     scanTokens(settings?.min_liquidity || 300);
   }, [scanTokens, settings?.min_liquidity]);
@@ -153,8 +162,21 @@ const Index = () => {
     });
   };
 
+  const copyTradeColors = [
+    'from-purple-500/30 to-purple-500/10 text-purple-400 border-purple-500/20',
+    'from-blue-500/30 to-blue-500/10 text-blue-400 border-blue-500/20',
+    'from-pink-500/30 to-pink-500/10 text-pink-400 border-pink-500/20',
+    'from-cyan-500/30 to-cyan-500/10 text-cyan-400 border-cyan-500/20',
+  ];
+
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen bg-background relative">
+      {/* Background effects */}
+      <div className="fixed inset-0 pointer-events-none overflow-hidden">
+        <div className="absolute top-0 left-1/4 w-96 h-96 bg-primary/5 rounded-full blur-3xl" />
+        <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-accent/5 rounded-full blur-3xl" />
+      </div>
+      
       <TradingHeader
         walletConnected={wallet.isConnected}
         walletAddress={wallet.address || undefined}
@@ -162,28 +184,42 @@ const Index = () => {
         onConnectWallet={handleConnectWallet}
       />
       
-      <main className="pt-20 pb-8 px-4">
-        <div className="container mx-auto">
+      <main className="relative pt-20 pb-8 px-4">
+        <div className="container mx-auto max-w-7xl">
           <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
+            {/* Modern Tab Header */}
             <div className="flex items-center justify-between gap-4 flex-wrap">
-              <TabsList className="bg-secondary/60 p-1">
-                <TabsTrigger value="dashboard" className="gap-2 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
+              <TabsList className="bg-secondary/40 backdrop-blur-xl border border-border/50 p-1.5 rounded-2xl">
+                <TabsTrigger 
+                  value="dashboard" 
+                  className="gap-2 rounded-xl px-4 py-2.5 data-[state=active]:bg-gradient-to-r data-[state=active]:from-primary data-[state=active]:to-primary/80 data-[state=active]:text-primary-foreground data-[state=active]:shadow-lg data-[state=active]:shadow-primary/25 transition-all duration-300"
+                >
                   <LayoutDashboard className="w-4 h-4" />
                   Dashboard
                 </TabsTrigger>
-                <TabsTrigger value="scanner" className="gap-2 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
+                <TabsTrigger 
+                  value="scanner" 
+                  className="gap-2 rounded-xl px-4 py-2.5 data-[state=active]:bg-gradient-to-r data-[state=active]:from-primary data-[state=active]:to-primary/80 data-[state=active]:text-primary-foreground data-[state=active]:shadow-lg data-[state=active]:shadow-primary/25 transition-all duration-300"
+                >
                   <Bot className="w-4 h-4" />
                   Token Scanner
                 </TabsTrigger>
               </TabsList>
               
-              <Button variant="outline" size="sm" onClick={() => refreshBalance()} disabled={!wallet.isConnected}>
-                <RefreshCw className="w-4 h-4 mr-1.5" />
+              <Button 
+                variant="outline" 
+                size="sm" 
+                onClick={() => refreshBalance()} 
+                disabled={!wallet.isConnected}
+                className="gap-2 rounded-xl border-border/50 bg-secondary/40 backdrop-blur-xl hover:bg-secondary/60"
+              >
+                <RefreshCw className="w-4 h-4" />
                 Refresh
               </Button>
             </div>
 
-            <TabsContent value="dashboard" className="space-y-6 mt-0">
+            <TabsContent value="dashboard" className="space-y-6 mt-0 animate-fade-in">
+              {/* Wallet Banner */}
               {wallet.isConnected && wallet.address && (
                 <WalletBanner 
                   address={wallet.address} 
@@ -192,6 +228,7 @@ const Index = () => {
                 />
               )}
 
+              {/* Stats Grid */}
               <StatsGrid
                 totalValue={totalValue}
                 totalPnL={totalPnL}
@@ -200,20 +237,64 @@ const Index = () => {
                 closedPositionsCount={closedPositions.length}
               />
 
+              {/* Main Content Grid */}
               <div className="grid lg:grid-cols-3 gap-6">
+                {/* Left Column - 2/3 width */}
                 <div className="lg:col-span-2 space-y-6">
-                  <Card className="bg-card/80 backdrop-blur-sm border-border/50">
-                    <CardHeader className="pb-2">
-                      <CardTitle className="text-base font-semibold flex items-center gap-2">
-                        <TrendingUp className="w-4 h-4 text-primary" />
-                        Portfolio Performance (7D)
-                      </CardTitle>
+                  {/* Portfolio Chart Card */}
+                  <Card className="relative overflow-hidden border-0 bg-gradient-to-br from-card/90 to-card/60 backdrop-blur-xl animate-fade-in">
+                    {/* Decorative elements */}
+                    <div className="absolute inset-0 opacity-30">
+                      <div className="absolute top-0 right-0 w-64 h-64 bg-primary/10 rounded-full blur-3xl" />
+                    </div>
+                    
+                    <CardHeader className="relative pb-2">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <div className="p-2.5 rounded-xl bg-gradient-to-br from-primary/20 to-primary/5 border border-primary/10">
+                            <TrendingUp className="w-4 h-4 text-primary" />
+                          </div>
+                          <div>
+                            <CardTitle className="text-base font-semibold">Portfolio Performance</CardTitle>
+                            <div className="flex items-center gap-2 mt-0.5">
+                              <span className="text-2xl font-bold text-foreground">
+                                {formatCurrency(portfolioData[portfolioData.length - 1]?.value || 1000)}
+                              </span>
+                              <Badge 
+                                variant="outline" 
+                                className={`text-xs ${todayPerformance >= 0 ? 'bg-success/10 text-success border-success/30' : 'bg-destructive/10 text-destructive border-destructive/30'}`}
+                              >
+                                <ArrowUpRight className="w-3 h-3 mr-0.5" />
+                                {todayPerformance >= 0 ? '+' : ''}{todayPerformance.toFixed(2)}% (7D)
+                              </Badge>
+                            </div>
+                          </div>
+                        </div>
+                        
+                        {/* Time Range Selector */}
+                        <div className="flex gap-1 bg-secondary/40 backdrop-blur rounded-xl p-1 border border-border/30">
+                          {['1D', '7D', '1M', 'All'].map((period, i) => (
+                            <button
+                              key={period}
+                              className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-all duration-200 ${
+                                i === 1 
+                                  ? 'bg-primary text-primary-foreground shadow-sm' 
+                                  : 'text-muted-foreground hover:text-foreground hover:bg-secondary/60'
+                              }`}
+                            >
+                              {period}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
                     </CardHeader>
-                    <CardContent>
-                      <PortfolioChart data={portfolioData} height={200} />
+                    
+                    <CardContent className="relative">
+                      <PortfolioChart data={portfolioData} height={220} />
                     </CardContent>
                   </Card>
 
+                  {/* Active Trades */}
                   <ActiveTradesCard 
                     positions={openPositions} 
                     loading={positionsLoading}
@@ -221,30 +302,65 @@ const Index = () => {
                   />
                 </div>
 
+                {/* Right Column - 1/3 width */}
                 <div className="space-y-6">
-                  <Card className="bg-card/80 backdrop-blur-sm border-border/50">
-                    <CardHeader className="pb-3">
-                      <CardTitle className="text-base font-semibold flex items-center gap-2">
-                        <Copy className="w-4 h-4 text-purple-400" />
-                        Recent Copy Trades
-                      </CardTitle>
+                  {/* Copy Trades Card */}
+                  <Card className="relative overflow-hidden border-0 bg-gradient-to-br from-card/90 to-card/60 backdrop-blur-xl animate-fade-in">
+                    <div className="absolute inset-0 opacity-30">
+                      <div className="absolute -bottom-10 -right-10 w-40 h-40 bg-purple-500/10 rounded-full blur-3xl" />
+                    </div>
+                    
+                    <CardHeader className="relative pb-3">
+                      <div className="flex items-center gap-3">
+                        <div className="p-2.5 rounded-xl bg-gradient-to-br from-purple-500/20 to-purple-500/5 border border-purple-500/10">
+                          <Copy className="w-4 h-4 text-purple-400" />
+                        </div>
+                        <div>
+                          <CardTitle className="text-base font-semibold">Copy Trades</CardTitle>
+                          <p className="text-xs text-muted-foreground">Recent activity</p>
+                        </div>
+                      </div>
                     </CardHeader>
-                    <CardContent>
+                    
+                    <CardContent className="relative">
                       {copyLoading ? (
                         <div className="flex items-center justify-center py-8">
-                          <Loader2 className="w-5 h-5 animate-spin text-primary" />
+                          <div className="relative">
+                            <div className="absolute inset-0 bg-purple-500/20 rounded-full blur-xl animate-pulse" />
+                            <Loader2 className="w-6 h-6 animate-spin text-purple-400 relative" />
+                          </div>
                         </div>
                       ) : copyTrades.length === 0 ? (
-                        <p className="text-center py-6 text-sm text-muted-foreground">No copy trades yet</p>
+                        <div className="text-center py-8">
+                          <div className="relative inline-flex mb-3">
+                            <div className="absolute inset-0 bg-muted/30 rounded-2xl blur-xl" />
+                            <div className="relative p-3 rounded-2xl bg-gradient-to-br from-muted/20 to-muted/5 border border-border/50">
+                              <Sparkles className="w-6 h-6 text-muted-foreground/50" />
+                            </div>
+                          </div>
+                          <p className="text-sm text-muted-foreground">No copy trades yet</p>
+                        </div>
                       ) : (
                         <div className="space-y-2">
-                          {copyTrades.slice(0, 5).map((trade) => (
-                            <div key={trade.id} className="flex items-center justify-between p-2.5 bg-secondary/40 rounded-lg">
-                              <div>
-                                <p className="text-sm font-medium text-foreground">{trade.token_symbol}</p>
-                                <p className="text-xs text-muted-foreground">{trade.leader_name || 'Unknown'}</p>
+                          {copyTrades.slice(0, 5).map((trade, index) => (
+                            <div 
+                              key={trade.id} 
+                              className="group flex items-center justify-between p-3 bg-secondary/30 hover:bg-secondary/50 rounded-xl border border-transparent hover:border-border/50 transition-all duration-300 animate-fade-in"
+                              style={{ animationDelay: `${index * 50}ms` }}
+                            >
+                              <div className="flex items-center gap-2.5">
+                                <div className={`w-8 h-8 rounded-lg bg-gradient-to-br ${copyTradeColors[index % copyTradeColors.length]} border flex items-center justify-center font-bold text-xs`}>
+                                  {trade.token_symbol.slice(0, 2)}
+                                </div>
+                                <div>
+                                  <p className="text-sm font-medium text-foreground">{trade.token_symbol}</p>
+                                  <p className="text-xs text-muted-foreground">{trade.leader_name || 'Unknown'}</p>
+                                </div>
                               </div>
-                              <Badge variant={trade.action === 'buy' ? 'default' : 'secondary'} className="text-xs">
+                              <Badge 
+                                variant={trade.action === 'buy' ? 'default' : 'secondary'} 
+                                className={`text-xs capitalize ${trade.action === 'buy' ? 'bg-success/20 text-success border-success/30' : 'bg-destructive/20 text-destructive border-destructive/30'}`}
+                              >
                                 {trade.action}
                               </Badge>
                             </div>
@@ -257,7 +373,7 @@ const Index = () => {
               </div>
             </TabsContent>
 
-            <TabsContent value="scanner" className="mt-0">
+            <TabsContent value="scanner" className="mt-0 animate-fade-in">
               <div className="grid lg:grid-cols-[1fr,400px] gap-6 h-[calc(100vh-160px)]">
                 <TokenScannerPanel
                   tokens={tokens}

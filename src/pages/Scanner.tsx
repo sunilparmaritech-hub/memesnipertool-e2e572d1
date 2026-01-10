@@ -16,39 +16,41 @@ import { usePositions } from "@/hooks/usePositions";
 import { useToast } from "@/hooks/use-toast";
 import { useNotifications } from "@/hooks/useNotifications";
 import { useAppMode } from "@/contexts/AppModeContext";
-import { Wallet, TrendingUp, Zap, Activity, AlertTriangle, X, FlaskConical } from "lucide-react";
+import { useDemoPortfolio } from "@/contexts/DemoPortfolioContext";
+import { Wallet, TrendingUp, Zap, Activity, AlertTriangle, X, FlaskConical, Coins } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-
-const generatePortfolioData = () => {
-  const data = [];
-  let value = 1000;
-  const now = new Date();
-  for (let i = 24; i >= 0; i--) {
-    const time = new Date(now.getTime() - i * 60 * 60 * 1000);
-    const change = (Math.random() - 0.4) * 100;
-    value = Math.max(value + change, 500);
-    data.push({ 
-      date: time.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
-      value: value,
-      pnl: value - 1000,
-    });
-  }
-  return data;
-};
 
 const Scanner = () => {
   const { tokens, loading, scanTokens, errors, apiErrors, isDemo, cleanup } = useTokenScanner();
   const { settings, saving, saveSettings, updateField } = useSniperSettings();
   const { evaluateTokens, result: sniperResult, loading: sniperLoading } = useAutoSniper();
   const { wallet, connectPhantom, disconnect, refreshBalance } = useWallet();
-  const { openPositions, closedPositions, fetchPositions } = usePositions();
+  const { openPositions: realOpenPositions, closedPositions: realClosedPositions, fetchPositions } = usePositions();
   const { toast } = useToast();
   const { addNotification } = useNotifications();
   const { mode } = useAppMode();
+  
+  // Demo portfolio context
+  const {
+    demoBalance,
+    deductBalance,
+    addBalance,
+    addDemoPosition,
+    updateDemoPosition,
+    closeDemoPosition,
+    openDemoPositions,
+    closedDemoPositions,
+    portfolioHistory,
+    selectedPeriod,
+    setSelectedPeriod,
+    getCurrentPortfolioData,
+    totalValue: demoTotalValue,
+    totalPnL: demoTotalPnL,
+    totalPnLPercent: demoTotalPnLPercent,
+  } = useDemoPortfolio();
 
   const [isBotActive, setIsBotActive] = useState(false);
-  const [portfolioData] = useState(generatePortfolioData);
   const [scanSpeed, setScanSpeed] = useState<'slow' | 'normal' | 'fast'>('normal');
   const [isPaused, setIsPaused] = useState(false);
   const [showApiErrors, setShowApiErrors] = useState(true);
@@ -57,30 +59,45 @@ const Scanner = () => {
   const lastSniperRunRef = useRef<number>(0);
   const processedTokensRef = useRef<Set<string>>(new Set());
 
-  // Calculate stats
-  const totalValue = useMemo(() => 
-    openPositions.reduce((sum, p) => sum + p.current_value, 0) + 1890, 
-    [openPositions]
-  );
+  // Use demo or real positions based on mode
+  const openPositions = isDemo ? openDemoPositions : realOpenPositions;
+  const closedPositions = isDemo ? closedDemoPositions : realClosedPositions;
+
+  // Calculate stats based on mode
+  const totalValue = useMemo(() => {
+    if (isDemo) {
+      return demoTotalValue;
+    }
+    return realOpenPositions.reduce((sum, p) => sum + p.current_value, 0);
+  }, [isDemo, demoTotalValue, realOpenPositions]);
   
-  const totalPnL = useMemo(() => 
-    openPositions.reduce((sum, p) => sum + (p.profit_loss_value || 0), 0),
-    [openPositions]
-  );
+  const totalPnL = useMemo(() => {
+    if (isDemo) {
+      return demoTotalPnL;
+    }
+    return realOpenPositions.reduce((sum, p) => sum + (p.profit_loss_value || 0), 0);
+  }, [isDemo, demoTotalPnL, realOpenPositions]);
   
   const totalPnLPercent = useMemo(() => {
-    const entryTotal = openPositions.reduce((sum, p) => sum + p.entry_value, 0);
+    if (isDemo) {
+      return demoTotalPnLPercent;
+    }
+    const entryTotal = realOpenPositions.reduce((sum, p) => sum + p.entry_value, 0);
     return entryTotal > 0 ? (totalPnL / entryTotal) * 100 : 0;
-  }, [openPositions, totalPnL]);
+  }, [isDemo, demoTotalPnLPercent, realOpenPositions, totalPnL]);
 
-  // Calculate today's change
+  // Get portfolio data based on selected period
+  const portfolioData = useMemo(() => getCurrentPortfolioData(), [getCurrentPortfolioData, selectedPeriod]);
+
+  // Calculate today's change from portfolio data
   const todayChange = useMemo(() => {
-    const initial = portfolioData[0]?.value || 1000;
-    const current = portfolioData[portfolioData.length - 1]?.value || 1000;
+    if (portfolioData.length < 2) return { value: 0, percent: 0 };
+    const initial = portfolioData[0]?.value || totalValue;
+    const current = portfolioData[portfolioData.length - 1]?.value || totalValue;
     const change = current - initial;
-    const percent = (change / initial) * 100;
+    const percent = initial > 0 ? (change / initial) * 100 : 0;
     return { value: change, percent };
-  }, [portfolioData]);
+  }, [portfolioData, totalValue]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -152,27 +169,108 @@ const Scanner = () => {
     
     console.log('Auto-sniper evaluating new tokens:', tokenData.map(t => t.symbol));
     
-    // In demo mode, simulate trade execution
+    // In demo mode, simulate trade execution with demo balance
     if (isDemo) {
-      // Simulate successful trade for demo
-      const approvedToken = tokenData.find(t => t.buyerPosition && t.buyerPosition >= 2 && t.buyerPosition <= 3 && t.riskScore < 70);
-      if (approvedToken) {
-        toast({
-          title: '🎯 Demo Trade Executed!',
-          description: `Bought ${approvedToken.symbol} at $${approvedToken.priceUsd?.toFixed(6) || 'N/A'}`,
-        });
-        addNotification({
-          title: `Demo Trade: ${approvedToken.symbol}`,
-          message: `Simulated buy of ${approvedToken.symbol} with ${settings.trade_amount} SOL`,
-          type: 'trade',
-          metadata: { token: approvedToken.symbol, amount: settings.trade_amount },
-        });
+      // Find token that meets criteria
+      const approvedToken = tokenData.find(t => 
+        t.buyerPosition && 
+        t.buyerPosition >= 2 && 
+        t.buyerPosition <= 3 && 
+        t.riskScore < 70 &&
+        t.liquidity >= (settings.min_liquidity || 300)
+      );
+      
+      if (approvedToken && settings.trade_amount) {
+        // Check if we have enough balance
+        const tradeAmountInDollars = settings.trade_amount * 150; // Approximate SOL price
+        
+        if (demoBalance >= settings.trade_amount) {
+          // Deduct balance
+          deductBalance(settings.trade_amount);
+          
+          const entryPrice = approvedToken.priceUsd || 0.0001;
+          const amount = tradeAmountInDollars / entryPrice;
+          
+          // Create demo position
+          const newPosition = addDemoPosition({
+            token_address: approvedToken.address,
+            token_symbol: approvedToken.symbol,
+            token_name: approvedToken.name,
+            chain: approvedToken.chain,
+            entry_price: entryPrice,
+            current_price: entryPrice,
+            amount,
+            entry_value: tradeAmountInDollars,
+            current_value: tradeAmountInDollars,
+            profit_loss_percent: 0,
+            profit_loss_value: 0,
+            profit_take_percent: settings.profit_take_percentage,
+            stop_loss_percent: settings.stop_loss_percentage,
+            status: 'open',
+            exit_reason: null,
+            exit_price: null,
+            exit_tx_id: null,
+            closed_at: null,
+          });
+          
+          toast({
+            title: '🎯 Demo Trade Executed!',
+            description: `Bought ${approvedToken.symbol} at $${entryPrice.toFixed(6)} with ${settings.trade_amount} SOL`,
+          });
+          
+          addNotification({
+            title: `Demo Trade: ${approvedToken.symbol}`,
+            message: `Bought ${approvedToken.symbol} with ${settings.trade_amount} SOL. TP: ${settings.profit_take_percentage}% SL: ${settings.stop_loss_percentage}%`,
+            type: 'trade',
+            metadata: { token: approvedToken.symbol, amount: settings.trade_amount },
+          });
+          
+          // Simulate price movement for demo positions
+          setTimeout(() => {
+            const priceChange = (Math.random() - 0.3) * 0.5; // -30% to +20%
+            const newPrice = entryPrice * (1 + priceChange);
+            const newValue = amount * newPrice;
+            const pnlPercent = priceChange * 100;
+            const pnlValue = newValue - tradeAmountInDollars;
+            
+            updateDemoPosition(newPosition.id, {
+              current_price: newPrice,
+              current_value: newValue,
+              profit_loss_percent: pnlPercent,
+              profit_loss_value: pnlValue,
+            });
+            
+            // Check exit conditions
+            if (pnlPercent >= settings.profit_take_percentage) {
+              closeDemoPosition(newPosition.id, newPrice, 'take_profit');
+              addBalance(settings.trade_amount + (pnlValue / 150)); // Return original + profit
+              toast({
+                title: '💰 Take Profit Hit!',
+                description: `Closed ${approvedToken.symbol} at +${pnlPercent.toFixed(1)}%`,
+              });
+            } else if (pnlPercent <= -settings.stop_loss_percentage) {
+              closeDemoPosition(newPosition.id, newPrice, 'stop_loss');
+              addBalance(settings.trade_amount + (pnlValue / 150)); // Return remaining value
+              toast({
+                title: '🛑 Stop Loss Hit',
+                description: `Closed ${approvedToken.symbol} at ${pnlPercent.toFixed(1)}%`,
+                variant: 'destructive',
+              });
+            }
+          }, 5000 + Math.random() * 10000); // Random 5-15 seconds delay
+        } else {
+          toast({
+            title: 'Insufficient Demo Balance',
+            description: `Need ${settings.trade_amount} SOL, have ${demoBalance.toFixed(2)} SOL`,
+            variant: 'destructive',
+          });
+        }
       }
     } else {
       // Live mode: call real auto-sniper
       evaluateTokens(tokenData, true, fetchPositions);
     }
-  }, [tokens, isBotActive, settings, isDemo, evaluateTokens, fetchPositions, toast, addNotification]);
+  }, [tokens, isBotActive, settings, isDemo, evaluateTokens, fetchPositions, toast, addNotification, demoBalance, deductBalance, addBalance, addDemoPosition, updateDemoPosition, closeDemoPosition]);
 
   const handleConnectWallet = async () => {
     if (wallet.isConnected) {
@@ -199,7 +297,7 @@ const Scanner = () => {
       if (isDemo) {
         toast({
           title: "Demo Mode Active",
-          description: "Bot is running in simulation mode. No real trades will be executed.",
+          description: `Bot running with ${demoBalance.toFixed(0)} SOL demo balance. No real trades.`,
           variant: "default",
         });
       }
@@ -207,7 +305,7 @@ const Scanner = () => {
       addNotification({
         title: 'Bot Activated',
         message: isDemo 
-          ? 'Liquidity bot started in demo mode - simulating trades'
+          ? `Liquidity bot started in demo mode with ${demoBalance.toFixed(0)} SOL balance`
           : 'Liquidity bot started - will auto-trade when conditions are met',
         type: 'success',
       });
@@ -223,7 +321,7 @@ const Scanner = () => {
     toast({
       title: active ? "Liquidity Bot Activated" : "Liquidity Bot Deactivated",
       description: active 
-        ? (isDemo ? "Bot will simulate trades (Demo Mode)" : "Bot will automatically enter trades when conditions are met")
+        ? (isDemo ? `Bot will simulate trades with ${demoBalance.toFixed(0)} SOL` : "Bot will automatically enter trades when conditions are met")
         : "Automatic trading has been paused",
     });
   };
@@ -248,9 +346,15 @@ const Scanner = () => {
           {isDemo && (
             <Alert className="bg-warning/10 border-warning/30">
               <FlaskConical className="h-4 w-4 text-warning" />
-              <AlertTitle className="text-warning">Demo Mode Active</AlertTitle>
+              <AlertTitle className="text-warning flex items-center gap-2">
+                Demo Mode Active
+                <Badge className="bg-warning/20 text-warning border-warning/30 ml-2">
+                  <Coins className="w-3 h-3 mr-1" />
+                  {demoBalance.toFixed(0)} SOL
+                </Badge>
+              </AlertTitle>
               <AlertDescription className="text-warning/80">
-                You're viewing simulated data. Switch to Live mode in the header to connect to real APIs and execute real trades.
+                You're trading with simulated {demoBalance.toFixed(0)} SOL. Switch to Live mode for real trading.
               </AlertDescription>
             </Alert>
           )}
@@ -292,11 +396,11 @@ const Scanner = () => {
           {/* Stats Row */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             <StatsCard
-              title="Portfolio Value"
-              value={`$${totalValue.toFixed(2)}`}
+              title={isDemo ? "Demo Balance" : "Portfolio Value"}
+              value={isDemo ? `${demoBalance.toFixed(0)} SOL` : `$${totalValue.toFixed(2)}`}
               change={`${totalPnLPercent >= 0 ? '+' : ''}${totalPnLPercent.toFixed(1)}% total`}
               changeType={totalPnLPercent >= 0 ? 'positive' : 'negative'}
-              icon={Wallet}
+              icon={isDemo ? Coins : Wallet}
             />
             <StatsCard
               title="Active Trades"
@@ -330,20 +434,25 @@ const Scanner = () => {
                 <CardHeader className="pb-2">
                   <div className="flex items-center justify-between">
                     <div>
-                      <CardTitle className="text-base font-semibold">Portfolio Value</CardTitle>
+                      <CardTitle className="text-base font-semibold">
+                        {isDemo ? "Demo Portfolio" : "Portfolio Value"}
+                      </CardTitle>
                       <div className="flex items-baseline gap-2 mt-1">
-                        <span className="text-2xl font-bold text-foreground">${totalValue.toFixed(2)}</span>
+                        <span className="text-2xl font-bold text-foreground">
+                          {isDemo ? `${demoBalance.toFixed(0)} SOL` : `$${totalValue.toFixed(2)}`}
+                        </span>
                         <span className={`text-sm font-medium ${todayChange.value >= 0 ? 'text-success' : 'text-destructive'}`}>
-                          {todayChange.value >= 0 ? '+' : ''}${todayChange.value.toFixed(2)} ({todayChange.percent.toFixed(2)}%) today
+                          {todayChange.value >= 0 ? '+' : ''}{todayChange.value.toFixed(2)} ({todayChange.percent.toFixed(2)}%) {selectedPeriod}
                         </span>
                       </div>
                     </div>
                     <div className="flex gap-1 bg-secondary/60 rounded-lg p-0.5">
-                      {['1H', '24H', '7D', '30D'].map((period) => (
+                      {(['1H', '24H', '7D', '30D'] as const).map((period) => (
                         <button
                           key={period}
+                          onClick={() => setSelectedPeriod(period)}
                           className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
-                            period === '24H' 
+                            period === selectedPeriod 
                               ? 'bg-primary text-primary-foreground' 
                               : 'text-muted-foreground hover:text-foreground'
                           }`}

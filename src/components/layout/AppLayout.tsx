@@ -18,14 +18,14 @@ export default function AppLayout({ children }: AppLayoutProps) {
   };
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen bg-background flex flex-col overflow-x-hidden">
       <TradingHeader
         walletConnected={wallet.isConnected}
         walletAddress={wallet.address || undefined}
         network={wallet.network}
         onConnectWallet={handleConnectWallet}
       />
-      <main className="pt-20 pb-8">
+      <main className="pt-20 pb-8 flex-1 overflow-y-auto overflow-x-hidden">
         {children}
       </main>
     </div>

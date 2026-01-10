@@ -66,9 +66,22 @@
     @apply border-border;
   }
 
+  html {
+    scroll-behavior: smooth;
+    overflow-x: hidden;
+  }
+
   body {
     @apply bg-background text-foreground font-sans antialiased;
     font-family: 'Space Grotesk', sans-serif;
+    overflow-x: hidden;
+    min-height: 100vh;
+  }
+
+  #root {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
   }
 
   code, .mono {

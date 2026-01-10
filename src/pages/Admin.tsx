@@ -1,7 +1,7 @@
+import React, { forwardRef, useState, useEffect } from "react";
 import TradingHeader from "@/components/trading/TradingHeader";
 import { useWallet } from "@/hooks/useWallet";
 import { Button } from "@/components/ui/button";
-import { useState, useEffect } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import {
@@ -41,7 +41,7 @@ interface UserProfile {
   role: "admin" | "user";
 }
 
-const Admin = () => {
+const Admin = forwardRef<HTMLDivElement, object>(function Admin(_props, ref) {
   const { isAdmin, user } = useAuth();
   const [activeTab, setActiveTab] = useState("api");
   const [users, setUsers] = useState<UserProfile[]>([]);
@@ -712,6 +712,8 @@ const Admin = () => {
       </main>
     </div>
   );
-};
+});
+
+Admin.displayName = 'Admin';
 
 export default Admin;

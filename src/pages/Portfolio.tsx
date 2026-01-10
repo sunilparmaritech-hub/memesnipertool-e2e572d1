@@ -1,3 +1,4 @@
+import React, { forwardRef, useState, useEffect, useRef } from "react";
 import TradingHeader from "@/components/trading/TradingHeader";
 import { useWallet } from "@/hooks/useWallet";
 import { Button } from "@/components/ui/button";
@@ -19,7 +20,6 @@ import {
   CheckCircle,
   AlertTriangle,
 } from "lucide-react";
-import { useState, useEffect, useRef } from "react";
 import { formatDistanceToNow } from "date-fns";
 
 const formatCurrency = (value: number) => {
@@ -118,7 +118,7 @@ const PositionCard = ({ position, onClose }: { position: Position; onClose: () =
   );
 };
 
-const Portfolio = () => {
+const Portfolio = forwardRef<HTMLDivElement, object>(function Portfolio(_props, ref) {
   const { 
     openPositions, 
     closedPositions, 
@@ -397,6 +397,8 @@ const Portfolio = () => {
       </main>
     </div>
   );
-};
+});
+
+Portfolio.displayName = 'Portfolio';
 
 export default Portfolio;

@@ -55,8 +55,13 @@ declare global {
   }
 }
 
-// Use Helius or other reliable RPC for production
-const SOLANA_RPC = import.meta.env.VITE_SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
+// Use multiple RPC endpoints with fallback for reliability
+const SOLANA_RPC_ENDPOINTS = [
+  import.meta.env.VITE_SOLANA_RPC_URL,
+  'https://api.mainnet-beta.solana.com',
+  'https://solana-mainnet.g.alchemy.com/v2/demo',
+].filter(Boolean) as string[];
+
 const BSC_CHAIN_ID = '0x38';
 const ETH_CHAIN_ID = '0x1';
 
@@ -72,12 +77,14 @@ export function useWallet() {
   });
   const [isConnecting, setIsConnecting] = useState(false);
   const { toast } = useToast();
+  const rpcIndexRef = useRef(0);
   const connectionRef = useRef<Connection | null>(null);
 
-  // Get Solana connection (singleton)
+  // Get Solana connection with fallback RPC endpoints
   const getConnection = useCallback(() => {
     if (!connectionRef.current) {
-      connectionRef.current = new Connection(SOLANA_RPC, {
+      const rpcUrl = SOLANA_RPC_ENDPOINTS[rpcIndexRef.current] || SOLANA_RPC_ENDPOINTS[0];
+      connectionRef.current = new Connection(rpcUrl, {
         commitment: 'confirmed',
         confirmTransactionInitialTimeout: 60000,
       });
@@ -85,20 +92,39 @@ export function useWallet() {
     return connectionRef.current;
   }, []);
 
+  // Switch to next RPC endpoint on failure
+  const switchRpcEndpoint = useCallback(() => {
+    rpcIndexRef.current = (rpcIndexRef.current + 1) % SOLANA_RPC_ENDPOINTS.length;
+    connectionRef.current = null; // Force new connection on next getConnection call
+    console.log(`Switched to RPC endpoint: ${SOLANA_RPC_ENDPOINTS[rpcIndexRef.current]}`);
+  }, []);
+
   const formatAddress = useCallback((address: string) => {
     return `${address.slice(0, 6)}...${address.slice(-4)}`;
   }, []);
 
-  const getSolanaBalance = useCallback(async (publicKey: string): Promise<string> => {
-    try {
-      const connection = getConnection();
-      const balance = await connection.getBalance(new PublicKey(publicKey));
-      return (balance / LAMPORTS_PER_SOL).toFixed(4);
-    } catch (error) {
-      console.error('Failed to get Solana balance:', error);
-      return '0';
+  const getSolanaBalance = useCallback(async (publicKey: string, retries = 2): Promise<string> => {
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      try {
+        const connection = getConnection();
+        const balance = await connection.getBalance(new PublicKey(publicKey));
+        return (balance / LAMPORTS_PER_SOL).toFixed(4);
+      } catch (error: any) {
+        console.error(`Failed to get Solana balance (attempt ${attempt + 1}):`, error);
+        
+        // On 403 or network error, try switching RPC endpoint
+        if (error?.message?.includes('403') || error?.message?.includes('Access forbidden') || error?.name === 'TypeError') {
+          switchRpcEndpoint();
+        }
+        
+        if (attempt === retries) {
+          // Return cached balance or default on final failure
+          return '0';
+        }
+      }
     }
-  }, [getConnection]);
+    return '0';
+  }, [getConnection, switchRpcEndpoint]);
 
   const getEthBalance = async (address: string, provider: BrowserProvider): Promise<string> => {
     try {

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import React, { forwardRef, useState, useEffect, useCallback, useMemo, useRef } from "react";
 import TradingHeader from "@/components/trading/TradingHeader";
 import LiquidityBotPanel from "@/components/trading/LiquidityBotPanel";
 import LiquidityMonitor from "@/components/scanner/LiquidityMonitor";
@@ -25,7 +25,7 @@ import { Wallet, TrendingUp, Zap, Activity, AlertTriangle, X, FlaskConical, Coin
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 
-const Scanner = () => {
+const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref) {
   const { tokens, loading, scanTokens, errors, apiErrors, isDemo, cleanup } = useTokenScanner();
   const { settings, saving, saveSettings, updateField } = useSniperSettings();
   const { evaluateTokens, result: sniperResult, loading: sniperLoading } = useAutoSniper();
@@ -624,6 +624,8 @@ const Scanner = () => {
     </div>
     </ErrorBoundary>
   );
-};
+});
+
+Scanner.displayName = 'Scanner';
 
 export default Scanner;

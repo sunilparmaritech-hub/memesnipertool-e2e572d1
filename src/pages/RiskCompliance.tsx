@@ -1,4 +1,4 @@
-import { useState } from "react";
+import React, { forwardRef, useState } from "react";
 import TradingHeader from "@/components/trading/TradingHeader";
 import { useWallet } from "@/hooks/useWallet";
 import { Button } from "@/components/ui/button";
@@ -34,7 +34,7 @@ import {
   AlertOctagon,
 } from "lucide-react";
 
-const RiskCompliance = () => {
+const RiskCompliance = forwardRef<HTMLDivElement, object>(function RiskCompliance(_props, ref) {
   const {
     settings,
     loading,
@@ -618,6 +618,8 @@ const RiskCompliance = () => {
       </main>
     </div>
   );
-};
+});
+
+RiskCompliance.displayName = 'RiskCompliance';
 
 export default RiskCompliance;

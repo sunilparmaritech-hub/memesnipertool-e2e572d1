@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import React, { forwardRef, useMemo } from "react";
 import AppLayout from "@/components/layout/AppLayout";
 import StatsGrid from "@/components/dashboard/StatsGrid";
 import WalletBanner from "@/components/dashboard/WalletBanner";
@@ -25,7 +25,7 @@ const formatCurrency = (value: number) => {
   return `$${value.toFixed(2)}`;
 };
 
-const Index = () => {
+const Index = forwardRef<HTMLDivElement, object>(function Index(_props, ref) {
   const { openPositions: realOpenPositions, closedPositions: realClosedPositions, loading: positionsLoading } = usePositions();
   const { wallet } = useWallet();
   const { isDemo } = useAppMode();
@@ -223,6 +223,8 @@ const Index = () => {
       </div>
     </AppLayout>
   );
-};
+});
+
+Index.displayName = 'Index';
 
 export default Index;

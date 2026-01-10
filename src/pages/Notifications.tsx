@@ -1,4 +1,4 @@
-import { useState } from "react";
+import React, { forwardRef, useState } from "react";
 import AppLayout from "@/components/layout/AppLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -45,7 +45,7 @@ const notificationLabels = {
   trade: "Trade",
 };
 
-export default function Notifications() {
+const Notifications = forwardRef<HTMLDivElement, object>(function Notifications(_props, ref) {
   const {
     notifications,
     unreadCount,
@@ -249,4 +249,8 @@ export default function Notifications() {
       </div>
     </AppLayout>
   );
-}
+});
+
+Notifications.displayName = 'Notifications';
+
+export default Notifications;

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import React, { forwardRef, useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
@@ -8,7 +8,7 @@ import { z } from "zod";
 const emailSchema = z.string().email("Please enter a valid email address");
 const passwordSchema = z.string().min(6, "Password must be at least 6 characters");
 
-const Auth = () => {
+const Auth = forwardRef<HTMLDivElement, object>(function Auth(_props, ref) {
   const [isLogin, setIsLogin] = useState(true);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -214,6 +214,8 @@ const Auth = () => {
       </div>
     </div>
   );
-};
+});
+
+Auth.displayName = 'Auth';
 
 export default Auth;

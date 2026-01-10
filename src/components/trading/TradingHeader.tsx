@@ -1,4 +1,4 @@
-import { useState } from "react";
+import React, { forwardRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { 
@@ -43,12 +43,12 @@ interface NavItem {
   icon: typeof LayoutDashboard;
 }
 
-export default function TradingHeader({
+const TradingHeader = forwardRef<HTMLElement, TradingHeaderProps>(function TradingHeader({
   walletConnected = false,
   walletAddress,
   network = "Solana",
   onConnectWallet,
-}: TradingHeaderProps) {
+}, ref) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const { user, isAdmin, signOut } = useAuth();
   const navigate = useNavigate();
@@ -84,7 +84,7 @@ export default function TradingHeader({
   const navItems = getNavItems();
 
   return (
-    <header className="fixed top-0 left-0 right-0 z-50 bg-background/95 backdrop-blur-xl border-b border-border/50">
+    <header ref={ref} className="fixed top-0 left-0 right-0 z-50 bg-background/95 backdrop-blur-xl border-b border-border/50">
       <div className="container mx-auto px-4">
         <div className="flex items-center justify-between h-16">
           {/* Logo */}
@@ -256,4 +256,8 @@ export default function TradingHeader({
       </div>
     </header>
   );
-}
+});
+
+TradingHeader.displayName = 'TradingHeader';
+
+export default TradingHeader;

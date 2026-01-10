@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import React, { forwardRef, useState } from 'react';
 import TradingHeader from "@/components/trading/TradingHeader";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -37,7 +37,7 @@ const PRIORITY_OPTIONS: { value: SnipingPriority; label: string; description: st
   { value: 'turbo', label: 'Turbo', description: 'Maximum speed' },
 ];
 
-const MemeSniperSettings = () => {
+const MemeSniperSettings = forwardRef<HTMLDivElement, object>(function MemeSniperSettings(_props, ref) {
   const { settings, loading, saving, saveSettings, updateField } = useSniperSettings();
   const { wallet, connectPhantom, disconnect } = useWallet();
   const [newBlacklistToken, setNewBlacklistToken] = useState('');
@@ -469,6 +469,8 @@ const MemeSniperSettings = () => {
       </main>
     </div>
   );
-};
+});
+
+MemeSniperSettings.displayName = 'MemeSniperSettings';
 
 export default MemeSniperSettings;

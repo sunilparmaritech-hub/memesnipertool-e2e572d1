@@ -1,4 +1,4 @@
-import { useState } from "react";
+import React, { forwardRef, useState } from "react";
 import TradingHeader from "@/components/trading/TradingHeader";
 import { useWallet } from "@/hooks/useWallet";
 import { Button } from "@/components/ui/button";
@@ -42,7 +42,7 @@ const formatCurrency = (value: number) => {
   return `$${value.toFixed(2)}`;
 };
 
-const AdminAnalytics = () => {
+const AdminAnalytics = forwardRef<HTMLDivElement, object>(function AdminAnalytics(_props, ref) {
   // All hooks must be called first, before any conditional logic
   const { wallet, connectPhantom, disconnect } = useWallet();
   const {
@@ -918,6 +918,8 @@ const AdminAnalytics = () => {
       </main>
     </div>
   );
-};
+});
+
+AdminAnalytics.displayName = 'AdminAnalytics';
 
 export default AdminAnalytics;

@@ -1,7 +1,7 @@
+import React, { forwardRef, useState } from "react";
 import TradingHeader from "@/components/trading/TradingHeader";
 import { useWallet } from "@/hooks/useWallet";
 import { Button } from "@/components/ui/button";
-import { useState } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { WalletConnect } from "@/components/WalletConnect";
 import {
@@ -14,7 +14,7 @@ import {
   TrendingUp,
 } from "lucide-react";
 
-const UserSettings = () => {
+const UserSettings = forwardRef<HTMLDivElement, object>(function UserSettings(_props, ref) {
   const { user } = useAuth();
   const [activeTab, setActiveTab] = useState("sniping");
 
@@ -394,6 +394,8 @@ const UserSettings = () => {
       </main>
     </div>
   );
-};
+});
+
+UserSettings.displayName = 'UserSettings';
 
 export default UserSettings;

@@ -133,6 +133,24 @@ serve(async (req) => {
     const getApiConfig = (type: string): ApiConfig | undefined => 
       apiConfigs?.find((c: ApiConfig) => c.api_type === type && c.is_enabled);
 
+    // Get API key from environment (secure) with fallback to database (legacy)
+    const getApiKey = (apiType: string, dbApiKey: string | null): string | null => {
+      // Priority 1: Environment variable (Supabase Secrets - secure)
+      const envKey = Deno.env.get(`${apiType.toUpperCase()}_API_KEY`);
+      if (envKey) {
+        console.log(`Using secure environment variable for ${apiType}`);
+        return envKey;
+      }
+      
+      // Priority 2: Database fallback (legacy - less secure)
+      if (dbApiKey) {
+        console.log(`Warning: Using database-stored API key for ${apiType} - migrate to Supabase Secrets`);
+        return dbApiKey;
+      }
+      
+      return null;
+    };
+
     // DexScreener fetch function
     const fetchDexScreener = async () => {
       const dexScreenerConfig = getApiConfig('dexscreener');
@@ -300,14 +318,18 @@ serve(async (req) => {
     // Birdeye fetch function
     const fetchBirdeye = async () => {
       const birdeyeConfig = getApiConfig('birdeye');
-      if (!birdeyeConfig || !birdeyeConfig.api_key_encrypted) return;
+      if (!birdeyeConfig) return;
+      
+      // Get API key from secure source (env) with database fallback
+      const apiKey = getApiKey('birdeye', birdeyeConfig.api_key_encrypted);
+      if (!apiKey) return;
 
       const endpoint = `${birdeyeConfig.base_url}/defi/tokenlist?sort_by=v24hUSD&sort_type=desc&limit=15`;
       const startTime = Date.now();
       try {
         console.log('Fetching from Birdeye...');
         const response = await fetch(endpoint, {
-          headers: { 'X-API-KEY': birdeyeConfig.api_key_encrypted },
+          headers: { 'X-API-KEY': apiKey },
           signal: AbortSignal.timeout(10000),
         });
         const responseTime = Date.now() - startTime;

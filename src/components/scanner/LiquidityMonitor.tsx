@@ -2,8 +2,9 @@ import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Button } from "@/components/ui/button";
 import { ScannedToken } from "@/hooks/useTokenScanner";
-import { Zap, TrendingUp, TrendingDown, ExternalLink, ShieldCheck, ShieldX, Lock, Loader2, Search } from "lucide-react";
+import { Zap, TrendingUp, TrendingDown, ExternalLink, ShieldCheck, ShieldX, Lock, Loader2, Search, ChevronLeft, ChevronRight } from "lucide-react";
 import { Input } from "@/components/ui/input";
 
 interface LiquidityMonitorProps {
@@ -12,6 +13,8 @@ interface LiquidityMonitorProps {
   loading: boolean;
   apiStatus: 'waiting' | 'active' | 'error' | 'rate_limited';
 }
+
+const POOLS_PER_PAGE = 20;
 
 const formatLiquidity = (value: number) => {
   if (value >= 1000000) return `$${(value / 1000000).toFixed(1)}M`;
@@ -101,11 +104,23 @@ export default function LiquidityMonitor({
 }: LiquidityMonitorProps) {
   const [activeTab, setActiveTab] = useState("pools");
   const [searchTerm, setSearchTerm] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
   
   const filteredPools = pools.filter(p => 
     p.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
     p.symbol.toLowerCase().includes(searchTerm.toLowerCase())
   );
+
+  // Pagination
+  const totalPages = Math.ceil(filteredPools.length / POOLS_PER_PAGE);
+  const startIndex = (currentPage - 1) * POOLS_PER_PAGE;
+  const paginatedPools = filteredPools.slice(startIndex, startIndex + POOLS_PER_PAGE);
+
+  // Reset page when search changes
+  const handleSearchChange = (value: string) => {
+    setSearchTerm(value);
+    setCurrentPage(1);
+  };
 
   const getStatusBadge = () => {
     switch (apiStatus) {
@@ -131,7 +146,7 @@ export default function LiquidityMonitor({
             <div>
               <CardTitle className="text-base font-semibold">Liquidity Monitor</CardTitle>
               <p className="text-xs text-muted-foreground">
-                API rate limited - {apiStatus}
+                API status: {apiStatus}
               </p>
             </div>
           </div>
@@ -148,7 +163,7 @@ export default function LiquidityMonitor({
           <div className="px-4">
             <TabsList className="w-full bg-secondary/60">
               <TabsTrigger value="pools" className="flex-1 data-[state=active]:bg-success data-[state=active]:text-success-foreground">
-                Pools ({pools.length})
+                Pools ({filteredPools.length})
               </TabsTrigger>
               <TabsTrigger value="trades" className="flex-1 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
                 Active Trades ({activeTrades})
@@ -164,7 +179,7 @@ export default function LiquidityMonitor({
                 <Input
                   placeholder="Search pools..."
                   value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
+                  onChange={(e) => handleSearchChange(e.target.value)}
                   className="pl-10 bg-secondary/40 border-border/30 h-9"
                 />
               </div>
@@ -176,18 +191,72 @@ export default function LiquidityMonitor({
                   <Loader2 className="w-6 h-6 animate-spin text-primary mb-2" />
                   <p className="text-sm text-muted-foreground">Scanning pools...</p>
                 </div>
-              ) : filteredPools.length === 0 ? (
+              ) : paginatedPools.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
                   <Zap className="w-10 h-10 mb-2 opacity-30" />
                   <p className="font-medium mb-1">No pools detected yet</p>
                   <p className="text-xs">Enable the bot to start scanning</p>
                 </div>
               ) : (
-                filteredPools.map((pool, idx) => (
-                  <PoolRow key={pool.id} pool={pool} index={idx} />
+                paginatedPools.map((pool, idx) => (
+                  <PoolRow key={pool.id} pool={pool} index={startIndex + idx} />
                 ))
               )}
             </div>
+
+            {/* Pagination Controls */}
+            {totalPages > 1 && (
+              <div className="flex items-center justify-between p-3 border-t border-border/30 bg-secondary/20">
+                <span className="text-xs text-muted-foreground">
+                  Page {currentPage} of {totalPages} ({filteredPools.length} pools)
+                </span>
+                <div className="flex items-center gap-1">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                    disabled={currentPage === 1}
+                    className="h-8 w-8 p-0"
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                  </Button>
+                  <div className="flex items-center gap-1">
+                    {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                      let pageNum: number;
+                      if (totalPages <= 5) {
+                        pageNum = i + 1;
+                      } else if (currentPage <= 3) {
+                        pageNum = i + 1;
+                      } else if (currentPage >= totalPages - 2) {
+                        pageNum = totalPages - 4 + i;
+                      } else {
+                        pageNum = currentPage - 2 + i;
+                      }
+                      return (
+                        <Button
+                          key={pageNum}
+                          variant={currentPage === pageNum ? "default" : "ghost"}
+                          size="sm"
+                          onClick={() => setCurrentPage(pageNum)}
+                          className="h-8 w-8 p-0 text-xs"
+                        >
+                          {pageNum}
+                        </Button>
+                      );
+                    })}
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                    disabled={currentPage === totalPages}
+                    className="h-8 w-8 p-0"
+                  >
+                    <ChevronRight className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+            )}
           </TabsContent>
           
           <TabsContent value="trades" className="flex-1 flex flex-col mt-0 data-[state=inactive]:hidden">

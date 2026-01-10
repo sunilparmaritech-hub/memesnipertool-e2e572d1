@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { AppModeProvider } from "@/contexts/AppModeContext";
+import { DemoPortfolioProvider } from "@/contexts/DemoPortfolioContext";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import Index from "./pages/Index";
 import Scanner from "./pages/Scanner";
@@ -24,6 +25,7 @@ const App = () => (
   <QueryClientProvider client={queryClient}>
     <TooltipProvider>
       <AppModeProvider>
+        <DemoPortfolioProvider>
         <Toaster />
         <Sonner />
         <BrowserRouter>
@@ -106,6 +108,7 @@ const App = () => (
             </Routes>
           </AuthProvider>
         </BrowserRouter>
+        </DemoPortfolioProvider>
       </AppModeProvider>
     </TooltipProvider>
   </QueryClientProvider>

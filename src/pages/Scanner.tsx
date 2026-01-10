@@ -7,13 +7,15 @@ import ActivePositionsPanel from "@/components/scanner/ActivePositionsPanel";
 import StatsCard from "@/components/StatsCard";
 import { PortfolioChart } from "@/components/charts/PriceCharts";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { useTokenScanner } from "@/hooks/useTokenScanner";
 import { useSniperSettings } from "@/hooks/useSniperSettings";
 import { useAutoSniper } from "@/hooks/useAutoSniper";
 import { useWallet } from "@/hooks/useWallet";
 import { usePositions } from "@/hooks/usePositions";
 import { useToast } from "@/hooks/use-toast";
-import { Wallet, TrendingUp, Zap, Activity, AlertTriangle, X } from "lucide-react";
+import { useAppMode } from "@/contexts/AppModeContext";
+import { Wallet, TrendingUp, Zap, Activity, AlertTriangle, X, FlaskConical } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 
@@ -35,12 +37,13 @@ const generatePortfolioData = () => {
 };
 
 const Scanner = () => {
-  const { tokens, loading, scanTokens, errors, apiErrors } = useTokenScanner();
+  const { tokens, loading, scanTokens, errors, apiErrors, isDemo } = useTokenScanner();
   const { settings, saving, saveSettings, updateField } = useSniperSettings();
   const { evaluateTokens } = useAutoSniper();
   const { wallet, connectPhantom, disconnect, refreshBalance } = useWallet();
   const { openPositions, closedPositions } = usePositions();
   const { toast } = useToast();
+  const { mode } = useAppMode();
 
   const [isBotActive, setIsBotActive] = useState(false);
   const [portfolioData] = useState(generatePortfolioData);
@@ -80,11 +83,15 @@ const Scanner = () => {
     }
   }, [settings?.min_liquidity]);
 
-  // Periodic scanning based on speed
+  // Periodic scanning based on speed - optimized intervals
   useEffect(() => {
     if (isPaused) return;
     
-    const intervals = { slow: 60000, normal: 30000, fast: 10000 };
+    // Demo mode uses faster intervals since no real API calls
+    const intervals = isDemo 
+      ? { slow: 30000, normal: 15000, fast: 5000 }
+      : { slow: 90000, normal: 45000, fast: 20000 }; // Longer intervals for live to reduce API load
+    
     const interval = setInterval(() => {
       if (settings?.min_liquidity) {
         scanTokens(settings.min_liquidity);
@@ -92,11 +99,11 @@ const Scanner = () => {
     }, intervals[scanSpeed]);
     
     return () => clearInterval(interval);
-  }, [scanSpeed, isPaused, settings?.min_liquidity, scanTokens]);
+  }, [scanSpeed, isPaused, settings?.min_liquidity, scanTokens, isDemo]);
 
-  // Auto-sniper when bot is active
+  // Auto-sniper when bot is active (only in live mode)
   useEffect(() => {
-    if (!isBotActive || tokens.length === 0 || !settings) return;
+    if (!isBotActive || tokens.length === 0 || !settings || isDemo) return;
     
     const tokenData = tokens.slice(0, 10).map(t => ({
       address: t.address,
@@ -112,7 +119,7 @@ const Scanner = () => {
     }));
     
     evaluateTokens(tokenData, true);
-  }, [isBotActive, tokens.length]);
+  }, [isBotActive, tokens.length, isDemo]);
 
   const handleConnectWallet = async () => {
     if (wallet.isConnected) {
@@ -132,11 +139,18 @@ const Scanner = () => {
   };
 
   const handleToggleBotActive = (active: boolean) => {
+    if (active && isDemo) {
+      toast({
+        title: "Demo Mode Active",
+        description: "Bot is running in simulation mode. No real trades will be executed.",
+        variant: "default",
+      });
+    }
     setIsBotActive(active);
     toast({
       title: active ? "Liquidity Bot Activated" : "Liquidity Bot Deactivated",
       description: active 
-        ? "Bot will automatically enter trades when conditions are met" 
+        ? (isDemo ? "Bot will simulate trades (Demo Mode)" : "Bot will automatically enter trades when conditions are met")
         : "Automatic trading has been paused",
     });
   };
@@ -157,8 +171,19 @@ const Scanner = () => {
 
       <main className="pt-20 pb-6 px-4">
         <div className="container mx-auto space-y-6">
-          {/* API Errors Alert */}
-          {apiErrors.length > 0 && showApiErrors && (
+          {/* Demo Mode Banner */}
+          {isDemo && (
+            <Alert className="bg-warning/10 border-warning/30">
+              <FlaskConical className="h-4 w-4 text-warning" />
+              <AlertTitle className="text-warning">Demo Mode Active</AlertTitle>
+              <AlertDescription className="text-warning/80">
+                You're viewing simulated data. Switch to Live mode in the header to connect to real APIs and execute real trades.
+              </AlertDescription>
+            </Alert>
+          )}
+
+          {/* API Errors Alert - Only show in Live mode */}
+          {!isDemo && apiErrors.length > 0 && showApiErrors && (
             <Alert variant="destructive" className="relative">
               <AlertTriangle className="h-4 w-4" />
               <AlertTitle className="flex items-center justify-between">

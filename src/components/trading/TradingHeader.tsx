@@ -28,6 +28,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import NotificationBell from "@/components/notifications/NotificationBell";
 import WalletConnectionModal from "@/components/wallet/WalletConnectionModal";
+import ModeSwitcher from "@/components/mode/ModeSwitcher";
 
 interface TradingHeaderProps {
   walletConnected?: boolean;
@@ -122,6 +123,9 @@ export default function TradingHeader({
           
           {/* Right Side Actions */}
           <div className="flex items-center gap-2">
+            {/* Mode Switcher */}
+            <ModeSwitcher />
+            
             {/* Notifications */}
             <Link to="/notifications" className="hidden sm:flex">
               <NotificationBell />

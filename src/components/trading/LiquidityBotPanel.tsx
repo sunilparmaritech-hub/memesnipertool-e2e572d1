@@ -55,27 +55,27 @@ export default function LiquidityBotPanel({
   ));
 
   return (
-    <div className="bg-card/80 backdrop-blur-sm rounded-xl border border-border/50 overflow-hidden flex flex-col h-full">
-      {/* Header */}
-      <div className="p-4 border-b border-border/50">
+    <div className="bg-card/80 backdrop-blur-sm rounded-xl border border-border/50 overflow-hidden flex flex-col h-[640px] min-h-[640px] max-h-[640px]">
+      {/* Header - Fixed height */}
+      <div className="p-4 border-b border-border/50 shrink-0">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-3">
-            <div className={`w-11 h-11 rounded-xl flex items-center justify-center border transition-colors ${
+            <div className={`w-11 h-11 rounded-xl flex items-center justify-center border transition-colors shrink-0 ${
               isActive 
                 ? 'bg-gradient-to-br from-success/20 to-success/5 border-success/30' 
                 : 'bg-secondary border-border/50'
             }`}>
               <Bot className={`w-5 h-5 ${isActive ? 'text-success' : 'text-muted-foreground'}`} />
             </div>
-            <div>
-              <h2 className="font-bold text-foreground text-lg">Liquidity Bot</h2>
+            <div className="min-w-0">
+              <h2 className="font-bold text-foreground text-lg truncate">Liquidity Bot</h2>
               <p className={`text-xs font-medium ${isActive ? 'text-success' : 'text-muted-foreground'}`}>
                 {isActive ? '● Active' : '○ Inactive'}
               </p>
             </div>
           </div>
           
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 shrink-0">
             <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-foreground">
               <Settings2 className="w-4 h-4" />
             </Button>
@@ -90,16 +90,16 @@ export default function LiquidityBotPanel({
         {/* Auto Entry/Exit Toggles */}
         <div className="flex items-center gap-4 p-3 bg-secondary/40 rounded-lg">
           <div className="flex items-center gap-2 flex-1">
-            <span className="text-sm text-muted-foreground">Auto Entry</span>
+            <span className="text-sm text-muted-foreground whitespace-nowrap">Auto Entry</span>
             <Switch
               checked={autoEntry}
               onCheckedChange={setAutoEntry}
               className="data-[state=checked]:bg-success"
             />
           </div>
-          <div className="w-px h-6 bg-border" />
+          <div className="w-px h-6 bg-border shrink-0" />
           <div className="flex items-center gap-2 flex-1">
-            <span className="text-sm text-muted-foreground">Auto Exit</span>
+            <span className="text-sm text-muted-foreground whitespace-nowrap">Auto Exit</span>
             <Switch
               checked={autoExit}
               onCheckedChange={setAutoExit}
@@ -234,8 +234,8 @@ export default function LiquidityBotPanel({
         </div>
       </div>
       
-      {/* Footer */}
-      <div className="border-t border-border/50 p-4">
+      {/* Footer - Fixed height */}
+      <div className="border-t border-border/50 p-4 shrink-0 mt-auto">
         {/* Safety Score */}
         <div className="flex items-center gap-3 mb-4">
           <div className="w-10 h-10 rounded-xl bg-success/10 flex items-center justify-center border border-success/20">

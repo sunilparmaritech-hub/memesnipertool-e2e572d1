@@ -122,8 +122,8 @@ serve(async (req) => {
     const getApiConfig = (type: string): ApiConfig | undefined => 
       apiConfigs?.find((c: ApiConfig) => c.api_type === type && c.is_enabled);
 
-    // Fetch from DexScreener
-    const dexScreenerConfig = getApiConfig('dexscreener');
+    // Parallel API fetching for better performance
+    const apiPromises: Promise<void>[] = [];
     if (dexScreenerConfig) {
       // Use the search endpoint which returns pairs array reliably
       const endpoint = `${dexScreenerConfig.base_url}/latest/dex/search?q=solana`;
@@ -208,15 +208,20 @@ serve(async (req) => {
       }
     }
 
-    // Fetch from GeckoTerminal
-    const geckoConfig = getApiConfig('geckoterminal');
-    if (geckoConfig) {
+
+    // GeckoTerminal fetch function
+    const fetchGeckoTerminal = async () => {
+      const geckoConfig = getApiConfig('geckoterminal');
+      if (!geckoConfig) return;
+
       const chainParam = chains.includes('solana') ? 'solana' : 'eth';
       const endpoint = `${geckoConfig.base_url}/api/v2/networks/${chainParam}/new_pools`;
       const startTime = Date.now();
       try {
         console.log('Fetching from GeckoTerminal...');
-        const response = await fetch(endpoint);
+        const response = await fetch(endpoint, {
+          signal: AbortSignal.timeout(10000),
+        });
         const responseTime = Date.now() - startTime;
         
         if (response.ok) {
@@ -224,7 +229,7 @@ serve(async (req) => {
           const data = await response.json();
           const pools = data.data || [];
           
-          for (const pool of pools.slice(0, 20)) {
+          for (const pool of pools.slice(0, 15)) {
             const attrs = pool.attributes || {};
             const liquidity = parseFloat(attrs.reserve_in_usd || 0);
             
@@ -266,7 +271,7 @@ serve(async (req) => {
         }
       } catch (e: any) {
         const responseTime = Date.now() - startTime;
-        const errorMsg = e.message || 'Network error';
+        const errorMsg = e.name === 'TimeoutError' ? 'Request timeout' : (e.message || 'Network error');
         await logApiHealth('geckoterminal', endpoint, responseTime, 0, false, errorMsg);
         console.error('GeckoTerminal error:', e);
         errors.push(`GeckoTerminal: ${errorMsg}`);
@@ -278,19 +283,21 @@ serve(async (req) => {
           timestamp: new Date().toISOString(),
         });
       }
-    }
+    };
 
-    // Fetch from Birdeye (if configured with API key)
-    const birdeyeConfig = getApiConfig('birdeye');
-    if (birdeyeConfig && birdeyeConfig.api_key_encrypted) {
-      const endpoint = `${birdeyeConfig.base_url}/defi/tokenlist?sort_by=v24hUSD&sort_type=desc&limit=20`;
+
+    // Birdeye fetch function
+    const fetchBirdeye = async () => {
+      const birdeyeConfig = getApiConfig('birdeye');
+      if (!birdeyeConfig || !birdeyeConfig.api_key_encrypted) return;
+
+      const endpoint = `${birdeyeConfig.base_url}/defi/tokenlist?sort_by=v24hUSD&sort_type=desc&limit=15`;
       const startTime = Date.now();
       try {
         console.log('Fetching from Birdeye...');
         const response = await fetch(endpoint, {
-          headers: {
-            'X-API-KEY': birdeyeConfig.api_key_encrypted,
-          },
+          headers: { 'X-API-KEY': birdeyeConfig.api_key_encrypted },
+          signal: AbortSignal.timeout(10000),
         });
         const responseTime = Date.now() - startTime;
         
@@ -340,7 +347,7 @@ serve(async (req) => {
         }
       } catch (e: any) {
         const responseTime = Date.now() - startTime;
-        const errorMsg = e.message || 'Network error';
+        const errorMsg = e.name === 'TimeoutError' ? 'Request timeout' : (e.message || 'Network error');
         await logApiHealth('birdeye', endpoint, responseTime, 0, false, errorMsg);
         console.error('Birdeye error:', e);
         errors.push(`Birdeye: ${errorMsg}`);
@@ -352,26 +359,25 @@ serve(async (req) => {
           timestamp: new Date().toISOString(),
         });
       }
-    }
+    };
 
-    // Fetch from Jupiter - check if trade_execution API is configured
-    const jupiterConfig = getApiConfig('trade_execution');
-    if (chains.includes('solana') && jupiterConfig) {
-      // Use Jupiter's price API which is more reliable
+    // Jupiter health check function
+    const checkJupiter = async () => {
+      const jupiterConfig = getApiConfig('trade_execution');
+      if (!chains.includes('solana') || !jupiterConfig) return;
+
       const endpoint = `${jupiterConfig.base_url}/price/v2?ids=So11111111111111111111111111111111111111112`;
       const startTime = Date.now();
       try {
-        console.log('Fetching from Jupiter API...');
+        console.log('Checking Jupiter API health...');
         const jupiterResponse = await fetch(endpoint, {
-          headers: {
-            'Accept': 'application/json',
-          },
+          headers: { 'Accept': 'application/json' },
+          signal: AbortSignal.timeout(8000),
         });
         const responseTime = Date.now() - startTime;
         
         if (jupiterResponse.ok) {
           await logApiHealth('trade_execution', endpoint, responseTime, jupiterResponse.status, true);
-          // Jupiter price API is working - mark as active
           console.log('Jupiter API is healthy');
         } else {
           const errorMsg = `HTTP ${jupiterResponse.status}: ${jupiterResponse.statusText}`;
@@ -387,7 +393,7 @@ serve(async (req) => {
         }
       } catch (e: any) {
         const responseTime = Date.now() - startTime;
-        const errorMsg = e.message || 'Network error';
+        const errorMsg = e.name === 'TimeoutError' ? 'Request timeout' : (e.message || 'Network error');
         await logApiHealth('trade_execution', endpoint, responseTime, 0, false, errorMsg);
         console.error('Jupiter API error:', e);
         errors.push(`Jupiter: ${errorMsg}`);
@@ -399,7 +405,15 @@ serve(async (req) => {
           timestamp: new Date().toISOString(),
         });
       }
-    }
+    };
+
+    // Execute all API calls in parallel for better performance
+    await Promise.allSettled([
+      fetchDexScreener(),
+      fetchGeckoTerminal(),
+      fetchBirdeye(),
+      checkJupiter(),
+    ]);
 
     // Validate liquidity lock status using honeypot/rugcheck API
     const honeypotConfig = getApiConfig('honeypot_rugcheck');

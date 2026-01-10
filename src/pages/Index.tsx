@@ -9,11 +9,13 @@ import RecentActivity from "@/components/dashboard/RecentActivity";
 import BotStatusCard from "@/components/dashboard/BotStatusCard";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { usePositions } from "@/hooks/usePositions";
 import { useWallet } from "@/hooks/useWallet";
 import { useToast } from "@/hooks/use-toast";
+import { useAppMode } from "@/contexts/AppModeContext";
 import { PortfolioChart } from "@/components/charts/PriceCharts";
-import { TrendingUp, ArrowUpRight } from "lucide-react";
+import { TrendingUp, ArrowUpRight, FlaskConical } from "lucide-react";
 
 const formatCurrency = (value: number) => {
   if (Math.abs(value) >= 1000000) return `$${(value / 1000000).toFixed(2)}M`;
@@ -42,6 +44,7 @@ const Index = () => {
   const { openPositions, closedPositions, loading: positionsLoading } = usePositions();
   const { wallet } = useWallet();
   const { toast } = useToast();
+  const { isDemo } = useAppMode();
   
   const [portfolioData] = useState(generatePortfolioData);
   const [isBotActive, setIsBotActive] = useState(false);
@@ -72,7 +75,7 @@ const Index = () => {
     toast({
       title: active ? "Bot Activated" : "Bot Deactivated",
       description: active 
-        ? "Liquidity bot is now scanning for opportunities" 
+        ? (isDemo ? "Liquidity bot is running in demo mode (simulation)" : "Liquidity bot is now scanning for opportunities")
         : "Automatic trading has been paused",
     });
   };
@@ -80,6 +83,17 @@ const Index = () => {
   return (
     <AppLayout>
       <div className="container mx-auto max-w-7xl px-4 space-y-6">
+        {/* Demo Mode Banner */}
+        {isDemo && (
+          <Alert className="bg-warning/10 border-warning/30">
+            <FlaskConical className="h-4 w-4 text-warning" />
+            <AlertTitle className="text-warning">Demo Mode</AlertTitle>
+            <AlertDescription className="text-warning/80">
+              You're viewing simulated data. Switch to Live mode for real trading.
+            </AlertDescription>
+          </Alert>
+        )}
+
         {/* Wallet Banner */}
         {wallet.isConnected && wallet.address && (
           <WalletBanner 

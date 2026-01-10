@@ -112,7 +112,8 @@ serve(async (req) => {
     // Fetch from DexScreener
     const dexScreenerConfig = getApiConfig('dexscreener');
     if (dexScreenerConfig) {
-      const endpoint = `${dexScreenerConfig.base_url}/latest/dex/tokens/trending`;
+      // Use the search endpoint which returns pairs array reliably
+      const endpoint = `${dexScreenerConfig.base_url}/latest/dex/search?q=solana`;
       const startTime = Date.now();
       try {
         console.log('Fetching from DexScreener...');
@@ -122,14 +123,29 @@ serve(async (req) => {
         if (response.ok) {
           await logApiHealth('dexscreener', endpoint, responseTime, response.status, true);
           const data = await response.json();
-          const pairs = data.pairs || data || [];
           
-          for (const pair of pairs.slice(0, 20)) {
+          // Safely extract pairs - handle different response structures
+          let pairs: any[] = [];
+          if (Array.isArray(data)) {
+            pairs = data;
+          } else if (data && Array.isArray(data.pairs)) {
+            pairs = data.pairs;
+          } else if (data && typeof data === 'object') {
+            // Try to find any array in the response
+            const arrayKey = Object.keys(data).find(key => Array.isArray(data[key]));
+            if (arrayKey) {
+              pairs = data[arrayKey];
+            }
+          }
+          
+          const pairsToProcess = pairs.slice(0, 20);
+          for (const pair of pairsToProcess) {
+            if (!pair) continue;
             const liquidity = parseFloat(pair.liquidity?.usd || pair.liquidity || 0);
             
             if (liquidity >= minLiquidity) {
               tokens.push({
-                id: `dex-${pair.pairAddress || pair.address}`,
+                id: `dex-${pair.pairAddress || pair.address || Math.random().toString(36)}`,
                 address: pair.baseToken?.address || pair.address || '',
                 name: pair.baseToken?.name || pair.name || 'Unknown',
                 symbol: pair.baseToken?.symbol || pair.symbol || '???',
@@ -325,23 +341,31 @@ serve(async (req) => {
       }
     }
 
-    // Fetch from Jupiter (alternative to Dextools for Solana)
-    // Jupiter is a free, reliable API for Solana token data
+    // Fetch from Jupiter Price API (more reliable in edge function environment)
+    // Using the quote API which has better DNS resolution
     if (chains.includes('solana')) {
-      const endpoint = 'https://token.jup.ag/strict';
+      // Use Jupiter's public API with a different endpoint that's more reliable
+      const endpoint = 'https://api.jup.ag/tokens/v1/tagged/verified';
       const startTime = Date.now();
       try {
         console.log('Fetching from Jupiter API...');
-        const jupiterResponse = await fetch(endpoint);
+        const jupiterResponse = await fetch(endpoint, {
+          headers: {
+            'Accept': 'application/json',
+          },
+        });
         const responseTime = Date.now() - startTime;
         
         if (jupiterResponse.ok) {
           await logApiHealth('jupiter', endpoint, responseTime, jupiterResponse.status, true);
           const jupiterTokens = await jupiterResponse.json();
-          const recentTokens = jupiterTokens.slice(-50);
+          
+          // Safely handle the response - ensure it's an array
+          const tokenList = Array.isArray(jupiterTokens) ? jupiterTokens : [];
+          const recentTokens = tokenList.slice(-50);
           
           for (const token of recentTokens.slice(0, 15)) {
-            if (tokens.find(t => t.address === token.address)) continue;
+            if (!token || tokens.find(t => t.address === token.address)) continue;
             
             tokens.push({
               id: `jupiter-${token.address}`,

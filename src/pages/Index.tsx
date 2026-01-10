@@ -5,7 +5,6 @@ import LiquidityBotPanel from "@/components/trading/LiquidityBotPanel";
 import StatsGrid from "@/components/dashboard/StatsGrid";
 import WalletBanner from "@/components/dashboard/WalletBanner";
 import ActiveTradesCard from "@/components/dashboard/ActiveTradesCard";
-import QuickActionsCard from "@/components/dashboard/QuickActionsCard";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { usePositions } from "@/hooks/usePositions";
@@ -254,8 +253,6 @@ const Index = () => {
                       )}
                     </CardContent>
                   </Card>
-
-                  <QuickActionsCard onOpenScanner={() => setActiveTab("scanner")} />
                 </div>
               </div>
             </TabsContent>

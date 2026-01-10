@@ -1,82 +1,101 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import TradingHeader from "@/components/trading/TradingHeader";
-import TokenScannerPanel from "@/components/trading/TokenScannerPanel";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Switch } from "@/components/ui/switch";
-import { useTokenScanner, ScannedToken } from "@/hooks/useTokenScanner";
+import LiquidityBotPanel from "@/components/trading/LiquidityBotPanel";
+import LiquidityMonitor from "@/components/scanner/LiquidityMonitor";
+import PerformancePanel from "@/components/scanner/PerformancePanel";
+import ActivePositionsPanel from "@/components/scanner/ActivePositionsPanel";
+import StatsCard from "@/components/StatsCard";
+import { PortfolioChart } from "@/components/charts/PriceCharts";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useTokenScanner } from "@/hooks/useTokenScanner";
 import { useSniperSettings } from "@/hooks/useSniperSettings";
-import { useAutoSniper, SnipeDecision } from "@/hooks/useAutoSniper";
+import { useAutoSniper } from "@/hooks/useAutoSniper";
 import { useWallet } from "@/hooks/useWallet";
-import {
-  Bot,
-  Play,
-  CheckCircle,
-  XCircle,
-  Zap,
-  Loader2,
-} from "lucide-react";
+import { usePositions } from "@/hooks/usePositions";
+import { useToast } from "@/hooks/use-toast";
+import { Wallet, TrendingUp, Zap, Activity } from "lucide-react";
 
-const DecisionCard = ({ decision }: { decision: SnipeDecision }) => {
-  const { token, approved, reasons, tradeParams } = decision;
-
-  return (
-    <Card className={`border ${approved ? 'border-success/30 bg-success/5' : 'border-destructive/30 bg-destructive/5'}`}>
-      <CardContent className="p-4">
-        <div className="flex items-start justify-between mb-3">
-          <div className="flex items-center gap-2">
-            {approved ? (
-              <CheckCircle className="w-5 h-5 text-success" />
-            ) : (
-              <XCircle className="w-5 h-5 text-destructive" />
-            )}
-            <span className="font-semibold text-foreground">{token.symbol}</span>
-            <Badge variant="outline" className="text-xs">{token.name}</Badge>
-          </div>
-          {approved && tradeParams && (
-            <Badge className="bg-success/20 text-success border-success/30">
-              Ready: {tradeParams.amount} SOL
-            </Badge>
-          )}
-        </div>
-        <div className="space-y-1">
-          {reasons.map((reason, i) => (
-            <p key={i} className={`text-xs ${reason.startsWith('✓') ? 'text-success' : 'text-destructive'}`}>
-              {reason}
-            </p>
-          ))}
-        </div>
-      </CardContent>
-    </Card>
-  );
+const generatePortfolioData = () => {
+  const data = [];
+  let value = 1000;
+  const now = new Date();
+  for (let i = 24; i >= 0; i--) {
+    const time = new Date(now.getTime() - i * 60 * 60 * 1000);
+    const change = (Math.random() - 0.4) * 100;
+    value = Math.max(value + change, 500);
+    data.push({ 
+      date: time.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+      value: value,
+      pnl: value - 1000,
+    });
+  }
+  return data;
 };
 
 const Scanner = () => {
   const { tokens, loading, scanTokens } = useTokenScanner();
-  const { settings } = useSniperSettings();
-  const { loading: sniperLoading, result: sniperResult, evaluateTokens, clearResult } = useAutoSniper();
-  const { wallet, connectPhantom, disconnect } = useWallet();
+  const { settings, saving, saveSettings, updateField } = useSniperSettings();
+  const { evaluateTokens } = useAutoSniper();
+  const { wallet, connectPhantom, disconnect, refreshBalance } = useWallet();
+  const { openPositions, closedPositions } = usePositions();
+  const { toast } = useToast();
 
+  const [isBotActive, setIsBotActive] = useState(false);
+  const [portfolioData] = useState(generatePortfolioData);
   const [scanSpeed, setScanSpeed] = useState<'slow' | 'normal' | 'fast'>('normal');
   const [isPaused, setIsPaused] = useState(false);
-  const [autoSnipeEnabled, setAutoSnipeEnabled] = useState(false);
-  const [executeOnApproval, setExecuteOnApproval] = useState(false);
 
+  // Calculate stats
+  const totalValue = useMemo(() => 
+    openPositions.reduce((sum, p) => sum + p.current_value, 0) + 1890, 
+    [openPositions]
+  );
+  
+  const totalPnL = useMemo(() => 
+    openPositions.reduce((sum, p) => sum + (p.profit_loss_value || 0), 0),
+    [openPositions]
+  );
+  
+  const totalPnLPercent = useMemo(() => {
+    const entryTotal = openPositions.reduce((sum, p) => sum + p.entry_value, 0);
+    return entryTotal > 0 ? (totalPnL / entryTotal) * 100 : 0;
+  }, [openPositions, totalPnL]);
+
+  // Calculate today's change
+  const todayChange = useMemo(() => {
+    const initial = portfolioData[0]?.value || 1000;
+    const current = portfolioData[portfolioData.length - 1]?.value || 1000;
+    const change = current - initial;
+    const percent = (change / initial) * 100;
+    return { value: change, percent };
+  }, [portfolioData]);
+
+  // Auto-scan on mount
   useEffect(() => {
     if (settings?.min_liquidity && !isPaused) {
       scanTokens(settings.min_liquidity);
     }
   }, [settings?.min_liquidity]);
 
-  const handleScan = useCallback(() => {
-    scanTokens(settings?.min_liquidity || 300);
-  }, [scanTokens, settings?.min_liquidity]);
+  // Periodic scanning based on speed
+  useEffect(() => {
+    if (isPaused) return;
+    
+    const intervals = { slow: 60000, normal: 30000, fast: 10000 };
+    const interval = setInterval(() => {
+      if (settings?.min_liquidity) {
+        scanTokens(settings.min_liquidity);
+      }
+    }, intervals[scanSpeed]);
+    
+    return () => clearInterval(interval);
+  }, [scanSpeed, isPaused, settings?.min_liquidity, scanTokens]);
 
-  const runAutoSniper = useCallback(async () => {
-    if (!autoSnipeEnabled || tokens.length === 0) return;
-
-    const tokenData = tokens.map(t => ({
+  // Auto-sniper when bot is active
+  useEffect(() => {
+    if (!isBotActive || tokens.length === 0 || !settings) return;
+    
+    const tokenData = tokens.slice(0, 10).map(t => ({
       address: t.address,
       name: t.name,
       symbol: t.symbol,
@@ -88,9 +107,9 @@ const Scanner = () => {
       riskScore: t.riskScore,
       categories: [],
     }));
-
-    await evaluateTokens(tokenData, executeOnApproval);
-  }, [autoSnipeEnabled, tokens, executeOnApproval, evaluateTokens]);
+    
+    evaluateTokens(tokenData, true);
+  }, [isBotActive, tokens.length]);
 
   const handleConnectWallet = async () => {
     if (wallet.isConnected) {
@@ -99,6 +118,30 @@ const Scanner = () => {
       await connectPhantom();
     }
   };
+
+  const handleSaveSettings = async () => {
+    if (!settings) return;
+    try {
+      await saveSettings(settings);
+    } catch {
+      // Error handled in hook
+    }
+  };
+
+  const handleToggleBotActive = (active: boolean) => {
+    setIsBotActive(active);
+    toast({
+      title: active ? "Liquidity Bot Activated" : "Liquidity Bot Deactivated",
+      description: active 
+        ? "Bot will automatically enter trades when conditions are met" 
+        : "Automatic trading has been paused",
+    });
+  };
+
+  // Win rate calculation
+  const winRate = closedPositions.length > 0 
+    ? (closedPositions.filter(p => (p.profit_loss_percent || 0) > 0).length / closedPositions.length) * 100 
+    : 0;
 
   return (
     <div className="min-h-screen bg-background">
@@ -110,112 +153,111 @@ const Scanner = () => {
       />
 
       <main className="pt-20 pb-6 px-4">
-        <div className="container mx-auto">
-          {/* Auto-Sniper Control Panel */}
-          <Card className="mb-6 border-primary/20 bg-gradient-to-r from-primary/5 to-transparent">
-            <CardContent className="p-4">
-              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-                <div className="flex items-center gap-3">
-                  <div className="p-2.5 rounded-lg bg-primary/20">
-                    <Bot className="w-5 h-5 text-primary" />
-                  </div>
-                  <div>
-                    <h3 className="font-semibold text-foreground">Auto-Sniper Engine</h3>
-                    <p className="text-xs text-muted-foreground">
-                      Rule-based evaluation: Liquidity • Lock Status • Position • Risk
-                    </p>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-4">
-                  <div className="flex items-center gap-2">
-                    <Switch
-                      checked={autoSnipeEnabled}
-                      onCheckedChange={(checked) => {
-                        setAutoSnipeEnabled(checked);
-                        if (!checked) clearResult();
-                      }}
-                    />
-                    <span className="text-sm text-muted-foreground">Enable</span>
-                  </div>
-
-                  {autoSnipeEnabled && (
-                    <>
-                      <div className="flex items-center gap-2">
-                        <Switch
-                          checked={executeOnApproval}
-                          onCheckedChange={setExecuteOnApproval}
-                        />
-                        <span className="text-sm text-muted-foreground">Auto-Execute</span>
-                      </div>
-
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={runAutoSniper}
-                        disabled={sniperLoading || tokens.length === 0}
-                      >
-                        {sniperLoading ? (
-                          <Loader2 className="w-4 h-4 animate-spin mr-1" />
-                        ) : (
-                          <Play className="w-4 h-4 mr-1" />
-                        )}
-                        Run Rules
-                      </Button>
-                    </>
-                  )}
-                </div>
-              </div>
-
-              {sniperResult && (
-                <div className="mt-4 pt-4 border-t border-border">
-                  <div className="flex flex-wrap items-center gap-4 text-sm">
-                    <Badge variant="outline">
-                      Evaluated: {sniperResult.summary.total}
-                    </Badge>
-                    <Badge className="bg-success/20 text-success border-success/30">
-                      <CheckCircle className="w-3 h-3 mr-1" />
-                      Approved: {sniperResult.summary.approved}
-                    </Badge>
-                    <Badge className="bg-destructive/20 text-destructive border-destructive/30">
-                      <XCircle className="w-3 h-3 mr-1" />
-                      Rejected: {sniperResult.summary.rejected}
-                    </Badge>
-                    {sniperResult.summary.executed > 0 && (
-                      <Badge className="bg-primary/20 text-primary border-primary/30">
-                        <Zap className="w-3 h-3 mr-1" />
-                        Executed: {sniperResult.summary.executed}
-                      </Badge>
-                    )}
-                  </div>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          {/* Decisions Grid */}
-          {sniperResult && sniperResult.decisions.length > 0 && (
-            <div className="mb-6">
-              <h3 className="text-lg font-semibold text-foreground mb-3">Rule Evaluation Results</h3>
-              <div className="grid gap-3 md:grid-cols-2">
-                {sniperResult.decisions.map((decision, idx) => (
-                  <DecisionCard key={idx} decision={decision} />
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Token Scanner */}
-          <div className="h-[calc(100vh-320px)]">
-            <TokenScannerPanel
-              tokens={tokens}
-              loading={loading}
-              onScan={handleScan}
-              scanSpeed={scanSpeed}
-              onSpeedChange={setScanSpeed}
-              isPaused={isPaused}
-              onPauseToggle={() => setIsPaused(!isPaused)}
+        <div className="container mx-auto space-y-6">
+          {/* Stats Row */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <StatsCard
+              title="Portfolio Value"
+              value={`$${totalValue.toFixed(2)}`}
+              change={`${totalPnLPercent >= 0 ? '+' : ''}${totalPnLPercent.toFixed(1)}% total`}
+              changeType={totalPnLPercent >= 0 ? 'positive' : 'negative'}
+              icon={Wallet}
             />
+            <StatsCard
+              title="Active Trades"
+              value={openPositions.length.toString()}
+              change={`${openPositions.filter(p => (p.profit_loss_percent || 0) > 0).length} profitable`}
+              changeType="positive"
+              icon={TrendingUp}
+            />
+            <StatsCard
+              title="Pools Detected"
+              value={tokens.length.toString()}
+              change={`${tokens.filter(t => t.riskScore < 50).length} signals`}
+              changeType="neutral"
+              icon={Zap}
+            />
+            <StatsCard
+              title="Win Rate"
+              value={`${winRate.toFixed(0)}%`}
+              change={`${closedPositions.length} trades`}
+              changeType={winRate >= 50 ? 'positive' : winRate > 0 ? 'negative' : 'neutral'}
+              icon={Activity}
+            />
+          </div>
+
+          {/* Main Content Grid */}
+          <div className="grid lg:grid-cols-[1fr,380px] gap-6">
+            {/* Left Column */}
+            <div className="space-y-6">
+              {/* Portfolio Chart */}
+              <Card className="bg-card/80 backdrop-blur-sm border-border/50">
+                <CardHeader className="pb-2">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <CardTitle className="text-base font-semibold">Portfolio Value</CardTitle>
+                      <div className="flex items-baseline gap-2 mt-1">
+                        <span className="text-2xl font-bold text-foreground">${totalValue.toFixed(2)}</span>
+                        <span className={`text-sm font-medium ${todayChange.value >= 0 ? 'text-success' : 'text-destructive'}`}>
+                          {todayChange.value >= 0 ? '+' : ''}${todayChange.value.toFixed(2)} ({todayChange.percent.toFixed(2)}%) today
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex gap-1 bg-secondary/60 rounded-lg p-0.5">
+                      {['1H', '24H', '7D', '30D'].map((period) => (
+                        <button
+                          key={period}
+                          className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
+                            period === '24H' 
+                              ? 'bg-primary text-primary-foreground' 
+                              : 'text-muted-foreground hover:text-foreground'
+                          }`}
+                        >
+                          {period}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <PortfolioChart data={portfolioData} height={250} />
+                </CardContent>
+              </Card>
+
+              {/* Liquidity Monitor */}
+              <LiquidityMonitor 
+                pools={tokens}
+                activeTrades={openPositions.length}
+                loading={loading}
+                apiStatus={loading ? 'active' : 'waiting'}
+              />
+            </div>
+
+            {/* Right Column - Bot Settings & Performance */}
+            <div className="space-y-6">
+              {/* Liquidity Bot Panel */}
+              <LiquidityBotPanel
+                settings={settings}
+                saving={saving}
+                onUpdateField={updateField}
+                onSave={handleSaveSettings}
+                isActive={isBotActive}
+                onToggleActive={handleToggleBotActive}
+              />
+
+              {/* Performance Panel */}
+              <PerformancePanel
+                winRate={winRate}
+                totalPnL={totalPnLPercent}
+                avgPnL={totalPnLPercent / Math.max(closedPositions.length, 1)}
+                bestTrade={Math.max(...closedPositions.map(p => p.profit_loss_percent || 0), 0)}
+                worstTrade={Math.min(...closedPositions.map(p => p.profit_loss_percent || 0), 0)}
+                totalTrades={closedPositions.length}
+              />
+
+              {/* Active Positions */}
+              <ActivePositionsPanel positions={openPositions} />
+            </div>
           </div>
         </div>
       </main>

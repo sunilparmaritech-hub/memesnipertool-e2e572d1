@@ -1,10 +1,12 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { Switch } from "@/components/ui/switch";
 import { Slider } from "@/components/ui/slider";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { SniperSettings } from "@/hooks/useSniperSettings";
+import { useDebouncedCallback } from "@/hooks/useDebounce";
+import { TRADING_LIMITS, validateSniperSettings, clampValue } from "@/lib/validation";
 import { 
-  Power, 
   Settings2,
   DollarSign,
   Users,
@@ -15,6 +17,8 @@ import {
   Loader2,
   Target,
   Bot,
+  HelpCircle,
+  AlertCircle,
 } from "lucide-react";
 
 interface LiquidityBotPanelProps {
@@ -24,6 +28,7 @@ interface LiquidityBotPanelProps {
   onSave: () => void;
   isActive: boolean;
   onToggleActive: (active: boolean) => void;
+  isDemo?: boolean;
 }
 
 export default function LiquidityBotPanel({
@@ -33,10 +38,42 @@ export default function LiquidityBotPanel({
   onSave,
   isActive,
   onToggleActive,
+  isDemo = false,
 }: LiquidityBotPanelProps) {
   const [autoEntry, setAutoEntry] = useState(true);
   const [autoExit, setAutoExit] = useState(true);
   const [targetBuyerPosition, setTargetBuyerPosition] = useState(2);
+  const [validationError, setValidationError] = useState<string | null>(null);
+
+  // Debounced save for auto-saving on slider changes
+  const debouncedSave = useDebouncedCallback(() => {
+    if (settings) {
+      const validation = validateSniperSettings(settings);
+      if (validation.isValid) {
+        setValidationError(null);
+      } else {
+        setValidationError(validation.error || null);
+      }
+    }
+  }, 500);
+
+  // Validated update function
+  const handleUpdateField = useCallback(<K extends keyof SniperSettings>(field: K, value: SniperSettings[K]) => {
+    // Apply clamping for numeric fields
+    let clampedValue = value;
+    if (field === 'min_liquidity' && typeof value === 'number') {
+      clampedValue = clampValue(value, TRADING_LIMITS.MIN_LIQUIDITY.min, TRADING_LIMITS.MIN_LIQUIDITY.max) as SniperSettings[K];
+    } else if (field === 'trade_amount' && typeof value === 'number') {
+      clampedValue = clampValue(value, TRADING_LIMITS.TRADE_AMOUNT.min, TRADING_LIMITS.TRADE_AMOUNT.max) as SniperSettings[K];
+    } else if (field === 'profit_take_percentage' && typeof value === 'number') {
+      clampedValue = clampValue(value, TRADING_LIMITS.TAKE_PROFIT.min, TRADING_LIMITS.TAKE_PROFIT.max) as SniperSettings[K];
+    } else if (field === 'stop_loss_percentage' && typeof value === 'number') {
+      clampedValue = clampValue(value, TRADING_LIMITS.STOP_LOSS.min, TRADING_LIMITS.STOP_LOSS.max) as SniperSettings[K];
+    }
+    
+    onUpdateField(field, clampedValue);
+    debouncedSave();
+  }, [onUpdateField, debouncedSave]);
 
   if (!settings) {
     return (
@@ -111,19 +148,35 @@ export default function LiquidityBotPanel({
       
       {/* Settings */}
       <div className="p-4 space-y-4">
+        {/* Validation Error */}
+        {validationError && (
+          <div className="flex items-center gap-2 p-2 bg-destructive/10 rounded-lg border border-destructive/20">
+            <AlertCircle className="w-4 h-4 text-destructive shrink-0" />
+            <span className="text-xs text-destructive">{validationError}</span>
+          </div>
+        )}
+
         {/* Min Liquidity */}
         <div className="p-3 bg-secondary/30 rounded-xl">
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2 text-xs">
               <DollarSign className="w-3.5 h-3.5 text-primary" />
               <span className="text-muted-foreground font-medium">Min Liquidity (SOL)</span>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <HelpCircle className="w-3 h-3 text-muted-foreground/50 cursor-help" />
+                </TooltipTrigger>
+                <TooltipContent side="top" className="max-w-[200px]">
+                  <p className="text-xs">Minimum liquidity pool size required before the bot will consider trading a token. Higher = safer but fewer opportunities.</p>
+                </TooltipContent>
+              </Tooltip>
             </div>
             <span className="text-primary font-bold">{settings.min_liquidity}</span>
           </div>
           <Slider
             value={[settings.min_liquidity]}
-            onValueChange={([v]) => onUpdateField('min_liquidity', v)}
-            min={50}
+            onValueChange={([v]) => handleUpdateField('min_liquidity', v)}
+            min={TRADING_LIMITS.MIN_LIQUIDITY.min}
             max={1000}
             step={10}
             className="[&_[role=slider]]:bg-primary [&_[role=slider]]:border-primary"
@@ -160,13 +213,21 @@ export default function LiquidityBotPanel({
               <div className="flex items-center gap-1 text-xs">
                 <TrendingUp className="w-3.5 h-3.5 text-success" />
                 <span className="text-muted-foreground font-medium">TP</span>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <HelpCircle className="w-3 h-3 text-muted-foreground/50 cursor-help" />
+                  </TooltipTrigger>
+                  <TooltipContent side="top" className="max-w-[180px]">
+                    <p className="text-xs">Take Profit: Auto-sell when position gains this percentage.</p>
+                  </TooltipContent>
+                </Tooltip>
               </div>
               <span className="text-success font-bold">{settings.profit_take_percentage}%</span>
             </div>
             <Slider
               value={[settings.profit_take_percentage]}
-              onValueChange={([v]) => onUpdateField('profit_take_percentage', v)}
-              min={10}
+              onValueChange={([v]) => handleUpdateField('profit_take_percentage', v)}
+              min={TRADING_LIMITS.TAKE_PROFIT.min}
               max={500}
               step={5}
               className="[&_[role=slider]]:bg-success [&_[role=slider]]:border-success"
@@ -177,14 +238,22 @@ export default function LiquidityBotPanel({
               <div className="flex items-center gap-1 text-xs">
                 <TrendingDown className="w-3.5 h-3.5 text-destructive" />
                 <span className="text-muted-foreground font-medium">SL</span>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <HelpCircle className="w-3 h-3 text-muted-foreground/50 cursor-help" />
+                  </TooltipTrigger>
+                  <TooltipContent side="top" className="max-w-[180px]">
+                    <p className="text-xs">Stop Loss: Auto-sell when position drops this percentage to limit losses.</p>
+                  </TooltipContent>
+                </Tooltip>
               </div>
               <span className="text-destructive font-bold">{settings.stop_loss_percentage}%</span>
             </div>
             <Slider
               value={[settings.stop_loss_percentage]}
-              onValueChange={([v]) => onUpdateField('stop_loss_percentage', v)}
-              min={5}
-              max={50}
+              onValueChange={([v]) => handleUpdateField('stop_loss_percentage', v)}
+              min={TRADING_LIMITS.STOP_LOSS.min}
+              max={TRADING_LIMITS.STOP_LOSS.max}
               step={1}
               className="[&_[role=slider]]:bg-destructive [&_[role=slider]]:border-destructive"
             />
@@ -198,12 +267,20 @@ export default function LiquidityBotPanel({
               <div className="flex items-center gap-1 text-xs">
                 <Zap className="w-3.5 h-3.5 text-warning" />
                 <span className="text-muted-foreground font-medium">Buy (SOL)</span>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <HelpCircle className="w-3 h-3 text-muted-foreground/50 cursor-help" />
+                  </TooltipTrigger>
+                  <TooltipContent side="top" className="max-w-[180px]">
+                    <p className="text-xs">Amount in SOL to spend on each trade. {isDemo ? 'Demo balance will be used.' : 'Uses your connected wallet.'}</p>
+                  </TooltipContent>
+                </Tooltip>
               </div>
               <span className="text-foreground font-bold">{settings.trade_amount}</span>
             </div>
             <Slider
               value={[settings.trade_amount * 10]}
-              onValueChange={([v]) => onUpdateField('trade_amount', v / 10)}
+              onValueChange={([v]) => handleUpdateField('trade_amount', v / 10)}
               min={1}
               max={50}
               step={1}
@@ -220,9 +297,9 @@ export default function LiquidityBotPanel({
             </div>
             <Slider
               value={[settings.max_concurrent_trades]}
-              onValueChange={([v]) => onUpdateField('max_concurrent_trades', v)}
-              min={1}
-              max={10}
+              onValueChange={([v]) => handleUpdateField('max_concurrent_trades', v)}
+              min={TRADING_LIMITS.MAX_CONCURRENT_TRADES.min}
+              max={TRADING_LIMITS.MAX_CONCURRENT_TRADES.max}
               step={1}
               className="[&_[role=slider]]:bg-primary [&_[role=slider]]:border-primary"
             />

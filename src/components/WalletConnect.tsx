@@ -4,7 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { useWallet, BlockchainNetwork } from '@/hooks/useWallet';
-import { Wallet, Copy, ExternalLink, RefreshCw, LogOut, Loader2, CheckCircle } from 'lucide-react';
+import { Wallet, Copy, ExternalLink, RefreshCw, LogOut, Loader2, CheckCircle, Shield } from 'lucide-react';
 import { toast } from 'sonner';
 
 const NETWORK_COLORS: Record<BlockchainNetwork, string> = {
@@ -19,12 +19,22 @@ const NETWORK_LABELS: Record<BlockchainNetwork, string> = {
   bsc: 'BSC',
 };
 
+const WALLET_INFO = {
+  phantom: { name: 'Phantom', icon: '👻', description: 'Popular Solana wallet' },
+  solflare: { name: 'Solflare', icon: '🔥', description: 'Feature-rich Solana wallet' },
+  backpack: { name: 'Backpack', icon: '🎒', description: 'xNFT-enabled wallet' },
+  metamask: { name: 'MetaMask', icon: '🦊', description: 'EVM wallet' },
+  walletconnect: { name: 'WalletConnect', icon: '🔗', description: 'Mobile wallet bridge' },
+};
+
 interface WalletOption {
   id: string;
   name: string;
   icon: string;
+  description: string;
   networks: BlockchainNetwork[];
   action: (network?: BlockchainNetwork) => void;
+  recommended?: boolean;
 }
 
 export function WalletConnect() {
@@ -33,6 +43,8 @@ export function WalletConnect() {
     isConnecting,
     formatAddress,
     connectPhantom,
+    connectSolflare,
+    connectBackpack,
     connectMetaMask,
     connectWalletConnect,
     disconnect,
@@ -47,9 +59,33 @@ export function WalletConnect() {
       id: 'phantom',
       name: 'Phantom',
       icon: '👻',
+      description: 'Most popular Solana wallet',
       networks: ['solana'],
+      recommended: true,
       action: () => {
         connectPhantom();
+        setIsOpen(false);
+      },
+    },
+    {
+      id: 'solflare',
+      name: 'Solflare',
+      icon: '🔥',
+      description: 'Feature-rich Solana wallet',
+      networks: ['solana'],
+      action: () => {
+        connectSolflare();
+        setIsOpen(false);
+      },
+    },
+    {
+      id: 'backpack',
+      name: 'Backpack',
+      icon: '🎒',
+      description: 'xNFT-enabled wallet',
+      networks: ['solana'],
+      action: () => {
+        connectBackpack();
         setIsOpen(false);
       },
     },
@@ -57,6 +93,7 @@ export function WalletConnect() {
       id: 'metamask-eth',
       name: 'MetaMask (Ethereum)',
       icon: '🦊',
+      description: 'Connect via MetaMask',
       networks: ['ethereum'],
       action: () => {
         connectMetaMask('ethereum');
@@ -67,19 +104,11 @@ export function WalletConnect() {
       id: 'metamask-bsc',
       name: 'MetaMask (BSC)',
       icon: '🦊',
+      description: 'Connect via MetaMask',
       networks: ['bsc'],
       action: () => {
         connectMetaMask('bsc');
         setIsOpen(false);
-      },
-    },
-    {
-      id: 'walletconnect',
-      name: 'WalletConnect',
-      icon: '🔗',
-      networks: ['ethereum', 'bsc'],
-      action: () => {
-        connectWalletConnect();
       },
     },
   ];
@@ -113,23 +142,29 @@ export function WalletConnect() {
     }
   };
 
+  const getWalletInfo = () => {
+    if (!wallet.walletType) return null;
+    return WALLET_INFO[wallet.walletType];
+  };
+
   if (wallet.isConnected && wallet.address) {
+    const walletInfo = getWalletInfo();
+    
     return (
       <Card className="border-border bg-card">
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between">
             <CardTitle className="text-lg flex items-center gap-2">
-              <Wallet className="h-5 w-5 text-primary" />
-              Connected Wallet
+              <span className="text-xl">{walletInfo?.icon || '💼'}</span>
+              {walletInfo?.name || 'Connected Wallet'}
             </CardTitle>
             <Badge className={wallet.network ? NETWORK_COLORS[wallet.network] : ''}>
               {wallet.network ? NETWORK_LABELS[wallet.network] : 'Unknown'}
             </Badge>
           </div>
-          <CardDescription>
-            {wallet.walletType === 'phantom' && 'Phantom Wallet'}
-            {wallet.walletType === 'metamask' && 'MetaMask Wallet'}
-            {wallet.walletType === 'walletconnect' && 'WalletConnect'}
+          <CardDescription className="flex items-center gap-1">
+            <Shield className="h-3 w-3 text-green-500" />
+            <span className="text-green-500 text-xs">Secure connection</span>
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -184,6 +219,14 @@ export function WalletConnect() {
             </div>
           </div>
 
+          {/* Security Notice */}
+          <div className="p-3 bg-green-500/10 border border-green-500/20 rounded-lg">
+            <p className="text-xs text-green-400 flex items-center gap-1">
+              <Shield className="h-3 w-3" />
+              Your private keys never leave your wallet. All transactions require your approval.
+            </p>
+          </div>
+
           {/* Disconnect Button */}
           <Button
             variant="outline"
@@ -213,31 +256,78 @@ export function WalletConnect() {
             Choose a wallet to connect. Your private keys never leave your wallet.
           </DialogDescription>
         </DialogHeader>
-        <div className="grid gap-3 py-4">
-          {walletOptions.map((option) => (
-            <button
-              key={option.id}
-              onClick={() => option.action()}
-              disabled={isConnecting}
-              className="flex items-center gap-4 p-4 rounded-lg border border-border bg-secondary/30 hover:bg-secondary/50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-left"
-            >
-              <span className="text-2xl">{option.icon}</span>
-              <div className="flex-1">
-                <p className="font-medium text-foreground">{option.name}</p>
-                <p className="text-xs text-muted-foreground">
-                  {option.networks.map(n => NETWORK_LABELS[n]).join(', ')}
-                </p>
-              </div>
-              {isConnecting && (
-                <Loader2 className="h-5 w-5 animate-spin text-primary" />
-              )}
-            </button>
-          ))}
+        
+        {/* Solana Wallets Section */}
+        <div className="space-y-2">
+          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+            Solana Wallets (Recommended)
+          </p>
+          <div className="grid gap-2">
+            {walletOptions.filter(o => o.networks.includes('solana')).map((option) => (
+              <button
+                key={option.id}
+                onClick={() => option.action()}
+                disabled={isConnecting}
+                className={`flex items-center gap-4 p-4 rounded-lg border transition-all disabled:opacity-50 disabled:cursor-not-allowed text-left ${
+                  option.recommended 
+                    ? 'border-primary/50 bg-primary/5 hover:bg-primary/10' 
+                    : 'border-border bg-secondary/30 hover:bg-secondary/50'
+                }`}
+              >
+                <span className="text-2xl">{option.icon}</span>
+                <div className="flex-1">
+                  <div className="flex items-center gap-2">
+                    <p className="font-medium text-foreground">{option.name}</p>
+                    {option.recommended && (
+                      <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+                        Recommended
+                      </Badge>
+                    )}
+                  </div>
+                  <p className="text-xs text-muted-foreground">{option.description}</p>
+                </div>
+                {isConnecting && (
+                  <Loader2 className="h-5 w-5 animate-spin text-primary" />
+                )}
+              </button>
+            ))}
+          </div>
         </div>
-        <p className="text-xs text-muted-foreground text-center">
-          By connecting, you agree to sign transactions directly on your wallet.
-          We never access your private keys.
-        </p>
+
+        {/* EVM Wallets Section */}
+        <div className="space-y-2 pt-2 border-t border-border">
+          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+            EVM Wallets
+          </p>
+          <div className="grid gap-2">
+            {walletOptions.filter(o => !o.networks.includes('solana')).map((option) => (
+              <button
+                key={option.id}
+                onClick={() => option.action()}
+                disabled={isConnecting}
+                className="flex items-center gap-4 p-3 rounded-lg border border-border bg-secondary/30 hover:bg-secondary/50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-left"
+              >
+                <span className="text-xl">{option.icon}</span>
+                <div className="flex-1">
+                  <p className="font-medium text-foreground text-sm">{option.name}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {option.networks.map(n => NETWORK_LABELS[n]).join(', ')}
+                  </p>
+                </div>
+                {isConnecting && (
+                  <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                )}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="pt-2 border-t border-border">
+          <p className="text-xs text-muted-foreground text-center flex items-center justify-center gap-1">
+            <Shield className="h-3 w-3" />
+            Your private keys never leave your wallet. We only request signing permissions.
+          </p>
+        </div>
       </DialogContent>
     </Dialog>
   );

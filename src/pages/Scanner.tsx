@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { useTokenScanner } from "@/hooks/useTokenScanner";
 import { useSniperSettings } from "@/hooks/useSniperSettings";
 import { useAutoSniper, TokenData } from "@/hooks/useAutoSniper";
+import { useAutoExit } from "@/hooks/useAutoExit";
 import { useWallet } from "@/hooks/useWallet";
 import { usePositions } from "@/hooks/usePositions";
 import { useToast } from "@/hooks/use-toast";
@@ -25,6 +26,7 @@ const Scanner = () => {
   const { tokens, loading, scanTokens, errors, apiErrors, isDemo, cleanup } = useTokenScanner();
   const { settings, saving, saveSettings, updateField } = useSniperSettings();
   const { evaluateTokens, result: sniperResult, loading: sniperLoading } = useAutoSniper();
+  const { startAutoExitMonitor, stopAutoExitMonitor, isMonitoring } = useAutoExit();
   const { wallet, connectPhantom, disconnect, refreshBalance } = useWallet();
   const { openPositions: realOpenPositions, closedPositions: realClosedPositions, fetchPositions } = usePositions();
   const { toast } = useToast();
@@ -300,16 +302,24 @@ const Scanner = () => {
           description: `Bot running with ${demoBalance.toFixed(0)} SOL demo balance. No real trades.`,
           variant: "default",
         });
+      } else {
+        // Start auto-exit monitor for live mode
+        startAutoExitMonitor(30000); // Check every 30 seconds
       }
       
       addNotification({
         title: 'Bot Activated',
         message: isDemo 
           ? `Liquidity bot started in demo mode with ${demoBalance.toFixed(0)} SOL balance`
-          : 'Liquidity bot started - will auto-trade when conditions are met',
+          : 'Liquidity bot started - will auto-trade and auto-exit when conditions are met',
         type: 'success',
       });
     } else {
+      // Stop auto-exit monitor when bot is deactivated
+      if (!isDemo) {
+        stopAutoExitMonitor();
+      }
+      
       addNotification({
         title: 'Bot Deactivated',
         message: 'Liquidity bot has been stopped',
@@ -321,7 +331,7 @@ const Scanner = () => {
     toast({
       title: active ? "Liquidity Bot Activated" : "Liquidity Bot Deactivated",
       description: active 
-        ? (isDemo ? `Bot will simulate trades with ${demoBalance.toFixed(0)} SOL` : "Bot will automatically enter trades when conditions are met")
+        ? (isDemo ? `Bot will simulate trades with ${demoBalance.toFixed(0)} SOL` : "Bot will automatically enter/exit trades when conditions are met")
         : "Automatic trading has been paused",
     });
   };

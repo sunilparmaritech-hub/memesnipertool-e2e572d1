@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 import { useAppMode } from '@/contexts/AppModeContext';
@@ -42,22 +42,23 @@ interface ScanResult {
 }
 
 // Demo tokens for testing without real API calls
-const generateDemoTokens = (): ScannedToken[] => {
-  const demoNames = [
-    { name: 'DogeMoon', symbol: 'DOGEM' },
-    { name: 'ShibaRocket', symbol: 'SHIBR' },
-    { name: 'PepeGold', symbol: 'PEPEG' },
-    { name: 'FlokiMax', symbol: 'FLOKM' },
-    { name: 'BabyWhale', symbol: 'BBYWH' },
-    { name: 'SafeApe', symbol: 'SAPE' },
-    { name: 'MoonShot', symbol: 'MSHOT' },
-    { name: 'RocketFuel', symbol: 'RFUEL' },
-    { name: 'DiamondHands', symbol: 'DHAND' },
-    { name: 'GigaChad', symbol: 'GIGA' },
-  ];
+const demoTokenNames = [
+  { name: 'DogeMoon', symbol: 'DOGEM' },
+  { name: 'ShibaRocket', symbol: 'SHIBR' },
+  { name: 'PepeGold', symbol: 'PEPEG' },
+  { name: 'FlokiMax', symbol: 'FLOKM' },
+  { name: 'BabyWhale', symbol: 'BBYWH' },
+  { name: 'SafeApe', symbol: 'SAPE' },
+  { name: 'MoonShot', symbol: 'MSHOT' },
+  { name: 'RocketFuel', symbol: 'RFUEL' },
+  { name: 'DiamondHands', symbol: 'DHAND' },
+  { name: 'GigaChad', symbol: 'GIGA' },
+];
 
-  return demoNames.map((token, idx) => ({
-    id: `demo-${idx}-${Date.now()}`,
+const generateSingleDemoToken = (idx: number): ScannedToken => {
+  const token = demoTokenNames[idx % demoTokenNames.length];
+  return {
+    id: `demo-${idx}-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
     address: `Demo${idx}...${Math.random().toString(36).substring(2, 8)}`,
     name: token.name,
     symbol: token.symbol,
@@ -76,7 +77,7 @@ const generateDemoTokens = (): ScannedToken[] => {
     riskScore: Math.floor(Math.random() * 60) + 20,
     source: 'Demo',
     pairAddress: `DemoPair${idx}`,
-  }));
+  };
 };
 
 export function useTokenScanner() {
@@ -88,25 +89,89 @@ export function useTokenScanner() {
   const [apiErrors, setApiErrors] = useState<ApiError[]>([]);
   const { toast } = useToast();
   const { isDemo, isLive } = useAppMode();
+  
+  // Ref to track if a scan is in progress
+  const scanInProgress = useRef(false);
+  // Ref to store interval for tick-by-tick loading
+  const tickIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
-  const scanTokens = useCallback(async (minLiquidity: number = 300, chains: string[] = ['solana']) => {
+  // Add tokens one by one with delay (tick-by-tick)
+  const addTokensIncrementally = useCallback((newTokens: ScannedToken[], onComplete?: () => void) => {
+    // Clear any existing interval
+    if (tickIntervalRef.current) {
+      clearInterval(tickIntervalRef.current);
+    }
+
+    let index = 0;
+    const addInterval = 150; // 150ms between each token
+
+    tickIntervalRef.current = setInterval(() => {
+      if (index < newTokens.length) {
+        const tokenToAdd = newTokens[index];
+        setTokens(prev => {
+          // Check if token already exists (by address)
+          const exists = prev.some(t => t.address === tokenToAdd.address);
+          if (exists) {
+            // Update existing token
+            return prev.map(t => t.address === tokenToAdd.address ? tokenToAdd : t);
+          }
+          // Add new token at the beginning
+          return [tokenToAdd, ...prev].slice(0, 50); // Keep max 50 tokens
+        });
+        index++;
+      } else {
+        // All tokens added
+        if (tickIntervalRef.current) {
+          clearInterval(tickIntervalRef.current);
+          tickIntervalRef.current = null;
+        }
+        if (onComplete) onComplete();
+      }
+    }, addInterval);
+  }, []);
+
+  const scanTokens = useCallback(async (minLiquidity: number = 300, chains: string[] = ['solana']): Promise<ScanResult | null> => {
+    // Prevent concurrent scans
+    if (scanInProgress.current) {
+      console.log('Scan already in progress, skipping...');
+      return null;
+    }
+
+    scanInProgress.current = true;
     setLoading(true);
     setErrors([]);
     setApiErrors([]);
 
     try {
-      // Demo mode: return simulated data
+      // Demo mode: return simulated data incrementally
       if (isDemo) {
-        await new Promise(resolve => setTimeout(resolve, 800)); // Simulate API delay
-        const demoTokens = generateDemoTokens().filter(t => t.liquidity >= minLiquidity);
-        setTokens(demoTokens);
+        // Generate 3-5 new demo tokens per scan
+        const numNewTokens = Math.floor(Math.random() * 3) + 3;
+        const newDemoTokens: ScannedToken[] = [];
+        
+        for (let i = 0; i < numNewTokens; i++) {
+          const token = generateSingleDemoToken(Math.floor(Math.random() * 10));
+          if (token.liquidity >= minLiquidity) {
+            newDemoTokens.push(token);
+          }
+        }
+
+        // Add tokens incrementally
+        addTokensIncrementally(newDemoTokens, () => {
+          setLoading(false);
+          scanInProgress.current = false;
+        });
+
         setLastScan(new Date().toISOString());
         setApiCount(3);
-        toast({
-          title: 'Demo Scan Complete',
-          description: `Found ${demoTokens.length} simulated opportunities`,
-        });
-        return { tokens: demoTokens, errors: [], apiErrors: [], timestamp: new Date().toISOString(), apiCount: 3 };
+        
+        return { 
+          tokens: newDemoTokens, 
+          errors: [], 
+          apiErrors: [], 
+          timestamp: new Date().toISOString(), 
+          apiCount: 3 
+        };
       }
 
       // Live mode: call real API
@@ -117,7 +182,18 @@ export function useTokenScanner() {
       if (error) throw error;
 
       const result = data as ScanResult;
-      setTokens(result.tokens || []);
+      
+      // Add tokens incrementally for smooth loading
+      if (result.tokens && result.tokens.length > 0) {
+        addTokensIncrementally(result.tokens, () => {
+          setLoading(false);
+          scanInProgress.current = false;
+        });
+      } else {
+        setLoading(false);
+        scanInProgress.current = false;
+      }
+
       setLastScan(result.timestamp);
       setApiCount(result.apiCount);
       setApiErrors(result.apiErrors || []);
@@ -130,11 +206,6 @@ export function useTokenScanner() {
           description: `${result.errors.length} API(s) had issues: ${failedApis}`,
           variant: 'destructive',
         });
-      } else {
-        toast({
-          title: 'Scan complete',
-          description: `Found ${result.tokens.length} potential opportunities`,
-        });
       }
 
       return result;
@@ -145,11 +216,11 @@ export function useTokenScanner() {
         description: error.message || 'Failed to scan for tokens',
         variant: 'destructive',
       });
-      throw error;
-    } finally {
       setLoading(false);
+      scanInProgress.current = false;
+      return null;
     }
-  }, [toast, isDemo]);
+  }, [toast, isDemo, addTokensIncrementally]);
 
   const getTopOpportunities = useCallback((limit: number = 5) => {
     return tokens
@@ -165,6 +236,13 @@ export function useTokenScanner() {
     return tokens.filter(t => t.riskScore <= maxRisk);
   }, [tokens]);
 
+  // Cleanup on unmount
+  const cleanup = useCallback(() => {
+    if (tickIntervalRef.current) {
+      clearInterval(tickIntervalRef.current);
+    }
+  }, []);
+
   return {
     tokens,
     loading,
@@ -178,5 +256,6 @@ export function useTokenScanner() {
     filterByRisk,
     isDemo,
     isLive,
+    cleanup,
   };
 }

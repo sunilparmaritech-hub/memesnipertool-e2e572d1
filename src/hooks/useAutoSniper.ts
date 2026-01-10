@@ -1,6 +1,7 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
+import { useNotifications } from '@/hooks/useNotifications';
 
 export interface TokenData {
   address: string;
@@ -60,12 +61,33 @@ export function useAutoSniper() {
   const [result, setResult] = useState<AutoSniperResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const { toast } = useToast();
+  const { addNotification } = useNotifications();
+  
+  // Ref to prevent concurrent evaluations
+  const evaluatingRef = useRef(false);
+  // Last evaluation timestamp
+  const lastEvalRef = useRef(0);
 
   const evaluateTokens = useCallback(async (
     tokens: TokenData[],
     executeOnApproval: boolean = false,
     onTradeExecuted?: () => void
   ): Promise<AutoSniperResult | null> => {
+    // Prevent concurrent evaluations
+    if (evaluatingRef.current) {
+      console.log('Auto-sniper evaluation already in progress, skipping...');
+      return null;
+    }
+
+    // Throttle: minimum 20 seconds between runs
+    const now = Date.now();
+    if (now - lastEvalRef.current < 20000) {
+      console.log('Auto-sniper throttled, too soon since last run');
+      return null;
+    }
+
+    evaluatingRef.current = true;
+    lastEvalRef.current = now;
     setLoading(true);
     setError(null);
 
@@ -75,7 +97,7 @@ export function useAutoSniper() {
         throw new Error('Please sign in to use the auto-sniper');
       }
 
-      console.log(`Evaluating ${tokens.length} tokens, executeOnApproval: ${executeOnApproval}`);
+      console.log(`Auto-sniper evaluating ${tokens.length} tokens, executeOnApproval: ${executeOnApproval}`);
 
       const { data, error: fnError } = await supabase.functions.invoke('auto-sniper', {
         body: { tokens, executeOnApproval },
@@ -91,13 +113,40 @@ export function useAutoSniper() {
       
       const approved = data.summary?.approved || 0;
       const executed = data.summary?.executed || 0;
+      const executedTrades = data.executedTrades || [];
       
+      // Send notifications for each executed trade
       if (executeOnApproval && executed > 0) {
-        toast({
-          title: '🎯 Trades Executed!',
-          description: `${executed} position(s) opened. View in Active Trades.`,
+        executedTrades.forEach((trade: ExecutedTrade) => {
+          if (!trade.error) {
+            // Send toast notification
+            toast({
+              title: '🎯 Trade Executed!',
+              description: `Bought ${trade.token} - Position opened`,
+            });
+            
+            // Add to notification center
+            addNotification({
+              title: `Trade Executed: ${trade.token}`,
+              message: `Auto-sniper bought ${trade.token}. Position ID: ${trade.positionId?.slice(0, 8) || 'N/A'}`,
+              type: 'trade',
+              metadata: {
+                token: trade.token,
+                txId: trade.txId,
+                positionId: trade.positionId,
+                settings: data.settings,
+              },
+            });
+          } else {
+            // Notify about failed trade
+            addNotification({
+              title: `Trade Failed: ${trade.token}`,
+              message: trade.error,
+              type: 'error',
+            });
+          }
         });
-        
+
         // Notify parent to refresh positions
         if (onTradeExecuted) {
           onTradeExecuted();
@@ -122,8 +171,9 @@ export function useAutoSniper() {
       return null;
     } finally {
       setLoading(false);
+      evaluatingRef.current = false;
     }
-  }, [toast]);
+  }, [toast, addNotification]);
 
   const clearResult = useCallback(() => {
     setResult(null);

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import TradingHeader from "@/components/trading/TradingHeader";
 import LiquidityBotPanel from "@/components/trading/LiquidityBotPanel";
 import LiquidityMonitor from "@/components/scanner/LiquidityMonitor";
@@ -10,10 +10,11 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { useTokenScanner } from "@/hooks/useTokenScanner";
 import { useSniperSettings } from "@/hooks/useSniperSettings";
-import { useAutoSniper } from "@/hooks/useAutoSniper";
+import { useAutoSniper, TokenData } from "@/hooks/useAutoSniper";
 import { useWallet } from "@/hooks/useWallet";
 import { usePositions } from "@/hooks/usePositions";
 import { useToast } from "@/hooks/use-toast";
+import { useNotifications } from "@/hooks/useNotifications";
 import { useAppMode } from "@/contexts/AppModeContext";
 import { Wallet, TrendingUp, Zap, Activity, AlertTriangle, X, FlaskConical } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -37,12 +38,13 @@ const generatePortfolioData = () => {
 };
 
 const Scanner = () => {
-  const { tokens, loading, scanTokens, errors, apiErrors, isDemo } = useTokenScanner();
+  const { tokens, loading, scanTokens, errors, apiErrors, isDemo, cleanup } = useTokenScanner();
   const { settings, saving, saveSettings, updateField } = useSniperSettings();
-  const { evaluateTokens, result: sniperResult } = useAutoSniper();
+  const { evaluateTokens, result: sniperResult, loading: sniperLoading } = useAutoSniper();
   const { wallet, connectPhantom, disconnect, refreshBalance } = useWallet();
   const { openPositions, closedPositions, fetchPositions } = usePositions();
   const { toast } = useToast();
+  const { addNotification } = useNotifications();
   const { mode } = useAppMode();
 
   const [isBotActive, setIsBotActive] = useState(false);
@@ -50,7 +52,10 @@ const Scanner = () => {
   const [scanSpeed, setScanSpeed] = useState<'slow' | 'normal' | 'fast'>('normal');
   const [isPaused, setIsPaused] = useState(false);
   const [showApiErrors, setShowApiErrors] = useState(true);
-  const [lastSniperRun, setLastSniperRun] = useState<number>(0);
+  
+  // Refs for tracking
+  const lastSniperRunRef = useRef<number>(0);
+  const processedTokensRef = useRef<Set<string>>(new Set());
 
   // Calculate stats
   const totalValue = useMemo(() => 
@@ -77,6 +82,13 @@ const Scanner = () => {
     return { value: change, percent };
   }, [portfolioData]);
 
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      cleanup();
+    };
+  }, [cleanup]);
+
   // Auto-scan on mount
   useEffect(() => {
     if (settings?.min_liquidity && !isPaused) {
@@ -90,8 +102,8 @@ const Scanner = () => {
     
     // Demo mode uses faster intervals since no real API calls
     const intervals = isDemo 
-      ? { slow: 30000, normal: 15000, fast: 5000 }
-      : { slow: 90000, normal: 45000, fast: 20000 }; // Longer intervals for live to reduce API load
+      ? { slow: 20000, normal: 10000, fast: 5000 }
+      : { slow: 60000, normal: 30000, fast: 15000 };
     
     const interval = setInterval(() => {
       if (settings?.min_liquidity) {
@@ -102,18 +114,29 @@ const Scanner = () => {
     return () => clearInterval(interval);
   }, [scanSpeed, isPaused, settings?.min_liquidity, scanTokens, isDemo]);
 
-  // Auto-sniper when bot is active (only in live mode)
+  // Auto-sniper: evaluate NEW tokens when bot is active
   useEffect(() => {
-    if (!isBotActive || tokens.length === 0 || !settings || isDemo) return;
+    if (!isBotActive || tokens.length === 0 || !settings) return;
     
-    // Throttle sniper runs to avoid too frequent calls
+    // Filter for tokens we haven't processed yet
+    const newTokens = tokens.filter(t => !processedTokensRef.current.has(t.address));
+    
+    if (newTokens.length === 0) return;
+    
+    // Mark these tokens as processed
+    newTokens.forEach(t => processedTokensRef.current.add(t.address));
+    
+    // Throttle: minimum 20 seconds between runs
     const now = Date.now();
-    if (now - lastSniperRun < 30000) return; // Min 30s between runs
+    if (now - lastSniperRunRef.current < 20000) {
+      console.log('Auto-sniper throttled, will process on next cycle');
+      return;
+    }
     
-    setLastSniperRun(now);
+    lastSniperRunRef.current = now;
     
     // Map tokens with price data for auto-sniper
-    const tokenData = tokens.slice(0, 10).map(t => ({
+    const tokenData: TokenData[] = newTokens.slice(0, 5).map(t => ({
       address: t.address,
       name: t.name,
       symbol: t.symbol,
@@ -124,12 +147,32 @@ const Scanner = () => {
       buyerPosition: t.buyerPosition,
       riskScore: t.riskScore,
       categories: [],
-      priceUsd: t.priceUsd, // Include price for position creation
+      priceUsd: t.priceUsd,
     }));
     
-    console.log('Auto-sniper evaluating tokens:', tokenData.length);
-    evaluateTokens(tokenData, true, fetchPositions);
-  }, [isBotActive, tokens.length, isDemo, settings, lastSniperRun, evaluateTokens, fetchPositions]);
+    console.log('Auto-sniper evaluating new tokens:', tokenData.map(t => t.symbol));
+    
+    // In demo mode, simulate trade execution
+    if (isDemo) {
+      // Simulate successful trade for demo
+      const approvedToken = tokenData.find(t => t.buyerPosition && t.buyerPosition >= 2 && t.buyerPosition <= 3 && t.riskScore < 70);
+      if (approvedToken) {
+        toast({
+          title: '🎯 Demo Trade Executed!',
+          description: `Bought ${approvedToken.symbol} at $${approvedToken.priceUsd?.toFixed(6) || 'N/A'}`,
+        });
+        addNotification({
+          title: `Demo Trade: ${approvedToken.symbol}`,
+          message: `Simulated buy of ${approvedToken.symbol} with ${settings.trade_amount} SOL`,
+          type: 'trade',
+          metadata: { token: approvedToken.symbol, amount: settings.trade_amount },
+        });
+      }
+    } else {
+      // Live mode: call real auto-sniper
+      evaluateTokens(tokenData, true, fetchPositions);
+    }
+  }, [tokens, isBotActive, settings, isDemo, evaluateTokens, fetchPositions, toast, addNotification]);
 
   const handleConnectWallet = async () => {
     if (wallet.isConnected) {
@@ -149,13 +192,33 @@ const Scanner = () => {
   };
 
   const handleToggleBotActive = (active: boolean) => {
-    if (active && isDemo) {
-      toast({
-        title: "Demo Mode Active",
-        description: "Bot is running in simulation mode. No real trades will be executed.",
-        variant: "default",
+    if (active) {
+      // Clear processed tokens when activating bot
+      processedTokensRef.current.clear();
+      
+      if (isDemo) {
+        toast({
+          title: "Demo Mode Active",
+          description: "Bot is running in simulation mode. No real trades will be executed.",
+          variant: "default",
+        });
+      }
+      
+      addNotification({
+        title: 'Bot Activated',
+        message: isDemo 
+          ? 'Liquidity bot started in demo mode - simulating trades'
+          : 'Liquidity bot started - will auto-trade when conditions are met',
+        type: 'success',
+      });
+    } else {
+      addNotification({
+        title: 'Bot Deactivated',
+        message: 'Liquidity bot has been stopped',
+        type: 'info',
       });
     }
+    
     setIsBotActive(active);
     toast({
       title: active ? "Liquidity Bot Activated" : "Liquidity Bot Deactivated",

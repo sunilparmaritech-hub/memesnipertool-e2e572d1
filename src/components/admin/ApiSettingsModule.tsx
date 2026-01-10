@@ -13,7 +13,7 @@ import { useApiConfigurations, ApiConfiguration, ApiType, ApiStatus } from '@/ho
 import { Plus, Pencil, Trash2, Eye, EyeOff, RefreshCw, Loader2, HelpCircle, CheckCircle2, AlertCircle, Info } from 'lucide-react';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 
-// API Documentation with requirement levels and help notes
+// API Documentation with requirement levels, help notes, and error solutions
 const API_INFO: Record<ApiType, {
   label: string;
   required: boolean;
@@ -22,6 +22,7 @@ const API_INFO: Record<ApiType, {
   defaultUrl: string;
   requiresKey: boolean;
   alternatives?: string[];
+  commonErrors: { pattern: string; solution: string }[];
 }> = {
   dexscreener: {
     label: 'DexScreener API',
@@ -30,6 +31,12 @@ const API_INFO: Record<ApiType, {
     helpNotes: 'Free tier available. No API key required for basic usage. Rate limit: 300 requests/min. Get from: https://docs.dexscreener.com',
     defaultUrl: 'https://api.dexscreener.com',
     requiresKey: false,
+    commonErrors: [
+      { pattern: 'pairs.slice is not a function', solution: 'API response format changed. The scanner has been updated to handle different response structures. Try running a scan again.' },
+      { pattern: 'rate limit', solution: 'Reduce scan frequency or wait a few minutes. DexScreener allows 300 requests/min.' },
+      { pattern: '429', solution: 'Rate limited. Wait 1-2 minutes before scanning again.' },
+      { pattern: '503', solution: 'DexScreener is temporarily unavailable. Try again in a few minutes.' },
+    ],
   },
   geckoterminal: {
     label: 'GeckoTerminal API',
@@ -39,6 +46,10 @@ const API_INFO: Record<ApiType, {
     defaultUrl: 'https://api.geckoterminal.com',
     requiresKey: false,
     alternatives: ['dexscreener'],
+    commonErrors: [
+      { pattern: '429', solution: 'Rate limited. GeckoTerminal has a 30 req/min limit. Wait before retrying.' },
+      { pattern: 'timeout', solution: 'Network timeout. Check your internet connection or try again.' },
+    ],
   },
   birdeye: {
     label: 'Birdeye API',
@@ -47,6 +58,11 @@ const API_INFO: Record<ApiType, {
     helpNotes: 'API key required. Free tier: 100 req/min. Get your key at: https://birdeye.so/api (requires Solana wallet to sign up)',
     defaultUrl: 'https://public-api.birdeye.so',
     requiresKey: true,
+    commonErrors: [
+      { pattern: '401', solution: 'Invalid or missing API key. Get a free key at birdeye.so/api and configure it.' },
+      { pattern: '403', solution: 'API key expired or revoked. Generate a new key at birdeye.so/api.' },
+      { pattern: 'API key required', solution: 'Add your Birdeye API key in the configuration. Sign up at birdeye.so to get one.' },
+    ],
   },
   dextools: {
     label: 'Dextools / RapidAPI',
@@ -56,6 +72,10 @@ const API_INFO: Record<ApiType, {
     defaultUrl: 'https://public-api.dextools.io',
     requiresKey: true,
     alternatives: ['dexscreener', 'geckoterminal'],
+    commonErrors: [
+      { pattern: '401', solution: 'Invalid RapidAPI key. Subscribe at rapidapi.com/dextools and add your key.' },
+      { pattern: '402', solution: 'RapidAPI subscription required or quota exceeded. Check your subscription.' },
+    ],
   },
   honeypot_rugcheck: {
     label: 'Honeypot/Rugcheck API',
@@ -64,6 +84,10 @@ const API_INFO: Record<ApiType, {
     helpNotes: 'Free API, no key needed. Essential for risk management. Docs: https://honeypot.is/docs',
     defaultUrl: 'https://api.honeypot.is',
     requiresKey: false,
+    commonErrors: [
+      { pattern: 'timeout', solution: 'Honeypot API can be slow. The scanner will continue with other tokens.' },
+      { pattern: '503', solution: 'Service temporarily unavailable. Token risk scores may be estimated.' },
+    ],
   },
   liquidity_lock: {
     label: 'Liquidity Lock API',
@@ -73,6 +97,9 @@ const API_INFO: Record<ApiType, {
     defaultUrl: 'https://api.team.finance',
     requiresKey: true,
     alternatives: ['On-chain verification'],
+    commonErrors: [
+      { pattern: '401', solution: 'API key may be required for Team Finance. Consider on-chain verification as alternative.' },
+    ],
   },
   trade_execution: {
     label: 'Trade Execution (Jupiter)',
@@ -81,6 +108,12 @@ const API_INFO: Record<ApiType, {
     helpNotes: 'Free API, no key needed for quotes. For ultra-fast trades, get referral key at: https://station.jup.ag',
     defaultUrl: 'https://api.jup.ag',
     requiresKey: false,
+    commonErrors: [
+      { pattern: 'dns error', solution: 'DNS resolution failed. This is a network issue. The endpoint URL has been updated to use api.jup.ag which is more reliable.' },
+      { pattern: 'failed to lookup', solution: 'Network connectivity issue. Ensure the base URL is set to https://api.jup.ag' },
+      { pattern: '403', solution: 'Access denied. Jupiter may have rate limits. Wait a moment and try again.' },
+      { pattern: '429', solution: 'Rate limited by Jupiter. Reduce scan frequency.' },
+    ],
   },
   rpc_provider: {
     label: 'Solana RPC Provider',
@@ -89,7 +122,25 @@ const API_INFO: Record<ApiType, {
     helpNotes: 'Free public RPC has rate limits. For production, use: Helius, QuickNode, or Alchemy. Get free RPC at: https://helius.xyz',
     defaultUrl: 'https://api.mainnet-beta.solana.com',
     requiresKey: false,
+    commonErrors: [
+      { pattern: '429', solution: 'Public RPC rate limited. Consider using Helius or QuickNode for better limits.' },
+      { pattern: 'timeout', solution: 'RPC node is slow. Try a different provider like helius.xyz or quicknode.com.' },
+    ],
   },
+};
+
+// Helper to find error solution
+const findErrorSolution = (apiType: ApiType, errorMessage: string): string | null => {
+  const apiInfo = API_INFO[apiType];
+  if (!apiInfo) return null;
+  
+  const lowerError = errorMessage.toLowerCase();
+  for (const err of apiInfo.commonErrors) {
+    if (lowerError.includes(err.pattern.toLowerCase())) {
+      return err.solution;
+    }
+  }
+  return null;
 };
 
 const STATUS_COLORS: Record<ApiStatus, string> = {
@@ -390,6 +441,77 @@ export function ApiSettingsModule() {
           </Alert>
         )}
 
+        {/* APIs with Errors - Show solutions */}
+        {configurations.filter(c => c.status === 'error').length > 0 && (
+          <Card className="border-destructive/30">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-destructive flex items-center gap-2">
+                <AlertCircle className="h-5 w-5" />
+                API Errors Detected
+              </CardTitle>
+              <CardDescription>
+                The following APIs have errors. Review the suggested solutions below.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-4">
+                {configurations
+                  .filter(c => c.status === 'error')
+                  .map((config) => {
+                    const apiInfo = API_INFO[config.api_type];
+                    return (
+                      <div key={config.id} className="rounded-lg border border-destructive/20 bg-destructive/5 p-4">
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-2">
+                              <span className="font-medium text-foreground">{config.api_name}</span>
+                              <Badge variant="outline" className="text-xs">{apiInfo?.label}</Badge>
+                              <Badge className="bg-destructive/20 text-destructive border-destructive/30">
+                                Error
+                              </Badge>
+                            </div>
+                            <div className="space-y-2">
+                              <div>
+                                <p className="text-sm font-medium text-muted-foreground">Possible Solutions:</p>
+                                <ul className="mt-1 space-y-1">
+                                  {apiInfo?.commonErrors.map((err, idx) => (
+                                    <li key={idx} className="text-sm flex items-start gap-2">
+                                      <CheckCircle2 className="h-4 w-4 text-green-500 mt-0.5 shrink-0" />
+                                      <span>{err.solution}</span>
+                                    </li>
+                                  ))}
+                                </ul>
+                              </div>
+                              {config.last_checked_at && (
+                                <p className="text-xs text-muted-foreground">
+                                  Last checked: {new Date(config.last_checked_at).toLocaleString()}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2 ml-4">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleOpenDialog(config)}
+                            >
+                              <Pencil className="h-3 w-3 mr-1" />
+                              Edit
+                            </Button>
+                            <Switch
+                              checked={config.is_enabled}
+                              onCheckedChange={(checked) => toggleEnabled(config.id, checked)}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
         <Card>
           <CardHeader>
             <CardTitle>Configured APIs</CardTitle>
@@ -492,15 +614,35 @@ export function ApiSettingsModule() {
                       </TableCell>
                       <TableCell>{config.rate_limit_per_minute}/min</TableCell>
                       <TableCell>
-                        <Badge className={STATUS_COLORS[config.status]}>
-                          {config.status}
-                        </Badge>
+                        <div className="flex items-center gap-2">
+                          <Badge className={STATUS_COLORS[config.status]}>
+                            {config.status}
+                          </Badge>
+                          {config.status === 'error' && (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <AlertCircle className="h-4 w-4 text-destructive cursor-help" />
+                              </TooltipTrigger>
+                              <TooltipContent className="max-w-sm">
+                                <p className="font-medium text-destructive">API Error</p>
+                                <p className="text-xs mt-1">
+                                  Check the API Health tab for detailed error messages and solutions.
+                                </p>
+                              </TooltipContent>
+                            </Tooltip>
+                          )}
+                        </div>
                       </TableCell>
                       <TableCell>
-                        <Switch
-                          checked={config.is_enabled}
-                          onCheckedChange={(checked) => toggleEnabled(config.id, checked)}
-                        />
+                        <div className="flex items-center gap-2">
+                          <Switch
+                            checked={config.is_enabled}
+                            onCheckedChange={(checked) => toggleEnabled(config.id, checked)}
+                          />
+                          <span className="text-xs text-muted-foreground">
+                            {config.is_enabled ? 'On' : 'Off'}
+                          </span>
+                        </div>
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-1">

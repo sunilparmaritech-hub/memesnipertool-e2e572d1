@@ -354,11 +354,11 @@ serve(async (req) => {
       }
     }
 
-    // Fetch from Jupiter Price API (more reliable in edge function environment)
-    // Using the quote API which has better DNS resolution
-    if (chains.includes('solana')) {
-      // Use Jupiter's public API with a different endpoint that's more reliable
-      const endpoint = 'https://api.jup.ag/tokens/v1/tagged/verified';
+    // Fetch from Jupiter - check if trade_execution API is configured
+    const jupiterConfig = getApiConfig('trade_execution');
+    if (chains.includes('solana') && jupiterConfig) {
+      // Use Jupiter's price API which is more reliable
+      const endpoint = `${jupiterConfig.base_url}/price/v2?ids=So11111111111111111111111111111111111111112`;
       const startTime = Date.now();
       try {
         console.log('Fetching from Jupiter API...');
@@ -370,45 +370,16 @@ serve(async (req) => {
         const responseTime = Date.now() - startTime;
         
         if (jupiterResponse.ok) {
-          await logApiHealth('jupiter', endpoint, responseTime, jupiterResponse.status, true);
-          const jupiterTokens = await jupiterResponse.json();
-          
-          // Safely handle the response - ensure it's an array
-          const tokenList = Array.isArray(jupiterTokens) ? jupiterTokens : [];
-          const recentTokens = tokenList.slice(-50);
-          
-          for (const token of recentTokens.slice(0, 15)) {
-            if (!token || tokens.find(t => t.address === token.address)) continue;
-            
-            tokens.push({
-              id: `jupiter-${token.address}`,
-              address: token.address || '',
-              name: token.name || 'Unknown',
-              symbol: token.symbol || '???',
-              chain: 'solana',
-              liquidity: Math.floor(Math.random() * 50000) + minLiquidity,
-              liquidityLocked: false,
-              lockPercentage: null,
-              priceUsd: 0,
-              priceChange24h: 0,
-              volume24h: 0,
-              marketCap: 0,
-              holders: 0,
-              createdAt: new Date().toISOString(),
-              earlyBuyers: Math.floor(Math.random() * 5) + 1,
-              buyerPosition: Math.floor(Math.random() * 3) + 1,
-              riskScore: Math.floor(Math.random() * 25) + 25,
-              source: 'Jupiter',
-              pairAddress: token.address,
-            });
-          }
+          await logApiHealth('trade_execution', endpoint, responseTime, jupiterResponse.status, true);
+          // Jupiter price API is working - mark as active
+          console.log('Jupiter API is healthy');
         } else {
           const errorMsg = `HTTP ${jupiterResponse.status}: ${jupiterResponse.statusText}`;
-          await logApiHealth('jupiter', endpoint, responseTime, jupiterResponse.status, false, errorMsg);
+          await logApiHealth('trade_execution', endpoint, responseTime, jupiterResponse.status, false, errorMsg);
           errors.push(`Jupiter: ${errorMsg}`);
           apiErrors.push({
-            apiName: 'Jupiter',
-            apiType: 'jupiter',
+            apiName: jupiterConfig.api_name,
+            apiType: 'trade_execution',
             errorMessage: errorMsg,
             endpoint,
             timestamp: new Date().toISOString(),
@@ -417,12 +388,12 @@ serve(async (req) => {
       } catch (e: any) {
         const responseTime = Date.now() - startTime;
         const errorMsg = e.message || 'Network error';
-        await logApiHealth('jupiter', endpoint, responseTime, 0, false, errorMsg);
+        await logApiHealth('trade_execution', endpoint, responseTime, 0, false, errorMsg);
         console.error('Jupiter API error:', e);
         errors.push(`Jupiter: ${errorMsg}`);
         apiErrors.push({
-          apiName: 'Jupiter',
-          apiType: 'jupiter',
+          apiName: jupiterConfig.api_name,
+          apiType: 'trade_execution',
           errorMessage: errorMsg,
           endpoint,
           timestamp: new Date().toISOString(),

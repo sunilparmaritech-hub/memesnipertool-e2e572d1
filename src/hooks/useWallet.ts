@@ -150,7 +150,14 @@ export function useWallet() {
     setIsConnecting(true);
     try {
       const response = await provider.connect();
-      const address = response.publicKey.toString();
+      
+      // Safe access to publicKey with proper null checking
+      const publicKey = response?.publicKey || provider.publicKey;
+      if (!publicKey) {
+        throw new Error('Failed to get wallet public key');
+      }
+      
+      const address = publicKey.toString();
       const balance = await getSolanaBalance(address);
 
       setWallet({
@@ -199,7 +206,14 @@ export function useWallet() {
     setIsConnecting(true);
     try {
       const response = await provider.connect();
-      const address = response.publicKey.toString();
+      
+      // Safe access to publicKey with proper null checking
+      const publicKey = response?.publicKey || provider.publicKey;
+      if (!publicKey) {
+        throw new Error('Failed to get wallet public key');
+      }
+      
+      const address = publicKey.toString();
       const balance = await getSolanaBalance(address);
 
       setWallet({
@@ -240,7 +254,14 @@ export function useWallet() {
     setIsConnecting(true);
     try {
       const response = await provider.connect();
-      const address = response.publicKey.toString();
+      
+      // Safe access to publicKey with proper null checking
+      const publicKey = response?.publicKey || provider.publicKey;
+      if (!publicKey) {
+        throw new Error('Failed to get wallet public key');
+      }
+      
+      const address = publicKey.toString();
       const balance = await getSolanaBalance(address);
 
       setWallet({
@@ -541,23 +562,41 @@ export function useWallet() {
         
         if (network === 'solana') {
           const provider = getSolanaProvider(walletType);
-          if (provider?.publicKey) {
-            // Already connected
-            const address = provider.publicKey.toString();
-            const balance = await getSolanaBalance(address);
-            
-            setWallet({
-              isConnected: true,
-              address,
-              balance: `${balance} SOL`,
-              network: 'solana',
-              walletType,
-            });
-          } else if (provider) {
+          if (!provider) {
+            clearWalletConnection();
+            return;
+          }
+          
+          if (provider.publicKey) {
+            // Already connected - safe access with null check
+            try {
+              const address = provider.publicKey.toString();
+              const balance = await getSolanaBalance(address);
+              
+              setWallet({
+                isConnected: true,
+                address,
+                balance: `${balance} SOL`,
+                network: 'solana',
+                walletType,
+              });
+            } catch (err) {
+              console.error('Error reading wallet state:', err);
+              clearWalletConnection();
+            }
+          } else {
             // Try to reconnect silently
             try {
               const response = await provider.connect({ onlyIfTrusted: true });
-              const address = response.publicKey.toString();
+              
+              // Safe access to publicKey with proper null checking
+              const publicKey = response?.publicKey || provider.publicKey;
+              if (!publicKey) {
+                clearWalletConnection();
+                return;
+              }
+              
+              const address = publicKey.toString();
               const balance = await getSolanaBalance(address);
               
               setWallet({
@@ -574,7 +613,7 @@ export function useWallet() {
           }
         } else if (window.ethereum && walletType === 'metamask') {
           const accounts = await window.ethereum.request({ method: 'eth_accounts' });
-          if (accounts.length > 0) {
+          if (accounts && accounts.length > 0) {
             const browserProvider = new BrowserProvider(window.ethereum);
             const balance = await getEthBalance(accounts[0], browserProvider);
             const symbol = network === 'bsc' ? 'BNB' : 'ETH';
@@ -595,7 +634,7 @@ export function useWallet() {
     };
 
     // Small delay to ensure wallet extensions are loaded
-    const timeout = setTimeout(attemptAutoConnect, 100);
+    const timeout = setTimeout(attemptAutoConnect, 500);
     return () => clearTimeout(timeout);
   }, [getSolanaProvider, getSolanaBalance, clearWalletConnection]);
 

@@ -39,9 +39,9 @@ const generatePortfolioData = () => {
 const Scanner = () => {
   const { tokens, loading, scanTokens, errors, apiErrors, isDemo } = useTokenScanner();
   const { settings, saving, saveSettings, updateField } = useSniperSettings();
-  const { evaluateTokens } = useAutoSniper();
+  const { evaluateTokens, result: sniperResult } = useAutoSniper();
   const { wallet, connectPhantom, disconnect, refreshBalance } = useWallet();
-  const { openPositions, closedPositions } = usePositions();
+  const { openPositions, closedPositions, fetchPositions } = usePositions();
   const { toast } = useToast();
   const { mode } = useAppMode();
 
@@ -50,6 +50,7 @@ const Scanner = () => {
   const [scanSpeed, setScanSpeed] = useState<'slow' | 'normal' | 'fast'>('normal');
   const [isPaused, setIsPaused] = useState(false);
   const [showApiErrors, setShowApiErrors] = useState(true);
+  const [lastSniperRun, setLastSniperRun] = useState<number>(0);
 
   // Calculate stats
   const totalValue = useMemo(() => 
@@ -105,6 +106,13 @@ const Scanner = () => {
   useEffect(() => {
     if (!isBotActive || tokens.length === 0 || !settings || isDemo) return;
     
+    // Throttle sniper runs to avoid too frequent calls
+    const now = Date.now();
+    if (now - lastSniperRun < 30000) return; // Min 30s between runs
+    
+    setLastSniperRun(now);
+    
+    // Map tokens with price data for auto-sniper
     const tokenData = tokens.slice(0, 10).map(t => ({
       address: t.address,
       name: t.name,
@@ -116,10 +124,12 @@ const Scanner = () => {
       buyerPosition: t.buyerPosition,
       riskScore: t.riskScore,
       categories: [],
+      priceUsd: t.priceUsd, // Include price for position creation
     }));
     
-    evaluateTokens(tokenData, true);
-  }, [isBotActive, tokens.length, isDemo]);
+    console.log('Auto-sniper evaluating tokens:', tokenData.length);
+    evaluateTokens(tokenData, true, fetchPositions);
+  }, [isBotActive, tokens.length, isDemo, settings, lastSniperRun, evaluateTokens, fetchPositions]);
 
   const handleConnectWallet = async () => {
     if (wallet.isConnected) {

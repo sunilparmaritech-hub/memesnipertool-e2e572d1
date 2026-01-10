@@ -13,6 +13,7 @@ export interface TokenData {
   buyerPosition: number | null;
   riskScore: number;
   categories: string[];
+  priceUsd?: number;
 }
 
 export interface SnipeDecision {
@@ -26,19 +27,30 @@ export interface SnipeDecision {
   } | null;
 }
 
+export interface ExecutedTrade {
+  token: string;
+  txId?: string;
+  error?: string;
+  positionId?: string;
+}
+
 export interface AutoSniperResult {
   decisions: SnipeDecision[];
-  executedTrades: { token: string; txId?: string; error?: string }[];
+  executedTrades: ExecutedTrade[];
   summary: {
     total: number;
     approved: number;
     rejected: number;
     executed: number;
+    openPositions: number;
+    maxPositions: number;
   };
   settings: {
     minLiquidity: number;
     priority: string;
     categoryFilters: string[];
+    profitTakePercent: number;
+    stopLossPercent: number;
   };
   timestamp: string;
 }
@@ -51,7 +63,8 @@ export function useAutoSniper() {
 
   const evaluateTokens = useCallback(async (
     tokens: TokenData[],
-    executeOnApproval: boolean = false
+    executeOnApproval: boolean = false,
+    onTradeExecuted?: () => void
   ): Promise<AutoSniperResult | null> => {
     setLoading(true);
     setError(null);
@@ -61,6 +74,8 @@ export function useAutoSniper() {
       if (!session) {
         throw new Error('Please sign in to use the auto-sniper');
       }
+
+      console.log(`Evaluating ${tokens.length} tokens, executeOnApproval: ${executeOnApproval}`);
 
       const { data, error: fnError } = await supabase.functions.invoke('auto-sniper', {
         body: { tokens, executeOnApproval },
@@ -79,13 +94,18 @@ export function useAutoSniper() {
       
       if (executeOnApproval && executed > 0) {
         toast({
-          title: 'Trades Executed',
-          description: `${executed} trade(s) sent to execution API`,
+          title: '🎯 Trades Executed!',
+          description: `${executed} position(s) opened. View in Active Trades.`,
         });
-      } else if (approved > 0) {
+        
+        // Notify parent to refresh positions
+        if (onTradeExecuted) {
+          onTradeExecuted();
+        }
+      } else if (approved > 0 && !executeOnApproval) {
         toast({
           title: 'Snipe Opportunities Found',
-          description: `${approved} token(s) passed all rules`,
+          description: `${approved} token(s) passed all rules. Enable auto-trading to execute.`,
         });
       }
 
@@ -93,6 +113,7 @@ export function useAutoSniper() {
     } catch (err: any) {
       const message = err.message || 'Failed to evaluate tokens';
       setError(message);
+      console.error('Auto-sniper error:', err);
       toast({
         title: 'Auto-Sniper Error',
         description: message,

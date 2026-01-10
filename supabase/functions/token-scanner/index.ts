@@ -122,15 +122,18 @@ serve(async (req) => {
     const getApiConfig = (type: string): ApiConfig | undefined => 
       apiConfigs?.find((c: ApiConfig) => c.api_type === type && c.is_enabled);
 
-    // Parallel API fetching for better performance
-    const apiPromises: Promise<void>[] = [];
-    if (dexScreenerConfig) {
-      // Use the search endpoint which returns pairs array reliably
+    // DexScreener fetch function
+    const fetchDexScreener = async () => {
+      const dexScreenerConfig = getApiConfig('dexscreener');
+      if (!dexScreenerConfig) return;
+
       const endpoint = `${dexScreenerConfig.base_url}/latest/dex/search?q=solana`;
       const startTime = Date.now();
       try {
         console.log('Fetching from DexScreener...');
-        const response = await fetch(endpoint);
+        const response = await fetch(endpoint, {
+          signal: AbortSignal.timeout(10000),
+        });
         const responseTime = Date.now() - startTime;
         
         if (response.ok) {
@@ -144,7 +147,6 @@ serve(async (req) => {
           } else if (data && Array.isArray(data.pairs)) {
             pairs = data.pairs;
           } else if (data && typeof data === 'object') {
-            // Try to find any array in the response
             const arrayKey = Object.keys(data).find(key => Array.isArray(data[key]));
             if (arrayKey) {
               pairs = data[arrayKey];
@@ -194,7 +196,7 @@ serve(async (req) => {
         }
       } catch (e: any) {
         const responseTime = Date.now() - startTime;
-        const errorMsg = e.message || 'Network error';
+        const errorMsg = e.name === 'TimeoutError' ? 'Request timeout' : (e.message || 'Network error');
         await logApiHealth('dexscreener', endpoint, responseTime, 0, false, errorMsg);
         console.error('DexScreener error:', e);
         errors.push(`DexScreener: ${errorMsg}`);
@@ -206,8 +208,7 @@ serve(async (req) => {
           timestamp: new Date().toISOString(),
         });
       }
-    }
-
+    };
 
     // GeckoTerminal fetch function
     const fetchGeckoTerminal = async () => {
@@ -284,7 +285,6 @@ serve(async (req) => {
         });
       }
     };
-
 
     // Birdeye fetch function
     const fetchBirdeye = async () => {
@@ -465,7 +465,7 @@ serve(async (req) => {
     );
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : 'Internal server error';
-    console.error('Scanner error:', error);
+    console.error('Token scanner error:', error);
     return new Response(
       JSON.stringify({ error: errorMessage }),
       {

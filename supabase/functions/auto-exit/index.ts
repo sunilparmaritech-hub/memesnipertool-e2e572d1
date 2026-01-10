@@ -52,6 +52,24 @@ interface ExitResult {
   error?: string;
 }
 
+// Get API key from environment (secure) with fallback to database (legacy)
+function getApiKey(apiType: string, dbApiKey: string | null): string | null {
+  // Priority 1: Environment variable (Supabase Secrets - secure)
+  const envKey = Deno.env.get(`${apiType.toUpperCase()}_API_KEY`);
+  if (envKey) {
+    console.log(`Using secure environment variable for ${apiType}`);
+    return envKey;
+  }
+  
+  // Priority 2: Database fallback (legacy - less secure)
+  if (dbApiKey) {
+    console.log(`Warning: Using database-stored API key for ${apiType} - migrate to Supabase Secrets`);
+    return dbApiKey;
+  }
+  
+  return null;
+}
+
 // Fetch current price from external APIs
 async function fetchCurrentPrice(
   tokenAddress: string,
@@ -92,21 +110,24 @@ async function fetchCurrentPrice(
     }
   }
 
-  // Try Birdeye (Solana)
+  // Try Birdeye (Solana) - uses secure API key retrieval
   const birdeyeConfig = apiConfigs.find(c => c.api_type === 'birdeye' && c.is_enabled);
-  if (birdeyeConfig && chain === 'solana' && birdeyeConfig.api_key_encrypted) {
-    try {
-      const response = await fetch(`${birdeyeConfig.base_url}/defi/price?address=${tokenAddress}`, {
-        headers: { 'X-API-KEY': birdeyeConfig.api_key_encrypted },
-      });
-      if (response.ok) {
-        const data = await response.json();
-        if (data.data?.value) {
-          return parseFloat(data.data.value);
+  if (birdeyeConfig && chain === 'solana') {
+    const apiKey = getApiKey('birdeye', birdeyeConfig.api_key_encrypted);
+    if (apiKey) {
+      try {
+        const response = await fetch(`${birdeyeConfig.base_url}/defi/price?address=${tokenAddress}`, {
+          headers: { 'X-API-KEY': apiKey },
+        });
+        if (response.ok) {
+          const data = await response.json();
+          if (data.data?.value) {
+            return parseFloat(data.data.value);
+          }
         }
+      } catch (e) {
+        console.error('Birdeye price fetch error:', e);
       }
-    } catch (e) {
-      console.error('Birdeye price fetch error:', e);
     }
   }
 
@@ -136,8 +157,9 @@ async function executeSell(
       'Content-Type': 'application/json',
     };
     
-    if (tradeExecutionConfig.api_key_encrypted) {
-      headers['Authorization'] = `Bearer ${tradeExecutionConfig.api_key_encrypted}`;
+    const apiKey = getApiKey('trade_execution', tradeExecutionConfig.api_key_encrypted);
+    if (apiKey) {
+      headers['Authorization'] = `Bearer ${apiKey}`;
     }
 
     const response = await fetch(`${tradeExecutionConfig.base_url}/trade/execute`, {

@@ -63,6 +63,24 @@ interface RiskCheckResult {
   riskScore: number;
 }
 
+// Get API key from environment (secure) with fallback to database (legacy)
+function getApiKey(apiType: string, dbApiKey: string | null): string | null {
+  // Priority 1: Environment variable (Supabase Secrets - secure)
+  const envKey = Deno.env.get(`${apiType.toUpperCase()}_API_KEY`);
+  if (envKey) {
+    console.log(`Using secure environment variable for ${apiType}`);
+    return envKey;
+  }
+  
+  // Priority 2: Database fallback (legacy - less secure)
+  if (dbApiKey) {
+    console.log(`Warning: Using database-stored API key for ${apiType} - migrate to Supabase Secrets`);
+    return dbApiKey;
+  }
+  
+  return null;
+}
+
 // Rule 1: Check if liquidity meets user's minimum setting
 function checkLiquidity(token: TokenData, settings: UserSettings): { passed: boolean; reason: string } {
   const passed = token.liquidity >= settings.min_liquidity;

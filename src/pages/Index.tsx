@@ -6,13 +6,11 @@ import ActiveTradesCard from "@/components/dashboard/ActiveTradesCard";
 import MarketOverview from "@/components/dashboard/MarketOverview";
 import QuickActions from "@/components/dashboard/QuickActions";
 import RecentActivity from "@/components/dashboard/RecentActivity";
-import BotStatusCard from "@/components/dashboard/BotStatusCard";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { usePositions } from "@/hooks/usePositions";
 import { useWallet } from "@/hooks/useWallet";
-import { useToast } from "@/hooks/use-toast";
 import { useAppMode } from "@/contexts/AppModeContext";
 import { PortfolioChart } from "@/components/charts/PriceCharts";
 import { TrendingUp, ArrowUpRight, FlaskConical } from "lucide-react";
@@ -43,11 +41,9 @@ const generatePortfolioData = () => {
 const Index = () => {
   const { openPositions, closedPositions, loading: positionsLoading } = usePositions();
   const { wallet } = useWallet();
-  const { toast } = useToast();
   const { isDemo } = useAppMode();
   
   const [portfolioData] = useState(generatePortfolioData);
-  const [isBotActive, setIsBotActive] = useState(false);
 
   const totalValue = useMemo(() => 
     openPositions.reduce((sum, p) => sum + p.current_value, 0), 
@@ -69,16 +65,6 @@ const Index = () => {
     const current = portfolioData[portfolioData.length - 1]?.value || 1000;
     return ((current - initial) / initial) * 100;
   }, [portfolioData]);
-
-  const handleBotToggle = (active: boolean) => {
-    setIsBotActive(active);
-    toast({
-      title: active ? "Bot Activated" : "Bot Deactivated",
-      description: active 
-        ? (isDemo ? "Liquidity bot is running in demo mode (simulation)" : "Liquidity bot is now scanning for opportunities")
-        : "Automatic trading has been paused",
-    });
-  };
 
   return (
     <AppLayout>
@@ -164,14 +150,6 @@ const Index = () => {
 
           {/* Right Column */}
           <div className="space-y-6">
-            {/* Bot Status */}
-            <BotStatusCard 
-              isActive={isBotActive}
-              onToggle={handleBotToggle}
-              tokensScanned={1247}
-              tradesExecuted={12}
-            />
-            
             {/* Quick Actions */}
             <QuickActions />
             

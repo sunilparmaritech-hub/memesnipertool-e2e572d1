@@ -55,7 +55,7 @@ export default function LiquidityBotPanel({
   ));
 
   return (
-    <div className="bg-card/80 backdrop-blur-sm rounded-xl border border-border/50 overflow-hidden flex flex-col h-[640px] min-h-[640px] max-h-[640px]">
+    <div className="bg-card/80 backdrop-blur-sm rounded-xl border border-border/50 overflow-hidden flex flex-col">
       {/* Header - Fixed height */}
       <div className="p-4 border-b border-border/50 shrink-0">
         <div className="flex items-center justify-between mb-4">
@@ -110,15 +110,15 @@ export default function LiquidityBotPanel({
       </div>
       
       {/* Settings */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-5">
+      <div className="p-4 space-y-4">
         {/* Min Liquidity */}
-        <div className="p-4 bg-secondary/30 rounded-xl">
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2 text-sm">
-              <DollarSign className="w-4 h-4 text-primary" />
+        <div className="p-3 bg-secondary/30 rounded-xl">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2 text-xs">
+              <DollarSign className="w-3.5 h-3.5 text-primary" />
               <span className="text-muted-foreground font-medium">Min Liquidity (SOL)</span>
             </div>
-            <span className="text-primary font-bold text-lg">{settings.min_liquidity}</span>
+            <span className="text-primary font-bold">{settings.min_liquidity}</span>
           </div>
           <Slider
             value={[settings.min_liquidity]}
@@ -128,24 +128,20 @@ export default function LiquidityBotPanel({
             step={10}
             className="[&_[role=slider]]:bg-primary [&_[role=slider]]:border-primary"
           />
-          <div className="flex justify-between text-xs text-muted-foreground mt-2">
-            <span>50 SOL</span>
-            <span>1000 SOL</span>
-          </div>
         </div>
         
         {/* Target Buyer Position */}
-        <div className="p-4 bg-secondary/30 rounded-xl">
-          <div className="flex items-center gap-2 text-sm text-muted-foreground font-medium mb-3">
-            <Target className="w-4 h-4 text-primary" />
-            Target Buyer Position
+        <div className="p-3 bg-secondary/30 rounded-xl">
+          <div className="flex items-center gap-2 text-xs text-muted-foreground font-medium mb-2">
+            <Target className="w-3.5 h-3.5 text-primary" />
+            Target Buyer Position (Momentum Entry)
           </div>
-          <div className="grid grid-cols-5 gap-2">
+          <div className="grid grid-cols-5 gap-1.5">
             {[1, 2, 3, 4, 5].map((pos) => (
               <button
                 key={pos}
                 onClick={() => setTargetBuyerPosition(pos)}
-                className={`py-2.5 rounded-lg font-semibold text-sm transition-all ${
+                className={`py-2 rounded-lg font-semibold text-xs transition-all ${
                   targetBuyerPosition === pos
                     ? 'bg-primary text-primary-foreground shadow-lg shadow-primary/25'
                     : 'bg-secondary text-muted-foreground hover:bg-secondary/80 hover:text-foreground'
@@ -155,20 +151,17 @@ export default function LiquidityBotPanel({
               </button>
             ))}
           </div>
-          <p className="text-xs text-muted-foreground mt-3 text-center">
-            Bot enters when becoming buyer #{targetBuyerPosition}
-          </p>
         </div>
         
         {/* Take Profit & Stop Loss */}
-        <div className="grid grid-cols-2 gap-3">
-          <div className="p-4 bg-success/10 rounded-xl border border-success/20">
-            <div className="flex items-center justify-between mb-3">
-              <div className="flex items-center gap-1.5 text-sm">
-                <TrendingUp className="w-4 h-4 text-success" />
-                <span className="text-muted-foreground font-medium">Take Profit</span>
+        <div className="grid grid-cols-2 gap-2">
+          <div className="p-3 bg-success/10 rounded-xl border border-success/20">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-1 text-xs">
+                <TrendingUp className="w-3.5 h-3.5 text-success" />
+                <span className="text-muted-foreground font-medium">TP</span>
               </div>
-              <span className="text-success font-bold text-lg">{settings.profit_take_percentage}%</span>
+              <span className="text-success font-bold">{settings.profit_take_percentage}%</span>
             </div>
             <Slider
               value={[settings.profit_take_percentage]}
@@ -179,13 +172,13 @@ export default function LiquidityBotPanel({
               className="[&_[role=slider]]:bg-success [&_[role=slider]]:border-success"
             />
           </div>
-          <div className="p-4 bg-destructive/10 rounded-xl border border-destructive/20">
-            <div className="flex items-center justify-between mb-3">
-              <div className="flex items-center gap-1.5 text-sm">
-                <TrendingDown className="w-4 h-4 text-destructive" />
-                <span className="text-muted-foreground font-medium">Stop Loss</span>
+          <div className="p-3 bg-destructive/10 rounded-xl border border-destructive/20">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-1 text-xs">
+                <TrendingDown className="w-3.5 h-3.5 text-destructive" />
+                <span className="text-muted-foreground font-medium">SL</span>
               </div>
-              <span className="text-destructive font-bold text-lg">{settings.stop_loss_percentage}%</span>
+              <span className="text-destructive font-bold">{settings.stop_loss_percentage}%</span>
             </div>
             <Slider
               value={[settings.stop_loss_percentage]}
@@ -198,57 +191,60 @@ export default function LiquidityBotPanel({
           </div>
         </div>
         
-        {/* Buy Amount */}
-        <div className="p-4 bg-secondary/30 rounded-xl">
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2 text-sm">
-              <Zap className="w-4 h-4 text-warning" />
-              <span className="text-muted-foreground font-medium">Buy Amount (SOL)</span>
+        {/* Buy Amount & Stats */}
+        <div className="grid grid-cols-2 gap-2">
+          <div className="p-3 bg-secondary/30 rounded-xl">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-1 text-xs">
+                <Zap className="w-3.5 h-3.5 text-warning" />
+                <span className="text-muted-foreground font-medium">Buy (SOL)</span>
+              </div>
+              <span className="text-foreground font-bold">{settings.trade_amount}</span>
             </div>
-            <span className="text-foreground font-bold text-lg">{settings.trade_amount}</span>
+            <Slider
+              value={[settings.trade_amount * 10]}
+              onValueChange={([v]) => onUpdateField('trade_amount', v / 10)}
+              min={1}
+              max={50}
+              step={1}
+              className="[&_[role=slider]]:bg-warning [&_[role=slider]]:border-warning"
+            />
           </div>
-          <Slider
-            value={[settings.trade_amount * 10]}
-            onValueChange={([v]) => onUpdateField('trade_amount', v / 10)}
-            min={1}
-            max={50}
-            step={1}
-            className="[&_[role=slider]]:bg-warning [&_[role=slider]]:border-warning"
-          />
-        </div>
-        
-        {/* Stats Row */}
-        <div className="grid grid-cols-3 gap-2">
-          <div className="bg-secondary/40 rounded-xl p-3 text-center">
-            <div className="text-primary font-bold text-lg">5%</div>
-            <div className="text-xs text-muted-foreground">Slippage</div>
-          </div>
-          <div className="bg-secondary/40 rounded-xl p-3 text-center">
-            <div className="text-primary font-bold text-lg">5m</div>
-            <div className="text-xs text-muted-foreground">Max Age</div>
-          </div>
-          <div className="bg-secondary/40 rounded-xl p-3 text-center">
-            <div className="text-primary font-bold text-lg">{settings.max_concurrent_trades}</div>
-            <div className="text-xs text-muted-foreground">Max Trades</div>
+          <div className="p-3 bg-secondary/30 rounded-xl">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-1 text-xs">
+                <Users className="w-3.5 h-3.5 text-primary" />
+                <span className="text-muted-foreground font-medium">Max Trades</span>
+              </div>
+              <span className="text-foreground font-bold">{settings.max_concurrent_trades}</span>
+            </div>
+            <Slider
+              value={[settings.max_concurrent_trades]}
+              onValueChange={([v]) => onUpdateField('max_concurrent_trades', v)}
+              min={1}
+              max={10}
+              step={1}
+              className="[&_[role=slider]]:bg-primary [&_[role=slider]]:border-primary"
+            />
           </div>
         </div>
       </div>
       
-      {/* Footer - Fixed height */}
-      <div className="border-t border-border/50 p-4 shrink-0 mt-auto">
+      {/* Footer */}
+      <div className="border-t border-border/50 p-3 shrink-0">
         {/* Safety Score */}
-        <div className="flex items-center gap-3 mb-4">
-          <div className="w-10 h-10 rounded-xl bg-success/10 flex items-center justify-center border border-success/20">
-            <Shield className="w-5 h-5 text-success" />
+        <div className="flex items-center gap-2 mb-3">
+          <div className="w-8 h-8 rounded-lg bg-success/10 flex items-center justify-center border border-success/20">
+            <Shield className="w-4 h-4 text-success" />
           </div>
           <div className="flex-1">
-            <div className="flex items-center justify-between mb-1">
-              <h3 className="font-semibold text-foreground text-sm">Safety Score</h3>
-              <span className={`font-bold ${safetyScore >= 70 ? 'text-success' : safetyScore >= 40 ? 'text-warning' : 'text-destructive'}`}>
+            <div className="flex items-center justify-between mb-0.5">
+              <span className="font-medium text-foreground text-xs">Safety</span>
+              <span className={`font-bold text-sm ${safetyScore >= 70 ? 'text-success' : safetyScore >= 40 ? 'text-warning' : 'text-destructive'}`}>
                 {safetyScore}%
               </span>
             </div>
-            <div className="h-2 bg-secondary rounded-full overflow-hidden">
+            <div className="h-1.5 bg-secondary rounded-full overflow-hidden">
               <div 
                 className={`h-full rounded-full transition-all duration-500 ${
                   safetyScore >= 70 ? 'bg-success' : safetyScore >= 40 ? 'bg-warning' : 'bg-destructive'
@@ -261,7 +257,7 @@ export default function LiquidityBotPanel({
         
         {/* Save Button */}
         <Button 
-          className="w-full h-12" 
+          className="w-full h-10" 
           variant="glow"
           onClick={onSave}
           disabled={saving}

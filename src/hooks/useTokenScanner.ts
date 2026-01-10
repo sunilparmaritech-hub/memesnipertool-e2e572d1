@@ -94,6 +94,10 @@ export function useTokenScanner() {
   const scanInProgress = useRef(false);
   // Ref to store interval for tick-by-tick loading
   const tickIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  // Rate limiting
+  const lastScanTimeRef = useRef<number>(0);
+  const scanCountRef = useRef<number>(0);
+  const rateLimitResetRef = useRef<NodeJS.Timeout | null>(null);
 
   // Add tokens one by one with delay (tick-by-tick)
   const addTokensIncrementally = useCallback((newTokens: ScannedToken[], onComplete?: () => void) => {
@@ -135,6 +139,29 @@ export function useTokenScanner() {
     if (scanInProgress.current) {
       console.log('Scan already in progress, skipping...');
       return null;
+    }
+
+    // Rate limiting: max 10 scans per minute for live mode
+    if (isLive) {
+      const now = Date.now();
+      const oneMinuteAgo = now - 60000;
+      
+      // Reset counter every minute
+      if (lastScanTimeRef.current < oneMinuteAgo) {
+        scanCountRef.current = 0;
+      }
+      
+      if (scanCountRef.current >= 10) {
+        toast({
+          title: 'Rate Limited',
+          description: 'Too many scans. Please wait a moment before scanning again.',
+          variant: 'destructive',
+        });
+        return null;
+      }
+      
+      scanCountRef.current++;
+      lastScanTimeRef.current = now;
     }
 
     scanInProgress.current = true;
@@ -240,6 +267,9 @@ export function useTokenScanner() {
   const cleanup = useCallback(() => {
     if (tickIntervalRef.current) {
       clearInterval(tickIntervalRef.current);
+    }
+    if (rateLimitResetRef.current) {
+      clearTimeout(rateLimitResetRef.current);
     }
   }, []);
 

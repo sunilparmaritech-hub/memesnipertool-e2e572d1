@@ -6,6 +6,8 @@ import PerformancePanel from "@/components/scanner/PerformancePanel";
 import ActivePositionsPanel from "@/components/scanner/ActivePositionsPanel";
 import StatsCard from "@/components/StatsCard";
 import { PortfolioChart } from "@/components/charts/PriceCharts";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { useTokenScanner } from "@/hooks/useTokenScanner";
@@ -69,6 +71,11 @@ const Scanner = () => {
   const [scanSpeed, setScanSpeed] = useState<'slow' | 'normal' | 'fast'>('normal');
   const [isPaused, setIsPaused] = useState(false);
   const [showApiErrors, setShowApiErrors] = useState(true);
+  
+  // Confirmation dialogs
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [showBotActivateConfirm, setShowBotActivateConfirm] = useState(false);
+  const [pendingBotAction, setPendingBotAction] = useState<boolean | null>(null);
   
   // Refs for tracking
   const lastSniperRunRef = useRef<number>(0);
@@ -353,13 +360,37 @@ const Scanner = () => {
     });
   };
   
-  // Reset demo balance handler
+  // Reset demo balance handler - with confirmation
   const handleResetDemo = () => {
+    setShowResetConfirm(true);
+  };
+
+  const confirmResetDemo = () => {
     resetDemoPortfolio();
+    setShowResetConfirm(false);
     toast({
       title: "Demo Reset",
       description: "Demo balance reset to 5,000 SOL. All positions cleared.",
     });
+  };
+
+  // Bot activation with confirmation for live mode
+  const handleToggleBotActiveWithConfirm = (active: boolean) => {
+    if (active && !isDemo) {
+      // Show confirmation for live mode activation
+      setPendingBotAction(active);
+      setShowBotActivateConfirm(true);
+    } else {
+      handleToggleBotActive(active);
+    }
+  };
+
+  const confirmBotActivation = () => {
+    if (pendingBotAction !== null) {
+      handleToggleBotActive(pendingBotAction);
+      setPendingBotAction(null);
+    }
+    setShowBotActivateConfirm(false);
   };
 
   // Win rate calculation
@@ -368,7 +399,28 @@ const Scanner = () => {
     : 0;
 
   return (
+    <ErrorBoundary>
     <div className="min-h-screen bg-background">
+      {/* Confirmation Dialogs */}
+      <ConfirmDialog
+        open={showResetConfirm}
+        onOpenChange={setShowResetConfirm}
+        title="Reset Demo Portfolio?"
+        description="This will reset your demo balance to 5,000 SOL and close all demo positions. This action cannot be undone."
+        confirmLabel="Reset Demo"
+        variant="warning"
+        onConfirm={confirmResetDemo}
+      />
+      
+      <ConfirmDialog
+        open={showBotActivateConfirm}
+        onOpenChange={setShowBotActivateConfirm}
+        title="Activate Live Trading Bot?"
+        description="This will enable automatic trading with real funds from your connected wallet. The bot will execute trades based on your configured settings. Make sure you understand the risks before proceeding."
+        confirmLabel="Activate Bot"
+        variant="destructive"
+        onConfirm={confirmBotActivation}
+      />
       <TradingHeader
         walletConnected={wallet.isConnected}
         walletAddress={wallet.address || undefined}
@@ -547,7 +599,8 @@ const Scanner = () => {
                 onUpdateField={updateField}
                 onSave={handleSaveSettings}
                 isActive={isBotActive}
-                onToggleActive={handleToggleBotActive}
+                onToggleActive={handleToggleBotActiveWithConfirm}
+                isDemo={isDemo}
               />
 
               {/* Performance Panel - use demo stats in demo mode */}
@@ -569,6 +622,7 @@ const Scanner = () => {
         </div>
       </main>
     </div>
+    </ErrorBoundary>
   );
 };
 

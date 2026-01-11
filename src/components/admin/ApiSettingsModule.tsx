@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -10,7 +10,8 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { useApiConfigurations, ApiConfiguration, ApiType, ApiStatus } from '@/hooks/useApiConfigurations';
-import { Plus, Pencil, Trash2, Eye, EyeOff, RefreshCw, Loader2, HelpCircle, CheckCircle2, AlertCircle, Info } from 'lucide-react';
+import { useApiSecrets } from '@/hooks/useApiSecrets';
+import { Plus, Pencil, Trash2, RefreshCw, Loader2, HelpCircle, CheckCircle2, AlertCircle, Info, Key, ShieldCheck, ShieldAlert } from 'lucide-react';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 
 // API Documentation with requirement levels, help notes, and error solutions
@@ -21,6 +22,7 @@ const API_INFO: Record<ApiType, {
   helpNotes: string;
   defaultUrl: string;
   requiresKey: boolean;
+  secretName: string;
   alternatives?: string[];
   commonErrors: { pattern: string; solution: string }[];
 }> = {
@@ -31,6 +33,7 @@ const API_INFO: Record<ApiType, {
     helpNotes: 'Free tier available. No API key required for basic usage. Rate limit: 300 requests/min. Get from: https://docs.dexscreener.com',
     defaultUrl: 'https://api.dexscreener.com',
     requiresKey: false,
+    secretName: 'DEXSCREENER_API_KEY',
     commonErrors: [
       { pattern: 'pairs.slice is not a function', solution: 'API response format changed. The scanner has been updated to handle different response structures. Try running a scan again.' },
       { pattern: 'rate limit', solution: 'Reduce scan frequency or wait a few minutes. DexScreener allows 300 requests/min.' },
@@ -45,6 +48,7 @@ const API_INFO: Record<ApiType, {
     helpNotes: 'Free API, no key required. Good backup for DexScreener. Rate limit: 30 requests/min. Docs: https://www.geckoterminal.com/dex-api',
     defaultUrl: 'https://api.geckoterminal.com',
     requiresKey: false,
+    secretName: 'GECKOTERMINAL_API_KEY',
     alternatives: ['dexscreener'],
     commonErrors: [
       { pattern: '429', solution: 'Rate limited. GeckoTerminal has a 30 req/min limit. Wait before retrying.' },
@@ -58,6 +62,7 @@ const API_INFO: Record<ApiType, {
     helpNotes: 'API key required. Free tier: 100 req/min. Get your key at: https://birdeye.so/api (requires Solana wallet to sign up)',
     defaultUrl: 'https://public-api.birdeye.so',
     requiresKey: true,
+    secretName: 'BIRDEYE_API_KEY',
     commonErrors: [
       { pattern: '401', solution: 'Invalid or missing API key. Get a free key at birdeye.so/api and configure it.' },
       { pattern: '403', solution: 'API key expired or revoked. Generate a new key at birdeye.so/api.' },
@@ -71,6 +76,7 @@ const API_INFO: Record<ApiType, {
     helpNotes: 'Paid API via RapidAPI. Subscribe at: https://rapidapi.com/dextools. Use X-RapidAPI-Key header.',
     defaultUrl: 'https://public-api.dextools.io',
     requiresKey: true,
+    secretName: 'DEXTOOLS_API_KEY',
     alternatives: ['dexscreener', 'geckoterminal'],
     commonErrors: [
       { pattern: '401', solution: 'Invalid RapidAPI key. Subscribe at rapidapi.com/dextools and add your key.' },
@@ -84,6 +90,7 @@ const API_INFO: Record<ApiType, {
     helpNotes: 'Free API, no key needed. Essential for risk management. Docs: https://honeypot.is/docs',
     defaultUrl: 'https://api.honeypot.is',
     requiresKey: false,
+    secretName: 'HONEYPOT_API_KEY',
     commonErrors: [
       { pattern: 'timeout', solution: 'Honeypot API can be slow. The scanner will continue with other tokens.' },
       { pattern: '503', solution: 'Service temporarily unavailable. Token risk scores may be estimated.' },
@@ -96,6 +103,7 @@ const API_INFO: Record<ApiType, {
     helpNotes: 'Optional but recommended. Team Finance API key may be needed for full access. Alternative: Check on-chain directly.',
     defaultUrl: 'https://api.team.finance',
     requiresKey: true,
+    secretName: 'LIQUIDITY_LOCK_API_KEY',
     alternatives: ['On-chain verification'],
     commonErrors: [
       { pattern: '401', solution: 'API key may be required for Team Finance. Consider on-chain verification as alternative.' },
@@ -108,6 +116,7 @@ const API_INFO: Record<ApiType, {
     helpNotes: 'Free API, no key needed for quotes. For ultra-fast trades, get referral key at: https://station.jup.ag',
     defaultUrl: 'https://api.jup.ag',
     requiresKey: false,
+    secretName: 'TRADE_EXECUTION_API_KEY',
     commonErrors: [
       { pattern: 'dns error', solution: 'DNS resolution failed. This is a network issue. The endpoint URL has been updated to use api.jup.ag which is more reliable.' },
       { pattern: 'failed to lookup', solution: 'Network connectivity issue. Ensure the base URL is set to https://api.jup.ag' },
@@ -122,25 +131,12 @@ const API_INFO: Record<ApiType, {
     helpNotes: 'Free public RPC has rate limits. For production, use: Helius, QuickNode, or Alchemy. Get free RPC at: https://helius.xyz',
     defaultUrl: 'https://api.mainnet-beta.solana.com',
     requiresKey: false,
+    secretName: 'RPC_PROVIDER_API_KEY',
     commonErrors: [
       { pattern: '429', solution: 'Public RPC rate limited. Consider using Helius or QuickNode for better limits.' },
       { pattern: 'timeout', solution: 'RPC node is slow. Try a different provider like helius.xyz or quicknode.com.' },
     ],
   },
-};
-
-// Helper to find error solution
-const findErrorSolution = (apiType: ApiType, errorMessage: string): string | null => {
-  const apiInfo = API_INFO[apiType];
-  if (!apiInfo) return null;
-  
-  const lowerError = errorMessage.toLowerCase();
-  for (const err of apiInfo.commonErrors) {
-    if (lowerError.includes(err.pattern.toLowerCase())) {
-      return err.solution;
-    }
-  }
-  return null;
 };
 
 const STATUS_COLORS: Record<ApiStatus, string> = {
@@ -154,7 +150,6 @@ interface ApiFormData {
   api_type: ApiType;
   api_name: string;
   base_url: string;
-  api_key_encrypted: string;
   is_enabled: boolean;
   rate_limit_per_minute: number;
   status: ApiStatus;
@@ -164,7 +159,6 @@ const defaultFormData: ApiFormData = {
   api_type: 'dexscreener',
   api_name: '',
   base_url: '',
-  api_key_encrypted: '',
   is_enabled: true,
   rate_limit_per_minute: 60,
   status: 'inactive',
@@ -172,11 +166,12 @@ const defaultFormData: ApiFormData = {
 
 export function ApiSettingsModule() {
   const { configurations, loading, addConfiguration, updateConfiguration, deleteConfiguration, toggleEnabled, fetchConfigurations } = useApiConfigurations();
+  const { secretStatus, loading: secretsLoading, fetchSecretStatus, validateSecret } = useApiSecrets();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingConfig, setEditingConfig] = useState<ApiConfiguration | null>(null);
   const [formData, setFormData] = useState<ApiFormData>(defaultFormData);
-  const [showApiKeys, setShowApiKeys] = useState<Record<string, boolean>>({});
   const [isSaving, setIsSaving] = useState(false);
+  const [validatingSecrets, setValidatingSecrets] = useState<Record<string, boolean>>({});
 
   const handleOpenDialog = (config?: ApiConfiguration) => {
     if (config) {
@@ -185,7 +180,6 @@ export function ApiSettingsModule() {
         api_type: config.api_type,
         api_name: config.api_name,
         base_url: config.base_url,
-        api_key_encrypted: config.api_key_encrypted || '',
         is_enabled: config.is_enabled,
         rate_limit_per_minute: config.rate_limit_per_minute,
         status: config.status,
@@ -210,10 +204,16 @@ export function ApiSettingsModule() {
   const handleSave = async () => {
     setIsSaving(true);
     try {
+      // Don't include API key in database - it's stored in secrets
+      const saveData = {
+        ...formData,
+        api_key_encrypted: null, // Clear any existing key - use secrets instead
+      };
+
       if (editingConfig) {
-        await updateConfiguration(editingConfig.id, formData);
+        await updateConfiguration(editingConfig.id, saveData);
       } else {
-        await addConfiguration(formData);
+        await addConfiguration(saveData);
       }
       setIsDialogOpen(false);
       setFormData(defaultFormData);
@@ -229,14 +229,13 @@ export function ApiSettingsModule() {
     }
   };
 
-  const toggleShowApiKey = (id: string) => {
-    setShowApiKeys(prev => ({ ...prev, [id]: !prev[id] }));
-  };
-
-  const maskApiKey = (key: string | null) => {
-    if (!key) return '—';
-    if (key.length <= 8) return '••••••••';
-    return key.substring(0, 4) + '••••••••' + key.substring(key.length - 4);
+  const handleValidateSecret = async (apiType: ApiType) => {
+    setValidatingSecrets(prev => ({ ...prev, [apiType]: true }));
+    try {
+      await validateSecret(apiType);
+    } finally {
+      setValidatingSecrets(prev => ({ ...prev, [apiType]: false }));
+    }
   };
 
   // Check which required APIs are configured
@@ -244,7 +243,12 @@ export function ApiSettingsModule() {
   const configuredTypes = configurations.map(c => c.api_type);
   const missingRequired = requiredApis.filter(([type]) => !configuredTypes.includes(type as ApiType));
 
-  if (loading) {
+  // Check which required APIs need API keys but don't have secrets configured
+  const missingSecrets = Object.entries(API_INFO)
+    .filter(([type, info]) => info.requiresKey && !secretStatus[type]?.configured)
+    .map(([type, info]) => ({ type, info }));
+
+  if (loading || secretsLoading) {
     return (
       <div className="flex items-center justify-center py-12">
         <Loader2 className="h-8 w-8 animate-spin text-primary" />
@@ -261,7 +265,7 @@ export function ApiSettingsModule() {
             <p className="text-muted-foreground">Manage external API configurations for the application</p>
           </div>
           <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={() => fetchConfigurations()}>
+            <Button variant="outline" size="sm" onClick={() => { fetchConfigurations(); fetchSecretStatus(); }}>
               <RefreshCw className="h-4 w-4 mr-2" />
               Refresh
             </Button>
@@ -276,7 +280,7 @@ export function ApiSettingsModule() {
                 <DialogHeader>
                   <DialogTitle>{editingConfig ? 'Edit API Configuration' : 'Add New API Configuration'}</DialogTitle>
                   <DialogDescription>
-                    Configure the API settings. API keys are stored securely.
+                    Configure the API settings. API keys are stored securely as secrets.
                   </DialogDescription>
                 </DialogHeader>
                 <div className="grid gap-4 py-4">
@@ -323,10 +327,12 @@ export function ApiSettingsModule() {
                             <p className="text-foreground font-medium">{API_INFO[formData.api_type].description}</p>
                             <p className="text-muted-foreground mt-1">{API_INFO[formData.api_type].helpNotes}</p>
                             {API_INFO[formData.api_type].requiresKey && (
-                              <p className="text-yellow-500 mt-1 flex items-center gap-1">
-                                <AlertCircle className="h-3 w-3" />
-                                API key is required for this service
-                              </p>
+                              <div className="mt-2 flex items-center gap-2">
+                                <Key className="h-4 w-4 text-yellow-500" />
+                                <span className="text-yellow-500 text-xs">
+                                  API key required - Configure via Secrets ({API_INFO[formData.api_type].secretName})
+                                </span>
+                              </div>
                             )}
                           </div>
                         </div>
@@ -362,23 +368,6 @@ export function ApiSettingsModule() {
                     />
                   </div>
                   <div className="grid gap-2">
-                    <div className="flex items-center gap-2">
-                      <Label htmlFor="api_key">API Key</Label>
-                      {API_INFO[formData.api_type]?.requiresKey ? (
-                        <Badge variant="destructive" className="text-[10px]">Required</Badge>
-                      ) : (
-                        <Badge variant="secondary" className="text-[10px]">Optional</Badge>
-                      )}
-                    </div>
-                    <Input
-                      id="api_key"
-                      type="password"
-                      value={formData.api_key_encrypted}
-                      onChange={(e) => setFormData(prev => ({ ...prev, api_key_encrypted: e.target.value }))}
-                      placeholder={API_INFO[formData.api_type]?.requiresKey ? "Enter API key (required)" : "Enter API key (optional)"}
-                    />
-                  </div>
-                  <div className="grid gap-2">
                     <Label htmlFor="rate_limit">Rate Limit (per minute)</Label>
                     <Input
                       id="rate_limit"
@@ -408,6 +397,55 @@ export function ApiSettingsModule() {
             </Dialog>
           </div>
         </div>
+
+        {/* Secrets Status Card */}
+        <Card className="border-primary/30 bg-primary/5">
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-lg">
+              <ShieldCheck className="h-5 w-5 text-primary" />
+              API Secrets Status
+            </CardTitle>
+            <CardDescription>
+              API keys are securely stored as secrets. Contact your administrator to add or update API keys.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              {Object.entries(API_INFO).filter(([_, info]) => info.requiresKey).map(([type, info]) => {
+                const isConfigured = secretStatus[type]?.configured;
+                return (
+                  <div
+                    key={type}
+                    className={`flex items-center gap-2 p-3 rounded-lg border ${
+                      isConfigured 
+                        ? 'border-green-500/30 bg-green-500/10' 
+                        : 'border-destructive/30 bg-destructive/10'
+                    }`}
+                  >
+                    <div className="flex-1">
+                      <p className="text-sm font-medium">{info.label}</p>
+                      <p className="text-xs text-muted-foreground">{info.secretName}</p>
+                    </div>
+                    {isConfigured ? (
+                      <CheckCircle2 className="h-5 w-5 text-green-500" />
+                    ) : (
+                      <AlertCircle className="h-5 w-5 text-destructive" />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            {missingSecrets.length > 0 && (
+              <Alert variant="destructive" className="mt-4">
+                <ShieldAlert className="h-4 w-4" />
+                <AlertTitle>Missing API Keys</AlertTitle>
+                <AlertDescription>
+                  The following required API keys need to be configured: {missingSecrets.map(s => s.info.secretName).join(', ')}
+                </AlertDescription>
+              </Alert>
+            )}
+          </CardContent>
+        </Card>
 
         {/* API Requirements Info */}
         <Alert className="border-primary/30 bg-primary/5">
@@ -515,7 +553,7 @@ export function ApiSettingsModule() {
         <Card>
           <CardHeader>
             <CardTitle>Configured APIs</CardTitle>
-            <CardDescription>All external APIs used by the application. Hover over icons for help.</CardDescription>
+            <CardDescription>All external APIs used by the application. API keys are managed via secrets.</CardDescription>
           </CardHeader>
           <CardContent>
             <Table>
@@ -524,7 +562,19 @@ export function ApiSettingsModule() {
                   <TableHead>API Name</TableHead>
                   <TableHead>Type</TableHead>
                   <TableHead>Base URL</TableHead>
-                  <TableHead>API Key</TableHead>
+                  <TableHead>
+                    <div className="flex items-center gap-1">
+                      Secret Status
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <HelpCircle className="h-3 w-3 text-muted-foreground cursor-help" />
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p>API keys are stored securely as secrets</p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </div>
+                  </TableHead>
                   <TableHead>Rate Limit</TableHead>
                   <TableHead>
                     <div className="flex items-center gap-1">
@@ -546,6 +596,9 @@ export function ApiSettingsModule() {
               <TableBody>
                 {configurations.map((config) => {
                   const apiInfo = API_INFO[config.api_type];
+                  const hasSecret = secretStatus[config.api_type]?.configured;
+                  const needsKey = apiInfo?.requiresKey;
+                  
                   return (
                     <TableRow key={config.id}>
                       <TableCell>
@@ -589,26 +642,20 @@ export function ApiSettingsModule() {
                       </TableCell>
                       <TableCell>
                         <div className="flex items-center gap-2">
-                          <span className="font-mono text-xs">
-                            {showApiKeys[config.id] ? config.api_key_encrypted : maskApiKey(config.api_key_encrypted)}
-                          </span>
-                          {config.api_key_encrypted && (
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-6 w-6"
-                              onClick={() => toggleShowApiKey(config.id)}
-                            >
-                              {showApiKeys[config.id] ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
-                            </Button>
-                          )}
-                          {apiInfo?.requiresKey && !config.api_key_encrypted && (
-                            <Tooltip>
-                              <TooltipTrigger>
+                          {needsKey ? (
+                            hasSecret ? (
+                              <div className="flex items-center gap-1">
+                                <Key className="h-4 w-4 text-green-500" />
+                                <span className="text-xs text-green-500">Configured</span>
+                              </div>
+                            ) : (
+                              <div className="flex items-center gap-1">
                                 <AlertCircle className="h-4 w-4 text-destructive" />
-                              </TooltipTrigger>
-                              <TooltipContent>API key required but not configured</TooltipContent>
-                            </Tooltip>
+                                <span className="text-xs text-destructive">Missing</span>
+                              </div>
+                            )
+                          ) : (
+                            <span className="text-xs text-muted-foreground">Not required</span>
                           )}
                         </div>
                       </TableCell>

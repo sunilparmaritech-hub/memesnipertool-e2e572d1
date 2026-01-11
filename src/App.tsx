@@ -6,6 +6,8 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { AppModeProvider } from "@/contexts/AppModeContext";
 import { DemoPortfolioProvider } from "@/contexts/DemoPortfolioContext";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { SessionExpiryWarning } from "@/components/session/SessionExpiryWarning";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import Index from "./pages/Index";
 import Scanner from "./pages/Scanner";
@@ -18,7 +20,6 @@ import RiskCompliance from "./pages/RiskCompliance";
 import Auth from "./pages/Auth";
 import NotFound from "./pages/NotFound";
 import Notifications from "./pages/Notifications";
-
 const queryClient = new QueryClient();
 
 const App = () => (
@@ -30,7 +31,9 @@ const App = () => (
         <Sonner />
         <BrowserRouter>
           <AuthProvider>
-          <Routes>
+            <SessionExpiryWarning />
+            <ErrorBoundary>
+            <Routes>
             <Route path="/auth" element={<Auth />} />
             <Route
               path="/"
@@ -106,6 +109,7 @@ const App = () => (
             />
             <Route path="*" element={<NotFound />} />
             </Routes>
+            </ErrorBoundary>
           </AuthProvider>
         </BrowserRouter>
         </DemoPortfolioProvider>

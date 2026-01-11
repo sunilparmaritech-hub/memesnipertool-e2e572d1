@@ -2,7 +2,8 @@ import React, { forwardRef, useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
-import { Zap, Mail, Lock, AlertCircle, CheckCircle, ArrowLeft } from "lucide-react";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Zap, Mail, Lock, AlertCircle, CheckCircle, ArrowLeft, Loader2 } from "lucide-react";
 import { z } from "zod";
 import { supabase } from "@/integrations/supabase/client";
 
@@ -11,6 +12,20 @@ const passwordSchema = z.string().min(6, "Password must be at least 6 characters
 
 type AuthMode = "login" | "signup" | "forgot-password";
 
+const AuthFormSkeleton = () => (
+  <div className="space-y-5">
+    <div className="space-y-2">
+      <Skeleton className="h-4 w-12" />
+      <Skeleton className="h-12 w-full" />
+    </div>
+    <div className="space-y-2">
+      <Skeleton className="h-4 w-16" />
+      <Skeleton className="h-12 w-full" />
+    </div>
+    <Skeleton className="h-12 w-full" />
+  </div>
+);
+
 const Auth = forwardRef<HTMLDivElement, object>(function Auth(_props, ref) {
   const [mode, setMode] = useState<AuthMode>("login");
   const [email, setEmail] = useState("");
@@ -18,15 +33,23 @@ const Auth = forwardRef<HTMLDivElement, object>(function Auth(_props, ref) {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [isInitializing, setIsInitializing] = useState(true);
   
-  const { signIn, signUp, user } = useAuth();
+  const { signIn, signUp, user, loading: authLoading } = useAuth();
   const navigate = useNavigate();
 
   useEffect(() => {
-    if (user) {
+    // Show loading state while auth is initializing
+    if (!authLoading) {
+      setIsInitializing(false);
+    }
+  }, [authLoading]);
+
+  useEffect(() => {
+    if (user && !authLoading) {
       navigate("/");
     }
-  }, [user, navigate]);
+  }, [user, navigate, authLoading]);
 
   const validateEmail = () => {
     try {
@@ -147,13 +170,46 @@ const Auth = forwardRef<HTMLDivElement, object>(function Auth(_props, ref) {
   };
 
   const getButtonText = () => {
-    if (isLoading) return "Please wait...";
     switch (mode) {
       case "login": return "Sign In";
       case "signup": return "Create Account";
       case "forgot-password": return "Send Reset Link";
     }
   };
+
+  // Show full-page loading during initialization
+  if (isInitializing || authLoading) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center p-4">
+        <div className="fixed inset-0 pointer-events-none overflow-hidden">
+          <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-primary/5 rounded-full blur-3xl" />
+          <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-accent/5 rounded-full blur-3xl" />
+        </div>
+
+        <div className="w-full max-w-md relative animate-fade-in">
+          <div className="text-center mb-8">
+            <div className="inline-flex items-center gap-2 mb-4">
+              <div className="relative">
+                <Zap className="w-10 h-10 text-primary animate-pulse" />
+                <div className="absolute inset-0 blur-lg bg-primary/30" />
+              </div>
+              <span className="text-2xl font-bold">
+                <span className="text-gradient">Meme</span>
+                <span className="text-foreground">Sniper</span>
+                <span className="text-gradient-accent ml-1">AI</span>
+              </span>
+            </div>
+            <Skeleton className="h-8 w-48 mx-auto mb-2" />
+            <Skeleton className="h-4 w-64 mx-auto" />
+          </div>
+
+          <div className="glass rounded-xl p-6 md:p-8">
+            <AuthFormSkeleton />
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-background flex items-center justify-center p-4">
@@ -227,8 +283,9 @@ const Auth = forwardRef<HTMLDivElement, object>(function Auth(_props, ref) {
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="you@example.com"
-                  className="w-full h-12 pl-10 pr-4 bg-secondary/50 border border-border rounded-lg text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary/50 transition-all"
+                  className="w-full h-12 pl-10 pr-4 bg-secondary/50 border border-border rounded-lg text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary/50 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                   required
+                  disabled={isLoading}
                 />
               </div>
             </div>
@@ -246,8 +303,9 @@ const Auth = forwardRef<HTMLDivElement, object>(function Auth(_props, ref) {
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="••••••••"
-                    className="w-full h-12 pl-10 pr-4 bg-secondary/50 border border-border rounded-lg text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary/50 transition-all"
+                    className="w-full h-12 pl-10 pr-4 bg-secondary/50 border border-border rounded-lg text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary/50 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                     required
+                    disabled={isLoading}
                   />
                 </div>
               </div>
@@ -259,7 +317,8 @@ const Auth = forwardRef<HTMLDivElement, object>(function Auth(_props, ref) {
                 <button
                   type="button"
                   onClick={() => switchMode("forgot-password")}
-                  className="text-sm text-muted-foreground hover:text-primary transition-colors"
+                  className="text-sm text-muted-foreground hover:text-primary transition-colors disabled:opacity-50"
+                  disabled={isLoading}
                 >
                   Forgot password?
                 </button>
@@ -274,7 +333,14 @@ const Auth = forwardRef<HTMLDivElement, object>(function Auth(_props, ref) {
               className="w-full"
               disabled={isLoading}
             >
-              {getButtonText()}
+              {isLoading ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Please wait...
+                </>
+              ) : (
+                getButtonText()
+              )}
             </Button>
           </form>
 
@@ -284,7 +350,8 @@ const Auth = forwardRef<HTMLDivElement, object>(function Auth(_props, ref) {
               <button
                 type="button"
                 onClick={() => switchMode(mode === "login" ? "signup" : "login")}
-                className="text-sm text-muted-foreground hover:text-primary transition-colors"
+                className="text-sm text-muted-foreground hover:text-primary transition-colors disabled:opacity-50"
+                disabled={isLoading}
               >
                 {mode === "login"
                   ? "Don't have an account? Sign up"

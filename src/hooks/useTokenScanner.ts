@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 import { useAppMode } from '@/contexts/AppModeContext';
@@ -41,6 +41,13 @@ interface ScanResult {
   apiCount: number;
 }
 
+export interface RateLimitState {
+  isLimited: boolean;
+  remainingScans: number;
+  resetTime: number | null;
+  countdown: number;
+}
+
 // Demo tokens for testing without real API calls
 const demoTokenNames = [
   { name: 'DogeMoon', symbol: 'DOGEM' },
@@ -54,6 +61,9 @@ const demoTokenNames = [
   { name: 'DiamondHands', symbol: 'DHAND' },
   { name: 'GigaChad', symbol: 'GIGA' },
 ];
+
+const MAX_SCANS_PER_MINUTE = 10;
+const RATE_LIMIT_WINDOW_MS = 60000;
 
 const generateSingleDemoToken = (idx: number): ScannedToken => {
   const token = demoTokenNames[idx % demoTokenNames.length];
@@ -87,6 +97,12 @@ export function useTokenScanner() {
   const [apiCount, setApiCount] = useState(0);
   const [errors, setErrors] = useState<string[]>([]);
   const [apiErrors, setApiErrors] = useState<ApiError[]>([]);
+  const [rateLimit, setRateLimit] = useState<RateLimitState>({
+    isLimited: false,
+    remainingScans: MAX_SCANS_PER_MINUTE,
+    resetTime: null,
+    countdown: 0,
+  });
   const { toast } = useToast();
   const { isDemo, isLive } = useAppMode();
   
@@ -95,9 +111,40 @@ export function useTokenScanner() {
   // Ref to store interval for tick-by-tick loading
   const tickIntervalRef = useRef<NodeJS.Timeout | null>(null);
   // Rate limiting
-  const lastScanTimeRef = useRef<number>(0);
-  const scanCountRef = useRef<number>(0);
-  const rateLimitResetRef = useRef<NodeJS.Timeout | null>(null);
+  const scanTimestampsRef = useRef<number[]>([]);
+  const countdownIntervalRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Update countdown every second when rate limited
+  useEffect(() => {
+    if (rateLimit.isLimited && rateLimit.resetTime) {
+      countdownIntervalRef.current = setInterval(() => {
+        const now = Date.now();
+        const remaining = Math.max(0, Math.ceil((rateLimit.resetTime! - now) / 1000));
+        
+        if (remaining <= 0) {
+          // Reset rate limit
+          setRateLimit({
+            isLimited: false,
+            remainingScans: MAX_SCANS_PER_MINUTE,
+            resetTime: null,
+            countdown: 0,
+          });
+          scanTimestampsRef.current = [];
+          if (countdownIntervalRef.current) {
+            clearInterval(countdownIntervalRef.current);
+          }
+        } else {
+          setRateLimit(prev => ({ ...prev, countdown: remaining }));
+        }
+      }, 1000);
+    }
+
+    return () => {
+      if (countdownIntervalRef.current) {
+        clearInterval(countdownIntervalRef.current);
+      }
+    };
+  }, [rateLimit.isLimited, rateLimit.resetTime]);
 
   // Add tokens one by one with delay (tick-by-tick)
   const addTokensIncrementally = useCallback((newTokens: ScannedToken[], onComplete?: () => void) => {
@@ -134,6 +181,28 @@ export function useTokenScanner() {
     }, addInterval);
   }, []);
 
+  // Check and update rate limit status
+  const checkRateLimit = useCallback((): { allowed: boolean; remaining: number; resetIn: number } => {
+    const now = Date.now();
+    const windowStart = now - RATE_LIMIT_WINDOW_MS;
+    
+    // Remove expired timestamps
+    scanTimestampsRef.current = scanTimestampsRef.current.filter(ts => ts > windowStart);
+    
+    const currentCount = scanTimestampsRef.current.length;
+    const remaining = MAX_SCANS_PER_MINUTE - currentCount;
+    
+    if (currentCount >= MAX_SCANS_PER_MINUTE) {
+      const oldestTimestamp = scanTimestampsRef.current[0];
+      const resetTime = oldestTimestamp + RATE_LIMIT_WINDOW_MS;
+      const resetIn = Math.ceil((resetTime - now) / 1000);
+      
+      return { allowed: false, remaining: 0, resetIn };
+    }
+    
+    return { allowed: true, remaining, resetIn: 0 };
+  }, []);
+
   const scanTokens = useCallback(async (minLiquidity: number = 300, chains: string[] = ['solana']): Promise<ScanResult | null> => {
     // Prevent concurrent scans
     if (scanInProgress.current) {
@@ -141,27 +210,36 @@ export function useTokenScanner() {
       return null;
     }
 
-    // Rate limiting: max 10 scans per minute for live mode
+    // Rate limiting for live mode
     if (isLive) {
-      const now = Date.now();
-      const oneMinuteAgo = now - 60000;
+      const { allowed, remaining, resetIn } = checkRateLimit();
       
-      // Reset counter every minute
-      if (lastScanTimeRef.current < oneMinuteAgo) {
-        scanCountRef.current = 0;
-      }
-      
-      if (scanCountRef.current >= 10) {
+      if (!allowed) {
+        const resetTime = Date.now() + (resetIn * 1000);
+        setRateLimit({
+          isLimited: true,
+          remainingScans: 0,
+          resetTime,
+          countdown: resetIn,
+        });
+        
         toast({
           title: 'Rate Limited',
-          description: 'Too many scans. Please wait a moment before scanning again.',
+          description: `Too many scans. Please wait ${resetIn} seconds before scanning again.`,
           variant: 'destructive',
         });
         return null;
       }
       
-      scanCountRef.current++;
-      lastScanTimeRef.current = now;
+      // Add current timestamp
+      scanTimestampsRef.current.push(Date.now());
+      
+      // Update remaining scans
+      setRateLimit(prev => ({
+        ...prev,
+        remainingScans: remaining - 1,
+        isLimited: false,
+      }));
     }
 
     scanInProgress.current = true;
@@ -247,7 +325,7 @@ export function useTokenScanner() {
       scanInProgress.current = false;
       return null;
     }
-  }, [toast, isDemo, addTokensIncrementally]);
+  }, [toast, isDemo, isLive, addTokensIncrementally, checkRateLimit]);
 
   const getTopOpportunities = useCallback((limit: number = 5) => {
     return tokens
@@ -268,8 +346,8 @@ export function useTokenScanner() {
     if (tickIntervalRef.current) {
       clearInterval(tickIntervalRef.current);
     }
-    if (rateLimitResetRef.current) {
-      clearTimeout(rateLimitResetRef.current);
+    if (countdownIntervalRef.current) {
+      clearInterval(countdownIntervalRef.current);
     }
   }, []);
 
@@ -280,6 +358,7 @@ export function useTokenScanner() {
     apiCount,
     errors,
     apiErrors,
+    rateLimit,
     scanTokens,
     getTopOpportunities,
     filterByChain,

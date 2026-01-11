@@ -2,6 +2,7 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 import { useNotifications } from '@/hooks/useNotifications';
+import { useAppMode } from '@/contexts/AppModeContext';
 
 export interface ExitResult {
   positionId: string;
@@ -30,6 +31,10 @@ export function useAutoExit() {
   const isRunningRef = useRef(false);
   const { toast } = useToast();
   const { addNotification } = useNotifications();
+  const { mode } = useAppMode();
+  
+  // Demo mode guard
+  const isDemo = mode === 'demo';
 
   const checkExitConditions = useCallback(async (executeExits: boolean = true): Promise<{
     results: ExitResult[];
@@ -45,6 +50,14 @@ export function useAutoExit() {
     setChecking(true);
 
     try {
+      // Demo mode guard - don't call real API
+      if (isDemo) {
+        console.log('[Demo Guard] Skipping real auto-exit API call in demo mode');
+        isRunningRef.current = false;
+        setChecking(false);
+        return null;
+      }
+
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) {
         console.log('No session for auto-exit check');

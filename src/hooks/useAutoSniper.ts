@@ -2,6 +2,7 @@ import { useState, useCallback, useRef } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 import { useNotifications } from '@/hooks/useNotifications';
+import { useAppMode } from '@/contexts/AppModeContext';
 
 export interface TokenData {
   address: string;
@@ -62,6 +63,10 @@ export function useAutoSniper() {
   const [error, setError] = useState<string | null>(null);
   const { toast } = useToast();
   const { addNotification } = useNotifications();
+  const { mode } = useAppMode();
+  
+  // Demo mode guard
+  const isDemo = mode === 'demo';
   
   // Ref to prevent concurrent evaluations
   const evaluatingRef = useRef(false);
@@ -92,6 +97,14 @@ export function useAutoSniper() {
     setError(null);
 
     try {
+      // Demo mode guard - don't call real API
+      if (isDemo) {
+        console.log('[Demo Guard] Skipping real auto-sniper API call in demo mode');
+        evaluatingRef.current = false;
+        setLoading(false);
+        return null;
+      }
+
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) {
         throw new Error('Please sign in to use the auto-sniper');

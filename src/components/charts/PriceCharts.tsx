@@ -1,13 +1,52 @@
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Area, AreaChart } from 'recharts';
+import { Skeleton } from '@/components/ui/skeleton';
 
 interface PriceChartProps {
   data: { time: string; price: number }[];
   height?: number;
   showGrid?: boolean;
   color?: string;
+  loading?: boolean;
 }
 
-export const PriceChart = ({ data, height = 120, showGrid = false, color = '#22c55e' }: PriceChartProps) => {
+// Skeleton loader for charts
+const ChartSkeleton = ({ height }: { height: number }) => (
+  <div className="w-full animate-pulse" style={{ height }}>
+    <div className="h-full flex flex-col justify-end gap-1 p-2">
+      {/* Simulated chart lines */}
+      <div className="flex items-end gap-1 h-full">
+        {Array.from({ length: 20 }).map((_, i) => (
+          <div
+            key={i}
+            className="flex-1 bg-muted/50 rounded-t"
+            style={{
+              height: `${20 + Math.sin(i * 0.5) * 30 + Math.random() * 30}%`,
+            }}
+          />
+        ))}
+      </div>
+      {/* X-axis skeleton */}
+      <div className="flex justify-between pt-2 border-t border-border/30">
+        {Array.from({ length: 5 }).map((_, i) => (
+          <Skeleton key={i} className="h-3 w-8" />
+        ))}
+      </div>
+    </div>
+  </div>
+);
+
+export const PriceChart = ({ 
+  data, 
+  height = 120, 
+  showGrid = false, 
+  color = '#22c55e',
+  loading = false 
+}: PriceChartProps) => {
+  // Show skeleton while loading or if no data
+  if (loading || !data || data.length === 0) {
+    return <ChartSkeleton height={height} />;
+  }
+
   const isPositive = data.length >= 2 && data[data.length - 1].price >= data[0].price;
   const chartColor = color || (isPositive ? '#22c55e' : '#ef4444');
 
@@ -56,9 +95,49 @@ export const PriceChart = ({ data, height = 120, showGrid = false, color = '#22c
 interface PortfolioChartProps {
   data: { date: string; value: number; pnl: number }[];
   height?: number;
+  loading?: boolean;
 }
 
-export const PortfolioChart = ({ data, height = 200 }: PortfolioChartProps) => {
+// Portfolio chart skeleton
+const PortfolioChartSkeleton = ({ height }: { height: number }) => (
+  <div className="w-full animate-pulse" style={{ height }}>
+    <div className="h-full flex gap-2 p-2">
+      {/* Y-axis skeleton */}
+      <div className="flex flex-col justify-between py-2 w-12">
+        {Array.from({ length: 5 }).map((_, i) => (
+          <Skeleton key={i} className="h-3 w-10" />
+        ))}
+      </div>
+      {/* Chart area */}
+      <div className="flex-1 flex flex-col">
+        <div className="flex-1 flex items-end gap-0.5">
+          {Array.from({ length: 30 }).map((_, i) => (
+            <div
+              key={i}
+              className="flex-1 bg-primary/20 rounded-t"
+              style={{
+                height: `${30 + Math.sin(i * 0.3) * 25 + Math.random() * 25}%`,
+              }}
+            />
+          ))}
+        </div>
+        {/* X-axis skeleton */}
+        <div className="flex justify-between pt-2 border-t border-border/30">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <Skeleton key={i} className="h-3 w-10" />
+          ))}
+        </div>
+      </div>
+    </div>
+  </div>
+);
+
+export const PortfolioChart = ({ data, height = 200, loading = false }: PortfolioChartProps) => {
+  // Show skeleton while loading or if no data
+  if (loading || !data || data.length === 0) {
+    return <PortfolioChartSkeleton height={height} />;
+  }
+
   return (
     <ResponsiveContainer width="100%" height={height}>
       <AreaChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>

@@ -81,22 +81,28 @@ const StatCard = ({
   );
 };
 
+interface StatsGridPropsExtended extends StatsGridProps {
+  winCount?: number;
+}
+
 export default function StatsGrid({
   totalValue,
   totalPnL,
   totalPnLPercent,
   openPositionsCount,
   closedPositionsCount,
-}: StatsGridProps) {
+  winCount = 0,
+}: StatsGridPropsExtended) {
+  // Calculate actual win rate from real closed positions
   const winRate = closedPositionsCount > 0 
-    ? Math.round((closedPositionsCount * 0.6) / closedPositionsCount * 100) 
+    ? Math.round((winCount / closedPositionsCount) * 100) 
     : 0;
 
   return (
     <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
       <StatCard
         title="Portfolio Value"
-        value={formatCurrency(totalValue || 1890)}
+        value={formatCurrency(totalValue)}
         change={`${totalPnLPercent >= 0 ? '+' : ''}${totalPnLPercent.toFixed(1)}% all time`}
         changeType={totalPnLPercent >= 0 ? 'positive' : 'negative'}
         icon={Wallet}

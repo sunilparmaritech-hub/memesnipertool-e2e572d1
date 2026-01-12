@@ -39,10 +39,12 @@ declare global {
 }
 
 // Use multiple RPC endpoints with fallback for reliability
+// Priority: custom RPC > Helius free tier > public endpoints
 const SOLANA_RPC_ENDPOINTS = [
   import.meta.env.VITE_SOLANA_RPC_URL,
-  'https://api.mainnet-beta.solana.com',
-  'https://solana-mainnet.g.alchemy.com/v2/demo',
+  'https://mainnet.helius-rpc.com/?api-key=1d8740dc-e5f4-421c-b823-e1bad1889eff',
+  'https://rpc.ankr.com/solana',
+  'https://solana.public-rpc.com',
 ].filter(Boolean) as string[];
 
 export function useSolanaConnection() {

@@ -51,6 +51,14 @@ const Index = forwardRef<HTMLDivElement, object>(function Index(_props, ref) {
   const openPositions = isDemo ? openDemoPositions : realOpenPositions;
   const closedPositions = isDemo ? closedDemoPositions : realClosedPositions;
 
+  // Calculate win count from closed positions
+  const winCount = useMemo(() => {
+    return closedPositions.filter(p => {
+      const pnl = 'profit_loss_percent' in p ? p.profit_loss_percent : (p as any).pnl;
+      return pnl > 0;
+    }).length;
+  }, [closedPositions]);
+
   // Get portfolio data based on mode
   const portfolioData = useMemo(() => getCurrentPortfolioData(), [getCurrentPortfolioData, selectedPeriod]);
 
@@ -139,6 +147,7 @@ const Index = forwardRef<HTMLDivElement, object>(function Index(_props, ref) {
           totalPnLPercent={totalPnLPercent}
           openPositionsCount={openPositions.length}
           closedPositionsCount={closedPositions.length}
+          winCount={winCount}
         />
 
         {/* Main Content Grid */}

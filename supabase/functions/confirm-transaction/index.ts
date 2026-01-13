@@ -117,6 +117,7 @@ Deno.serve(async (req) => {
     console.log(`[Confirm] Checking signature: ${body.signature.slice(0, 16)}...`);
 
     const rpcUrl = Deno.env.get("SOLANA_RPC_URL") || "https://api.mainnet-beta.solana.com";
+    console.log(`[Confirm] Using RPC: ${rpcUrl.slice(0, 40)}...`);
 
     // Confirm the transaction
     const result = await confirmTransaction(rpcUrl, body.signature);

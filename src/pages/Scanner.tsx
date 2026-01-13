@@ -16,6 +16,7 @@ import { useAutoSniper, TokenData } from "@/hooks/useAutoSniper";
 import { useAutoExit } from "@/hooks/useAutoExit";
 import { useDemoAutoExit } from "@/hooks/useDemoAutoExit";
 import { useWallet } from "@/hooks/useWallet";
+import { useTradeExecution, SOL_MINT, type TradeParams, type PriorityLevel } from "@/hooks/useTradeExecution";
 import { usePositions } from "@/hooks/usePositions";
 import { useToast } from "@/hooks/use-toast";
 import { useNotifications } from "@/hooks/useNotifications";
@@ -31,7 +32,8 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
   const { settings, saving, saveSettings, updateField } = useSniperSettings();
   const { evaluateTokens, result: sniperResult, loading: sniperLoading } = useAutoSniper();
   const { startAutoExitMonitor, stopAutoExitMonitor, isMonitoring } = useAutoExit();
-  const { wallet, connectPhantom, disconnect } = useWallet();
+  const { executeTrade } = useTradeExecution();
+  const { wallet, connectPhantom, disconnect, signAndSendTransaction, refreshBalance } = useWallet();
   const { openPositions: realOpenPositions, closedPositions: realClosedPositions, fetchPositions } = usePositions();
   const { toast } = useToast();
   const { addNotification } = useNotifications();
@@ -84,6 +86,7 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
   // Refs for tracking
   const lastSniperRunRef = useRef<number>(0);
   const processedTokensRef = useRef<Set<string>>(new Set());
+  const liveTradeInFlightRef = useRef(false);
 
   // Use demo or real positions based on mode
   const openPositions = isDemo ? openDemoPositions : realOpenPositions;
@@ -293,10 +296,105 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
         }
       }
     } else {
-      // Live mode: call real auto-sniper
-      evaluateTokens(tokenData, true, fetchPositions);
+      // Live mode: evaluate first, then execute via wallet signature (no private keys stored)
+      (async () => {
+        if (!wallet.isConnected || wallet.network !== 'solana' || !wallet.address) {
+          toast({
+            title: 'Wallet Required',
+            description: 'Connect a Solana wallet to enable live bot trading.',
+            variant: 'destructive',
+          });
+          return;
+        }
+
+        // Ensure we have enough SOL for the trade amount + a small fee buffer
+        const balanceSol = parseFloat(String(wallet.balance || '').replace(/[^\d.]/g, '')) || 0;
+        const tradeAmountSol = settings.trade_amount || 0;
+        const feeBufferSol = 0.01;
+
+        if (tradeAmountSol <= 0) {
+          toast({
+            title: 'Invalid Trade Amount',
+            description: 'Set a trade amount > 0 in Liquidity Bot settings.',
+            variant: 'destructive',
+          });
+          return;
+        }
+
+        if (balanceSol < tradeAmountSol + feeBufferSol) {
+          toast({
+            title: 'Insufficient SOL Balance',
+            description: `Add SOL to your wallet (need ~${(tradeAmountSol + feeBufferSol).toFixed(3)} SOL) then refresh balance.`,
+            variant: 'destructive',
+          });
+          return;
+        }
+
+        if (liveTradeInFlightRef.current) return;
+
+        const evaluation = await evaluateTokens(tokenData, false);
+        const approved = evaluation?.decisions?.filter((d) => d.approved) || [];
+        if (approved.length === 0) return;
+
+        const next = approved[0];
+        const slippagePct = next.tradeParams?.slippage ?? 5;
+        const slippageBps = Math.round(slippagePct * 100);
+
+        const priorityLevel: PriorityLevel =
+          settings.priority === 'turbo'
+            ? 'veryHigh'
+            : settings.priority === 'fast'
+              ? 'high'
+              : 'medium';
+
+        const params: TradeParams = {
+          inputMint: SOL_MINT,
+          outputMint: next.token.address,
+          amount: String(Math.floor(tradeAmountSol * 1e9)),
+          slippageBps,
+          priorityLevel,
+          tokenSymbol: next.token.symbol,
+          tokenName: next.token.name,
+          profitTakePercent: settings.profit_take_percentage,
+          stopLossPercent: settings.stop_loss_percentage,
+        };
+
+        liveTradeInFlightRef.current = true;
+        try {
+          const result = await executeTrade(params, wallet.address, (tx) => signAndSendTransaction(tx));
+          if (result.success) {
+            await fetchPositions();
+            refreshBalance();
+          }
+        } finally {
+          liveTradeInFlightRef.current = false;
+        }
+      })();
     }
-  }, [tokens, isBotActive, settings, isDemo, evaluateTokens, fetchPositions, toast, addNotification, demoBalance, deductBalance, addBalance, addDemoPosition, updateDemoPosition, closeDemoPosition]);
+  }, [
+    tokens,
+    isBotActive,
+    settings,
+    isDemo,
+    evaluateTokens,
+    executeTrade,
+    wallet.isConnected,
+    wallet.network,
+    wallet.address,
+    wallet.balance,
+    signAndSendTransaction,
+    refreshBalance,
+    fetchPositions,
+    toast,
+    addNotification,
+    demoBalance,
+    deductBalance,
+    addBalance,
+    addDemoPosition,
+    updateDemoPosition,
+    closeDemoPosition,
+    solPrice,
+  ]);
 
   const handleConnectWallet = async () => {
     if (wallet.isConnected) {

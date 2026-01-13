@@ -57,6 +57,14 @@ interface SignAndSendResult {
   error?: string;
 }
 
+function base64ToBytes(base64: string): Uint8Array {
+  // Browser-safe base64 decode (avoids Node's Buffer)
+  const bin = globalThis.atob(base64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+
 export function useTradeExecution() {
   const [status, setStatus] = useState<TransactionStatus>('idle');
   const [currentQuote, setCurrentQuote] = useState<TradeQuote | null>(null);
@@ -208,8 +216,8 @@ export function useTradeExecution() {
       // Step 2: Deserialize and sign transaction
       setStatus('awaiting_signature');
       
-      const swapTransactionBuf = Buffer.from(data.swapTransaction, 'base64');
-      const transaction = VersionedTransaction.deserialize(swapTransactionBuf);
+      const swapTransactionBytes = base64ToBytes(data.swapTransaction);
+      const transaction = VersionedTransaction.deserialize(swapTransactionBytes);
 
       // Step 3: Sign and send
       setStatus('broadcasting');
@@ -333,8 +341,8 @@ export function useTradeExecution() {
 
       // Sign and send
       setStatus('awaiting_signature');
-      const swapTransactionBuf = Buffer.from(data.swapTransaction, 'base64');
-      const transaction = VersionedTransaction.deserialize(swapTransactionBuf);
+      const swapTransactionBytes = base64ToBytes(data.swapTransaction);
+      const transaction = VersionedTransaction.deserialize(swapTransactionBytes);
 
       setStatus('broadcasting');
       const signResult = await signAndSend(transaction);

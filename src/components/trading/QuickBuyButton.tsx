@@ -55,6 +55,20 @@ export function QuickBuyButton({
       return;
     }
 
+    // Validate SOL balance before letting the user proceed
+    const balanceSol = parseFloat(String(wallet.balance || '').replace(/[^\d.]/g, '')) || 0;
+    const feeBufferSol = 0.01; // small buffer for network + priority fees
+    const requiredSol = (amount > 0 ? amount : 0) + feeBufferSol;
+
+    if (balanceSol < requiredSol) {
+      toast({
+        title: 'Insufficient SOL Balance',
+        description: `Please add SOL to your wallet (need at least ~${requiredSol.toFixed(3)} SOL) and refresh balance.`,
+        variant: 'destructive',
+      });
+      return;
+    }
+
     setSelectedAmount(amount);
     setShowConfirmation(true);
   };

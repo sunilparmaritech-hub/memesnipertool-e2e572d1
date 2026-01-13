@@ -173,11 +173,17 @@ Deno.serve(async (req) => {
     const body: TradeRequest = await req.json();
     console.log(`[Trade] Action: ${body.action}, User: ${user.id}`);
 
-    // Get RPC URL from environment or use reliable fallback
-    const rpcUrl = Deno.env.get("SOLANA_RPC_URL") || 
-      "https://mainnet.helius-rpc.com/?api-key=1d8740dc-e5f4-421c-b823-e1bad1889eff";
-    
-    console.log(`[Trade] Using RPC: ${rpcUrl.substring(0, 40)}...`);
+    // Get RPC URL from environment or use public fallback
+    const rpcUrl = Deno.env.get("SOLANA_RPC_URL") || "https://api.mainnet-beta.solana.com";
+
+    let rpcHost = "unknown";
+    try {
+      rpcHost = new URL(rpcUrl).host;
+    } catch {
+      rpcHost = rpcUrl.slice(0, 32);
+    }
+
+    console.log(`[Trade] Using RPC host: ${rpcHost}`);
 
     // Handle different actions
     switch (body.action) {

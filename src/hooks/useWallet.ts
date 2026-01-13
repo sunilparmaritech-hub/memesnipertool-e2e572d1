@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { Connection, PublicKey, LAMPORTS_PER_SOL, Transaction, VersionedTransaction, SendOptions } from '@solana/web3.js';
 import { BrowserProvider, formatEther } from 'ethers';
 import { useToast } from '@/hooks/use-toast';
+import { supabase } from '@/integrations/supabase/client';
 
 export type WalletType = 'phantom' | 'solflare' | 'backpack' | 'metamask' | 'walletconnect';
 export type BlockchainNetwork = 'solana' | 'ethereum' | 'bsc';
@@ -56,11 +57,11 @@ declare global {
 }
 
 // Use multiple RPC endpoints with fallback for reliability
-// Priority: custom RPC > Helius free tier > public endpoints
+// Priority: custom public RPC > widely-available public endpoints
 const SOLANA_RPC_ENDPOINTS = [
   import.meta.env.VITE_SOLANA_RPC_URL,
-  'https://mainnet.helius-rpc.com/?api-key=1d8740dc-e5f4-421c-b823-e1bad1889eff',
   'https://rpc.ankr.com/solana',
+  'https://api.mainnet-beta.solana.com',
   'https://solana.public-rpc.com',
 ].filter(Boolean) as string[];
 
@@ -106,6 +107,25 @@ export function useWallet() {
   }, []);
 
   const getSolanaBalance = useCallback(async (publicKey: string, retries = 2): Promise<string> => {
+    // Prefer backend balance lookup (uses the secured RPC configured in the backend).
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session) {
+        const { data, error } = await supabase.functions.invoke('solana-balance', {
+          body: { publicKey },
+        });
+
+        if (!error && data?.balanceSol !== undefined && data?.balanceSol !== null) {
+          const parsed = typeof data.balanceSol === 'number'
+            ? data.balanceSol
+            : parseFloat(String(data.balanceSol));
+          if (Number.isFinite(parsed)) return parsed.toFixed(4);
+        }
+      }
+    } catch (error) {
+      console.warn('Backend SOL balance lookup failed; falling back to public RPC endpoints.', error);
+    }
+
     for (let attempt = 0; attempt <= retries; attempt++) {
       try {
         const connection = getConnection();
@@ -113,14 +133,14 @@ export function useWallet() {
         return (balance / LAMPORTS_PER_SOL).toFixed(4);
       } catch (error: any) {
         console.error(`Failed to get Solana balance (attempt ${attempt + 1}):`, error);
-        
-        // On 403 or network error, try switching RPC endpoint
-        if (error?.message?.includes('403') || error?.message?.includes('Access forbidden') || error?.name === 'TypeError') {
+
+        // On 403 / fetch failure, try switching RPC endpoint
+        const message = String(error?.message || '');
+        if (message.includes('403') || message.includes('Access forbidden') || message.includes('Failed to fetch') || error?.name === 'TypeError') {
           switchRpcEndpoint();
         }
-        
+
         if (attempt === retries) {
-          // Return cached balance or default on final failure
           return '0';
         }
       }

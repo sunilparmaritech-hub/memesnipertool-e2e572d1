@@ -9,6 +9,12 @@ interface BalanceRequest {
   publicKey: string;
 }
 
+const FALLBACK_RPCS = [
+  "https://api.mainnet-beta.solana.com",
+  "https://solana-mainnet.g.alchemy.com/v2/demo",
+  "https://rpc.ankr.com/solana",
+];
+
 async function getBalanceLamports(rpcUrl: string, publicKey: string): Promise<number> {
   const response = await fetch(rpcUrl, {
     method: "POST",
@@ -33,6 +39,25 @@ async function getBalanceLamports(rpcUrl: string, publicKey: string): Promise<nu
 
   const lamports = Number(data?.result?.value ?? 0);
   return Number.isFinite(lamports) ? lamports : 0;
+}
+
+async function getBalanceWithFallback(primaryRpc: string, publicKey: string): Promise<{ balanceLamports: number; usedRpc: string }> {
+  const rpcsToTry = [primaryRpc, ...FALLBACK_RPCS.filter(r => r !== primaryRpc)];
+  
+  for (const rpcUrl of rpcsToTry) {
+    try {
+      const balanceLamports = await getBalanceLamports(rpcUrl, publicKey);
+      return { balanceLamports, usedRpc: rpcUrl };
+    } catch (err: any) {
+      const isRateLimit = err.message?.includes("429") || err.message?.includes("max usage");
+      console.warn(`[SolanaBalance] RPC failed (${rpcUrl.slice(0, 40)}): ${err.message?.slice(0, 80)}`);
+      if (!isRateLimit && rpcsToTry.indexOf(rpcUrl) === rpcsToTry.length - 1) {
+        throw err; // Last RPC failed with non-rate-limit error
+      }
+    }
+  }
+  
+  throw new Error("All RPC endpoints failed or rate-limited");
 }
 
 Deno.serve(async (req) => {
@@ -85,10 +110,12 @@ Deno.serve(async (req) => {
       rpcHost = rpcUrl.slice(0, 32);
     }
 
-    console.log(`[SolanaBalance] user=${user.id} rpcHost=${rpcHost}`);
+    console.log(`[SolanaBalance] user=${user.id} primaryRpc=${rpcHost}`);
 
-    const balanceLamports = await getBalanceLamports(rpcUrl, body.publicKey);
+    const { balanceLamports, usedRpc } = await getBalanceWithFallback(rpcUrl, body.publicKey);
     const balanceSol = balanceLamports / 1e9;
+
+    console.log(`[SolanaBalance] Success via ${usedRpc.slice(0, 40)} balance=${balanceSol}`);
 
     return new Response(
       JSON.stringify({

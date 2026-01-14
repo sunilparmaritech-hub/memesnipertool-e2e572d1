@@ -105,18 +105,24 @@ function checkLiquidityLock(token: TokenData): { passed: boolean; reason: string
 
 // Rule 3: Check if token matches user's category filters
 function checkCategoryMatch(token: TokenData, settings: UserSettings): { passed: boolean; reason: string } {
+  // If we don't have categories for the token, we can't reliably enforce filters.
+  // In that case, skip category filtering to avoid blocking all live trading.
+  if (!token.categories || token.categories.length === 0) {
+    return { passed: true, reason: '⚠ Token categories unavailable - skipping category filter' };
+  }
+
   if (settings.category_filters.length === 0) {
     return { passed: true, reason: '✓ No category filters applied' };
   }
-  
-  const matchedCategories = token.categories.filter(cat => 
+
+  const matchedCategories = token.categories.filter((cat) =>
     settings.category_filters.includes(cat.toLowerCase())
   );
-  
+
   const passed = matchedCategories.length > 0;
   return {
     passed,
-    reason: passed 
+    reason: passed
       ? `✓ Matches categories: ${matchedCategories.join(', ')}`
       : `✗ No match for filters: ${settings.category_filters.join(', ')}`,
   };

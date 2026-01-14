@@ -16,7 +16,7 @@ import { useAutoSniper, TokenData } from "@/hooks/useAutoSniper";
 import { useAutoExit } from "@/hooks/useAutoExit";
 import { useDemoAutoExit } from "@/hooks/useDemoAutoExit";
 import { useWallet } from "@/hooks/useWallet";
-import { useTradeExecution, SOL_MINT, type TradeParams, type PriorityLevel } from "@/hooks/useTradeExecution";
+import { useTradeExecution, SOL_MINT, USDC_MINT, type TradeParams, type PriorityLevel } from "@/hooks/useTradeExecution";
 import { usePositions } from "@/hooks/usePositions";
 import { useToast } from "@/hooks/use-toast";
 import { useNotifications } from "@/hooks/useNotifications";
@@ -333,7 +333,10 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
         if (liveTradeInFlightRef.current) return;
 
         const evaluation = await evaluateTokens(tokenData, false);
-        const approved = evaluation?.decisions?.filter((d) => d.approved) || [];
+        const approved = (evaluation?.decisions?.filter((d) => d.approved) || [])
+          // Avoid trying to "trade" base tokens like SOL/USDC.
+          .filter((d) => d.token.address !== SOL_MINT && d.token.address !== USDC_MINT);
+
         if (approved.length === 0) return;
 
         const next = approved[0];

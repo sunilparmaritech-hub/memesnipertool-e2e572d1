@@ -84,6 +84,68 @@ export function useApiSecrets() {
     }
   };
 
+  const saveApiKey = async (apiType: string, apiKey: string): Promise<{ success: boolean; message: string }> => {
+    if (!isAdmin) return { success: false, message: 'Admin access required' };
+
+    try {
+      const { data, error } = await supabase.functions.invoke('api-secrets', {
+        body: { action: 'save_api_key', apiType, apiKey },
+      });
+
+      if (error) throw error;
+      
+      // Refresh secret status after saving
+      await fetchSecretStatus();
+      
+      toast({
+        title: data.success ? 'API Key Saved' : 'Error',
+        description: data.message,
+        variant: data.success ? 'default' : 'destructive',
+      });
+      
+      return { success: data.success, message: data.message };
+    } catch (error: any) {
+      console.error('Error saving API key:', error);
+      toast({
+        title: 'Error saving API key',
+        description: error.message,
+        variant: 'destructive',
+      });
+      return { success: false, message: error.message };
+    }
+  };
+
+  const deleteApiKey = async (apiType: string): Promise<{ success: boolean; message: string }> => {
+    if (!isAdmin) return { success: false, message: 'Admin access required' };
+
+    try {
+      const { data, error } = await supabase.functions.invoke('api-secrets', {
+        body: { action: 'delete_api_key', apiType },
+      });
+
+      if (error) throw error;
+      
+      // Refresh secret status after deleting
+      await fetchSecretStatus();
+      
+      toast({
+        title: data.success ? 'API Key Removed' : 'Error',
+        description: data.message,
+        variant: data.success ? 'default' : 'destructive',
+      });
+      
+      return { success: data.success, message: data.message };
+    } catch (error: any) {
+      console.error('Error deleting API key:', error);
+      toast({
+        title: 'Error deleting API key',
+        description: error.message,
+        variant: 'destructive',
+      });
+      return { success: false, message: error.message };
+    }
+  };
+
   const listRequiredSecrets = async () => {
     if (!isAdmin) return [];
 
@@ -110,6 +172,8 @@ export function useApiSecrets() {
     fetchSecretStatus,
     getApiKeyInfo,
     validateSecret,
+    saveApiKey,
+    deleteApiKey,
     listRequiredSecrets,
   };
 }

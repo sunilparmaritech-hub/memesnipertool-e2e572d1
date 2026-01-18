@@ -9,8 +9,10 @@ export type ApiType =
   | 'dextools'
   | 'honeypot_rugcheck'
   | 'liquidity_lock'
-  | 'trade_execution'
-  | 'rpc_provider';
+  | 'jupiter'
+  | 'raydium'
+  | 'rpc_provider'
+  | 'pumpfun';
 
 export type ApiStatus = 'active' | 'inactive' | 'error' | 'rate_limited';
 
@@ -122,7 +124,10 @@ export function useApiConfigurations() {
   };
 
   const toggleEnabled = async (id: string, isEnabled: boolean) => {
-    return updateConfiguration(id, { is_enabled: isEnabled });
+    return updateConfiguration(id, { 
+      is_enabled: isEnabled,
+      status: isEnabled ? 'active' : 'inactive'
+    });
   };
 
   useEffect(() => {

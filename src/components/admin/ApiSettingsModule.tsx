@@ -11,7 +11,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { useApiConfigurations, ApiConfiguration, ApiType, ApiStatus } from '@/hooks/useApiConfigurations';
 import { useApiSecrets } from '@/hooks/useApiSecrets';
-import { Plus, Pencil, Trash2, RefreshCw, Loader2, HelpCircle, CheckCircle2, AlertCircle, Info, Key, ShieldCheck, ShieldAlert } from 'lucide-react';
+import { Plus, Pencil, Trash2, RefreshCw, Loader2, HelpCircle, CheckCircle2, AlertCircle, Info, Key, ShieldCheck, ShieldAlert, Eye, EyeOff } from 'lucide-react';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 
 // API Documentation with requirement levels, help notes, and error solutions
@@ -109,19 +109,45 @@ const API_INFO: Record<ApiType, {
       { pattern: '401', solution: 'API key may be required for Team Finance. Consider on-chain verification as alternative.' },
     ],
   },
-  trade_execution: {
-    label: 'Trade Execution (Jupiter)',
+  jupiter: {
+    label: 'Jupiter Aggregator',
     required: true,
-    description: 'Jupiter Aggregator for executing trades on Solana with best price routing.',
-    helpNotes: 'Free API, no key needed for quotes. For ultra-fast trades, get referral key at: https://station.jup.ag',
-    defaultUrl: 'https://api.jup.ag',
+    description: 'Primary DEX aggregator for Solana. Finds best swap routes across all DEXs.',
+    helpNotes: 'Free API, no key needed. Best price routing, supports all Solana tokens. Rate limit: ~600 req/min.',
+    defaultUrl: 'https://quote-api.jup.ag/v6',
     requiresKey: false,
-    secretName: 'TRADE_EXECUTION_API_KEY',
+    secretName: 'JUPITER_API_KEY',
     commonErrors: [
-      { pattern: 'dns error', solution: 'DNS resolution failed. This is a network issue. The endpoint URL has been updated to use api.jup.ag which is more reliable.' },
-      { pattern: 'failed to lookup', solution: 'Network connectivity issue. Ensure the base URL is set to https://api.jup.ag' },
-      { pattern: '403', solution: 'Access denied. Jupiter may have rate limits. Wait a moment and try again.' },
-      { pattern: '429', solution: 'Rate limited by Jupiter. Reduce scan frequency.' },
+      { pattern: 'ROUTE_NOT_FOUND', solution: 'No liquidity route found. Token may not be tradeable or has very low liquidity.' },
+      { pattern: '403', solution: 'Access denied. Wait a moment and try again.' },
+      { pattern: '429', solution: 'Rate limited. Reduce request frequency.' },
+    ],
+  },
+  raydium: {
+    label: 'Raydium DEX',
+    required: false,
+    description: 'Fallback DEX for tokens not available on Jupiter. Direct AMM access for Raydium pools.',
+    helpNotes: 'Free API, no key needed. Used as fallback when Jupiter has no route. Supports V0 transactions.',
+    defaultUrl: 'https://transaction-v1.raydium.io',
+    requiresKey: false,
+    secretName: 'RAYDIUM_API_KEY',
+    alternatives: ['jupiter'],
+    commonErrors: [
+      { pattern: 'REQ_INPUT_ACCOUNT_ERROR', solution: "Token not in wallet. May have been sold or transferred already." },
+      { pattern: '429', solution: 'Rate limited. Reduce request frequency.' },
+    ],
+  },
+  pumpfun: {
+    label: 'Pump.fun API',
+    required: false,
+    description: 'Discover and trade new meme tokens on Pump.fun bonding curves before they graduate to Raydium.',
+    helpNotes: 'Free API, no key needed. Fetches new tokens and enables bonding curve trading for early entry.',
+    defaultUrl: 'https://frontend-api.pump.fun',
+    requiresKey: false,
+    secretName: 'PUMPFUN_API_KEY',
+    commonErrors: [
+      { pattern: 'timeout', solution: 'Pump.fun API can be slow during high traffic. Try again.' },
+      { pattern: '503', solution: 'Service temporarily unavailable. Wait and retry.' },
     ],
   },
   rpc_provider: {
@@ -139,6 +165,24 @@ const API_INFO: Record<ApiType, {
   },
 };
 
+// Fallback for unknown/legacy API types
+const getApiInfo = (apiType: string): typeof API_INFO[ApiType] => {
+  if (apiType in API_INFO) {
+    return API_INFO[apiType as ApiType];
+  }
+  // Fallback for legacy types like 'trade_execution'
+  return {
+    label: apiType.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
+    required: false,
+    description: 'Legacy API configuration. Consider updating to the new API type.',
+    helpNotes: 'This API type is deprecated. Please delete and reconfigure with the correct type.',
+    defaultUrl: '',
+    requiresKey: false,
+    secretName: '',
+    commonErrors: [],
+  };
+};
+
 const STATUS_COLORS: Record<ApiStatus, string> = {
   active: 'bg-green-500/20 text-green-400 border-green-500/30',
   inactive: 'bg-muted text-muted-foreground border-muted',
@@ -153,6 +197,7 @@ interface ApiFormData {
   is_enabled: boolean;
   rate_limit_per_minute: number;
   status: ApiStatus;
+  api_key: string;
 }
 
 const defaultFormData: ApiFormData = {
@@ -162,16 +207,18 @@ const defaultFormData: ApiFormData = {
   is_enabled: true,
   rate_limit_per_minute: 60,
   status: 'inactive',
+  api_key: '',
 };
 
 export function ApiSettingsModule() {
   const { configurations, loading, addConfiguration, updateConfiguration, deleteConfiguration, toggleEnabled, fetchConfigurations } = useApiConfigurations();
-  const { secretStatus, loading: secretsLoading, fetchSecretStatus, validateSecret } = useApiSecrets();
+  const { secretStatus, loading: secretsLoading, fetchSecretStatus, validateSecret, saveApiKey } = useApiSecrets();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingConfig, setEditingConfig] = useState<ApiConfiguration | null>(null);
   const [formData, setFormData] = useState<ApiFormData>(defaultFormData);
   const [isSaving, setIsSaving] = useState(false);
   const [validatingSecrets, setValidatingSecrets] = useState<Record<string, boolean>>({});
+  const [showApiKey, setShowApiKey] = useState(false);
 
   const handleOpenDialog = (config?: ApiConfiguration) => {
     if (config) {
@@ -183,11 +230,13 @@ export function ApiSettingsModule() {
         is_enabled: config.is_enabled,
         rate_limit_per_minute: config.rate_limit_per_minute,
         status: config.status,
+        api_key: '',
       });
     } else {
       setEditingConfig(null);
       setFormData(defaultFormData);
     }
+    setShowApiKey(false);
     setIsDialogOpen(true);
   };
 
@@ -204,10 +253,13 @@ export function ApiSettingsModule() {
   const handleSave = async () => {
     setIsSaving(true);
     try {
-      // Don't include API key in database - it's stored in secrets
+      // Extract API key from form data before saving configuration
+      const { api_key, ...configData } = formData;
+      
+      // Save configuration first (API key is stored separately as secret)
       const saveData = {
-        ...formData,
-        api_key_encrypted: null, // Clear any existing key - use secrets instead
+        ...configData,
+        api_key_encrypted: null,
       };
 
       if (editingConfig) {
@@ -215,6 +267,16 @@ export function ApiSettingsModule() {
       } else {
         await addConfiguration(saveData);
       }
+      
+      // Now save API key AFTER configuration exists
+      if (api_key && api_key.trim()) {
+        const result = await saveApiKey(formData.api_type, api_key.trim());
+        if (!result.success) {
+          // Configuration saved but API key failed - notify user
+          console.error('Failed to save API key after configuration');
+        }
+      }
+      
       setIsDialogOpen(false);
       setFormData(defaultFormData);
       setEditingConfig(null);
@@ -319,25 +381,28 @@ export function ApiSettingsModule() {
                       </SelectContent>
                     </Select>
                     {/* Show API info box */}
-                    {formData.api_type && (
-                      <div className="rounded-md border border-border bg-muted/30 p-3 text-sm space-y-2">
-                        <div className="flex items-start gap-2">
-                          <Info className="h-4 w-4 text-primary mt-0.5 shrink-0" />
-                          <div>
-                            <p className="text-foreground font-medium">{API_INFO[formData.api_type].description}</p>
-                            <p className="text-muted-foreground mt-1">{API_INFO[formData.api_type].helpNotes}</p>
-                            {API_INFO[formData.api_type].requiresKey && (
-                              <div className="mt-2 flex items-center gap-2">
-                                <Key className="h-4 w-4 text-yellow-500" />
-                                <span className="text-yellow-500 text-xs">
-                                  API key required - Configure via Secrets ({API_INFO[formData.api_type].secretName})
-                                </span>
-                              </div>
-                            )}
+                    {formData.api_type && (() => {
+                      const typeInfo = getApiInfo(formData.api_type);
+                      return (
+                        <div className="rounded-md border border-border bg-muted/30 p-3 text-sm space-y-2">
+                          <div className="flex items-start gap-2">
+                            <Info className="h-4 w-4 text-primary mt-0.5 shrink-0" />
+                            <div>
+                              <p className="text-foreground font-medium">{typeInfo.description}</p>
+                              <p className="text-muted-foreground mt-1">{typeInfo.helpNotes}</p>
+                              {typeInfo.requiresKey && (
+                                <div className="mt-2 flex items-center gap-2">
+                                  <Key className="h-4 w-4 text-yellow-500" />
+                                  <span className="text-yellow-500 text-xs">
+                                    API key required - Configure via Secrets ({typeInfo.secretName})
+                                  </span>
+                                </div>
+                              )}
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    )}
+                      );
+                    })()}
                   </div>
                   <div className="grid gap-2">
                     <Label htmlFor="api_name">API Name</Label>
@@ -356,7 +421,7 @@ export function ApiSettingsModule() {
                           <HelpCircle className="h-4 w-4 text-muted-foreground cursor-help" />
                         </TooltipTrigger>
                         <TooltipContent>
-                          <p>Default: {API_INFO[formData.api_type]?.defaultUrl}</p>
+                          <p>Default: {getApiInfo(formData.api_type).defaultUrl}</p>
                         </TooltipContent>
                       </Tooltip>
                     </div>
@@ -364,7 +429,7 @@ export function ApiSettingsModule() {
                       id="base_url"
                       value={formData.base_url}
                       onChange={(e) => setFormData(prev => ({ ...prev, base_url: e.target.value }))}
-                      placeholder={API_INFO[formData.api_type]?.defaultUrl || "https://api.example.com"}
+                      placeholder={getApiInfo(formData.api_type).defaultUrl || "https://api.example.com"}
                     />
                   </div>
                   <div className="grid gap-2">
@@ -377,6 +442,63 @@ export function ApiSettingsModule() {
                       min={1}
                     />
                   </div>
+                  
+                  {/* API Key Input - Show for ALL APIs */}
+                  {(() => {
+                    const keyInfo = getApiInfo(formData.api_type);
+                    return (
+                      <div className="grid gap-2">
+                        <div className="flex items-center gap-2">
+                          <Label htmlFor="api_key">API Key</Label>
+                          {keyInfo.requiresKey ? (
+                            <Badge variant="destructive" className="text-[10px] px-1 py-0">Required</Badge>
+                          ) : (
+                            <Badge variant="secondary" className="text-[10px] px-1 py-0">Optional</Badge>
+                          )}
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <HelpCircle className="h-4 w-4 text-muted-foreground cursor-help" />
+                            </TooltipTrigger>
+                            <TooltipContent className="max-w-xs">
+                              <p>Enter your API key. It will be securely stored as {keyInfo.secretName}</p>
+                            </TooltipContent>
+                          </Tooltip>
+                          {secretStatus[formData.api_type]?.configured && (
+                            <Badge variant="outline" className="text-xs text-green-500 border-green-500/30">
+                              <Key className="h-3 w-3 mr-1" />
+                              Already configured
+                            </Badge>
+                          )}
+                        </div>
+                        <div className="relative">
+                          <Input
+                            id="api_key"
+                            type={showApiKey ? 'text' : 'password'}
+                            value={formData.api_key}
+                            onChange={(e) => setFormData(prev => ({ ...prev, api_key: e.target.value }))}
+                            placeholder={secretStatus[formData.api_type]?.configured ? 'Leave empty to keep current key' : 'Enter API key'}
+                            className="pr-10"
+                          />
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="absolute right-0 top-0 h-full px-3 hover:bg-transparent"
+                            onClick={() => setShowApiKey(!showApiKey)}
+                          >
+                            {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                          </Button>
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          {keyInfo.requiresKey 
+                            ? keyInfo.helpNotes
+                            : `Optional: ${keyInfo.helpNotes || 'API key can be added for enhanced features.'}`
+                          }
+                        </p>
+                      </div>
+                    );
+                  })()}
+                  
                   <div className="flex items-center gap-2">
                     <Switch
                       id="is_enabled"
@@ -496,14 +618,14 @@ export function ApiSettingsModule() {
                 {configurations
                   .filter(c => c.status === 'error')
                   .map((config) => {
-                    const apiInfo = API_INFO[config.api_type];
+                    const apiInfo = getApiInfo(config.api_type);
                     return (
                       <div key={config.id} className="rounded-lg border border-destructive/20 bg-destructive/5 p-4">
                         <div className="flex items-start justify-between">
                           <div className="flex-1">
                             <div className="flex items-center gap-2 mb-2">
                               <span className="font-medium text-foreground">{config.api_name}</span>
-                              <Badge variant="outline" className="text-xs">{apiInfo?.label}</Badge>
+                              <Badge variant="outline" className="text-xs">{apiInfo.label}</Badge>
                               <Badge className="bg-destructive/20 text-destructive border-destructive/30">
                                 Error
                               </Badge>
@@ -512,7 +634,7 @@ export function ApiSettingsModule() {
                               <div>
                                 <p className="text-sm font-medium text-muted-foreground">Possible Solutions:</p>
                                 <ul className="mt-1 space-y-1">
-                                  {apiInfo?.commonErrors.map((err, idx) => (
+                                  {apiInfo.commonErrors.map((err, idx) => (
                                     <li key={idx} className="text-sm flex items-start gap-2">
                                       <CheckCircle2 className="h-4 w-4 text-green-500 mt-0.5 shrink-0" />
                                       <span>{err.solution}</span>
@@ -595,9 +717,9 @@ export function ApiSettingsModule() {
               </TableHeader>
               <TableBody>
                 {configurations.map((config) => {
-                  const apiInfo = API_INFO[config.api_type];
+                  const apiInfo = getApiInfo(config.api_type);
                   const hasSecret = secretStatus[config.api_type]?.configured;
-                  const needsKey = apiInfo?.requiresKey;
+                  const needsKey = apiInfo.requiresKey;
                   
                   return (
                     <TableRow key={config.id}>
@@ -609,8 +731,8 @@ export function ApiSettingsModule() {
                               <HelpCircle className="h-4 w-4 text-muted-foreground cursor-help" />
                             </TooltipTrigger>
                             <TooltipContent className="max-w-xs">
-                              <p className="font-medium">{apiInfo?.description}</p>
-                              <p className="text-xs mt-1 text-muted-foreground">{apiInfo?.helpNotes}</p>
+                              <p className="font-medium">{apiInfo.description}</p>
+                              <p className="text-xs mt-1 text-muted-foreground">{apiInfo.helpNotes}</p>
                             </TooltipContent>
                           </Tooltip>
                         </div>
@@ -618,9 +740,9 @@ export function ApiSettingsModule() {
                       <TableCell>
                         <div className="flex items-center gap-1">
                           <Badge variant="outline" className="text-xs">
-                            {apiInfo?.label || config.api_type}
+                            {apiInfo.label}
                           </Badge>
-                          {apiInfo?.required ? (
+                          {apiInfo.required ? (
                             <Tooltip>
                               <TooltipTrigger>
                                 <CheckCircle2 className="h-3 w-3 text-green-500" />

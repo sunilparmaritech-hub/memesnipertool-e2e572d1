@@ -18,6 +18,22 @@ const API_SECRET_MAPPING: Record<string, string> = {
   rpc_provider: 'RPC_PROVIDER_API_KEY',
 };
 
+// Simple encryption/decryption for API keys stored in database
+// In production, use proper encryption with vault or KMS
+const encryptKey = (key: string): string => {
+  // Base64 encode with a prefix to identify encrypted values
+  return 'enc:' + btoa(key);
+};
+
+const decryptKey = (encrypted: string): string | null => {
+  if (!encrypted || !encrypted.startsWith('enc:')) return null;
+  try {
+    return atob(encrypted.substring(4));
+  } catch {
+    return null;
+  }
+};
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -61,16 +77,45 @@ serve(async (req) => {
     }
 
     const body = await req.json().catch(() => ({}));
-    const { action, apiType } = body;
+    const { action, apiType, apiKey } = body;
+
+    // Helper to get API key - first check DB, then env
+    const getApiKeyForType = async (type: string): Promise<string | null> => {
+      // First check database for stored key
+      const { data: config } = await supabase
+        .from('api_configurations')
+        .select('api_key_encrypted')
+        .eq('api_type', type)
+        .maybeSingle();
+      
+      if (config?.api_key_encrypted) {
+        const decrypted = decryptKey(config.api_key_encrypted);
+        if (decrypted) return decrypted;
+      }
+      
+      // Fall back to environment variable
+      const envKey = API_SECRET_MAPPING[type];
+      return envKey ? Deno.env.get(envKey) || null : null;
+    };
 
     if (action === 'get_secret_status') {
       // Return the status of all API secrets (configured or not)
       const secretStatus: Record<string, { configured: boolean; secretName: string }> = {};
       
+      // Get all configurations from database
+      const { data: configs } = await supabase
+        .from('api_configurations')
+        .select('api_type, api_key_encrypted');
+      
+      const dbKeys = new Map(configs?.map(c => [c.api_type, c.api_key_encrypted]) || []);
+      
       for (const [type, secretName] of Object.entries(API_SECRET_MAPPING)) {
-        const secretValue = Deno.env.get(secretName);
+        const dbKey = dbKeys.get(type);
+        const hasDbKey = dbKey && decryptKey(dbKey);
+        const envValue = Deno.env.get(secretName);
+        
         secretStatus[type] = {
-          configured: !!secretValue && secretValue.length > 0,
+          configured: !!(hasDbKey || (envValue && envValue.length > 0)),
           secretName,
         };
       }
@@ -83,8 +128,103 @@ serve(async (req) => {
       });
     }
 
+    if (action === 'save_api_key') {
+      // Save API key to database
+      if (!apiType || !API_SECRET_MAPPING[apiType]) {
+        return new Response(JSON.stringify({ error: 'Invalid API type' }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      if (!apiKey || typeof apiKey !== 'string' || apiKey.trim().length === 0) {
+        return new Response(JSON.stringify({ error: 'API key is required' }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      const encryptedKey = encryptKey(apiKey.trim());
+
+      // Check if configuration exists
+      const { data: existing } = await supabase
+        .from('api_configurations')
+        .select('id')
+        .eq('api_type', apiType)
+        .maybeSingle();
+
+      if (existing) {
+        // Update existing configuration with API key
+        const { error: updateError } = await supabase
+          .from('api_configurations')
+          .update({ 
+            api_key_encrypted: encryptedKey,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', existing.id);
+
+        if (updateError) {
+          throw new Error(`Failed to update API key: ${updateError.message}`);
+        }
+      } else {
+        // Configuration doesn't exist - update by api_type (handles race condition where config was just created)
+        const { error: upsertError } = await supabase
+          .from('api_configurations')
+          .update({ 
+            api_key_encrypted: encryptedKey,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('api_type', apiType);
+
+        if (upsertError) {
+          return new Response(JSON.stringify({ 
+            success: false,
+            message: 'API configuration not found. Please add the API configuration first.',
+          }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          });
+        }
+      }
+
+      return new Response(JSON.stringify({ 
+        success: true,
+        message: `API key for ${apiType} saved successfully`,
+      }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    if (action === 'delete_api_key') {
+      // Remove API key from database
+      if (!apiType || !API_SECRET_MAPPING[apiType]) {
+        return new Response(JSON.stringify({ error: 'Invalid API type' }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      const { error: updateError } = await supabase
+        .from('api_configurations')
+        .update({ 
+          api_key_encrypted: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('api_type', apiType);
+
+      if (updateError) {
+        throw new Error(`Failed to delete API key: ${updateError.message}`);
+      }
+
+      return new Response(JSON.stringify({ 
+        success: true,
+        message: `API key for ${apiType} removed successfully`,
+      }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
     if (action === 'get_api_key') {
-      // Get API key for a specific type (for internal edge function use only)
+      // Get API key for a specific type (for internal edge function use)
       if (!apiType || !API_SECRET_MAPPING[apiType]) {
         return new Response(JSON.stringify({ error: 'Invalid API type' }), {
           status: 400,
@@ -93,16 +233,13 @@ serve(async (req) => {
       }
 
       const secretName = API_SECRET_MAPPING[apiType];
-      const secretValue = Deno.env.get(secretName);
+      const apiKeyValue = await getApiKeyForType(apiType);
 
-      // For security, we only return whether the key exists, not the actual key
-      // The actual key should be accessed within edge functions directly
       return new Response(JSON.stringify({ 
         apiType,
         secretName,
-        configured: !!secretValue && secretValue.length > 0,
-        // Mask the key for display purposes
-        maskedKey: secretValue ? `${secretValue.substring(0, 4)}${'•'.repeat(8)}${secretValue.substring(secretValue.length - 4)}` : null,
+        configured: !!apiKeyValue && apiKeyValue.length > 0,
+        maskedKey: apiKeyValue ? `${apiKeyValue.substring(0, 4)}${'•'.repeat(8)}${apiKeyValue.substring(apiKeyValue.length - 4)}` : null,
       }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
@@ -118,12 +255,12 @@ serve(async (req) => {
       }
 
       const secretName = API_SECRET_MAPPING[apiType];
-      const secretValue = Deno.env.get(secretName);
+      const apiKeyValue = await getApiKeyForType(apiType);
 
-      if (!secretValue) {
+      if (!apiKeyValue) {
         return new Response(JSON.stringify({ 
           valid: false,
-          error: `Secret ${secretName} is not configured`,
+          error: `API key for ${apiType} is not configured`,
         }), {
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
@@ -134,7 +271,7 @@ serve(async (req) => {
       let validationMessage = 'API key is configured';
 
       // Perform basic format checks based on API type
-      if (apiType === 'birdeye' && secretValue.length < 20) {
+      if (apiType === 'birdeye' && apiKeyValue.length < 20) {
         isValid = false;
         validationMessage = 'Birdeye API key appears too short';
       }
@@ -151,14 +288,46 @@ serve(async (req) => {
 
     if (action === 'list_required_secrets') {
       // Return list of required secrets for each API type
-      const requiredSecrets = Object.entries(API_SECRET_MAPPING).map(([type, secretName]) => ({
-        apiType: type,
-        secretName,
-        configured: !!Deno.env.get(secretName),
-      }));
+      const { data: configs } = await supabase
+        .from('api_configurations')
+        .select('api_type, api_key_encrypted');
+      
+      const dbKeys = new Map(configs?.map(c => [c.api_type, c.api_key_encrypted]) || []);
+      
+      const requiredSecrets = Object.entries(API_SECRET_MAPPING).map(([type, secretName]) => {
+        const dbKey = dbKeys.get(type);
+        const hasDbKey = dbKey && decryptKey(dbKey);
+        const envValue = Deno.env.get(secretName);
+        
+        return {
+          apiType: type,
+          secretName,
+          configured: !!(hasDbKey || envValue),
+        };
+      });
 
       return new Response(JSON.stringify({ 
         secrets: requiredSecrets,
+      }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+    
+    // Get API key for use by other edge functions
+    if (action === 'get_key_for_use') {
+      if (!apiType || !API_SECRET_MAPPING[apiType]) {
+        return new Response(JSON.stringify({ error: 'Invalid API type' }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      const apiKeyValue = await getApiKeyForType(apiType);
+
+      return new Response(JSON.stringify({ 
+        apiType,
+        apiKey: apiKeyValue,
+        configured: !!apiKeyValue,
       }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });

@@ -138,6 +138,22 @@ export const PortfolioChart = ({ data, height = 200, loading = false }: Portfoli
     return <PortfolioChartSkeleton height={height} />;
   }
 
+  // Calculate proper Y-axis domain with padding
+  const values = data.map(d => d.value).filter(v => Number.isFinite(v));
+  const minValue = values.length > 0 ? Math.min(...values) : 0;
+  const maxValue = values.length > 0 ? Math.max(...values) : 100;
+  const padding = (maxValue - minValue) * 0.1 || 10; // 10% padding or minimum 10
+  const yMin = Math.max(0, minValue - padding);
+  const yMax = maxValue + padding;
+
+  // Format Y-axis ticks based on value magnitude
+  const formatYAxis = (value: number) => {
+    if (value >= 1000000) return `$${(value / 1000000).toFixed(1)}M`;
+    if (value >= 1000) return `$${(value / 1000).toFixed(1)}K`;
+    if (value >= 1) return `$${value.toFixed(0)}`;
+    return `$${value.toFixed(2)}`;
+  };
+
   return (
     <ResponsiveContainer width="100%" height={height}>
       <AreaChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
@@ -152,7 +168,9 @@ export const PortfolioChart = ({ data, height = 200, loading = false }: Portfoli
           axisLine={false} 
           tickLine={false}
           tick={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))' }}
-          tickFormatter={(value) => `$${value}`}
+          tickFormatter={formatYAxis}
+          domain={[yMin, yMax]}
+          width={60}
         />
         <Tooltip
           contentStyle={{
@@ -162,7 +180,7 @@ export const PortfolioChart = ({ data, height = 200, loading = false }: Portfoli
           }}
           labelStyle={{ color: 'hsl(var(--foreground))' }}
           formatter={(value: number, name: string) => [
-            `$${value.toFixed(2)}`,
+            formatYAxis(value),
             name === 'value' ? 'Portfolio Value' : 'P&L'
           ]}
         />

@@ -1,4 +1,4 @@
-project_id = "pnabdsgbkvriwevcksca"
+project_id = "sdbskecqpvwzeyxezyfg"
 
 [functions.token-scanner]
 verify_jwt = false
@@ -22,4 +22,7 @@ verify_jwt = false
 verify_jwt = false
 
 [functions.confirm-transaction]
+verify_jwt = false
+
+[functions.solana-balance]
 verify_jwt = false

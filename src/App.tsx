@@ -6,6 +6,7 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { AppModeProvider } from "@/contexts/AppModeContext";
 import { DemoPortfolioProvider } from "@/contexts/DemoPortfolioContext";
+import { BotProvider } from "@/contexts/BotContext";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { SessionExpiryWarning } from "@/components/session/SessionExpiryWarning";
 import { OfflineIndicator } from "@/components/OfflineIndicator";
@@ -28,7 +29,8 @@ const App = () => (
     <TooltipProvider>
       <AppModeProvider>
         <DemoPortfolioProvider>
-        <Toaster />
+          <BotProvider>
+            <Toaster />
         <Sonner />
         <BrowserRouter>
           <AuthProvider>
@@ -114,6 +116,7 @@ const App = () => (
             </ErrorBoundary>
           </AuthProvider>
         </BrowserRouter>
+          </BotProvider>
         </DemoPortfolioProvider>
       </AppModeProvider>
     </TooltipProvider>

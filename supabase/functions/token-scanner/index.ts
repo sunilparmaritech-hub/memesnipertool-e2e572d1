@@ -7,6 +7,17 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+// Pump.fun API
+const PUMPFUN_API = "https://frontend-api.pump.fun";
+
+// Jupiter API for tradability check
+const JUPITER_QUOTE_API = "https://quote-api.jup.ag/v6/quote";
+
+// RugCheck API for safety validation
+const RUGCHECK_API = "https://api.rugcheck.xyz/v1";
+
+const SOL_MINT = "So11111111111111111111111111111111111111112";
+
 interface ApiConfig {
   id: string;
   api_type: string;
@@ -37,6 +48,14 @@ interface TokenData {
   riskScore: number;
   source: string;
   pairAddress: string;
+  // Safety validation fields
+  isTradeable: boolean;
+  canBuy: boolean;
+  canSell: boolean;
+  freezeAuthority: string | null;
+  mintAuthority: string | null;
+  isPumpFun: boolean;
+  safetyReasons: string[];
 }
 
 interface ApiError {
@@ -65,7 +84,6 @@ serve(async (req) => {
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const supabase = createClient(supabaseUrl, supabaseKey);
 
-    // Parse and validate request body
     const rawBody = await req.json().catch(() => ({}));
     const validationResult = validateTokenScannerInput(rawBody);
     
@@ -78,7 +96,6 @@ serve(async (req) => {
     
     const { minLiquidity, chains } = validationResult.data!;
 
-    // Fetch enabled API configurations
     const { data: apiConfigs, error: apiError } = await supabase
       .from('api_configurations')
       .select('*')
@@ -93,7 +110,6 @@ serve(async (req) => {
     const errors: string[] = [];
     const apiErrors: ApiError[] = [];
 
-    // Helper function to log API health and update api_configurations status
     const logApiHealth = async (
       apiType: string,
       endpoint: string,
@@ -103,7 +119,6 @@ serve(async (req) => {
       errorMessage?: string
     ) => {
       try {
-        // Log to api_health_metrics
         await supabase.from('api_health_metrics').insert({
           api_type: apiType,
           endpoint,
@@ -113,7 +128,6 @@ serve(async (req) => {
           error_message: errorMessage || null,
         });
 
-        // Update api_configurations status
         const newStatus = isSuccess ? 'active' : (statusCode === 429 ? 'rate_limited' : 'error');
         await supabase
           .from('api_configurations')
@@ -122,33 +136,313 @@ serve(async (req) => {
             last_checked_at: new Date().toISOString()
           })
           .eq('api_type', apiType);
-        
-        console.log(`Updated ${apiType} status to: ${newStatus}`);
       } catch (e) {
         console.error('Failed to log API health:', e);
       }
     };
 
-    // Helper to find API config by type
     const getApiConfig = (type: string): ApiConfig | undefined => 
       apiConfigs?.find((c: ApiConfig) => c.api_type === type && c.is_enabled);
 
-    // Get API key from environment (secure) with fallback to database (legacy)
-    const getApiKey = (apiType: string, dbApiKey: string | null): string | null => {
-      // Priority 1: Environment variable (Supabase Secrets - secure)
-      const envKey = Deno.env.get(`${apiType.toUpperCase()}_API_KEY`);
-      if (envKey) {
-        console.log(`Using secure environment variable for ${apiType}`);
-        return envKey;
+    const decryptKey = (encrypted: string | null): string | null => {
+      if (!encrypted) return null;
+      if (!encrypted.startsWith('enc:')) return encrypted;
+      try {
+        return atob(encrypted.substring(4));
+      } catch {
+        return null;
       }
+    };
+
+    const getApiKey = (apiType: string, dbApiKey: string | null): string | null => {
+      const decrypted = decryptKey(dbApiKey);
+      if (decrypted) return decrypted;
       
-      // Priority 2: Database fallback (legacy - less secure)
-      if (dbApiKey) {
-        console.log(`Warning: Using database-stored API key for ${apiType} - migrate to Supabase Secrets`);
-        return dbApiKey;
+      const envKeyName = `${apiType.toUpperCase().replace(/_/g, '_')}_API_KEY`;
+      const envKey = Deno.env.get(envKeyName);
+      if (envKey) return envKey;
+      
+      if (apiType === 'birdeye') {
+        return Deno.env.get('BIRDEYE_API_KEY') || null;
       }
       
       return null;
+    };
+
+    // Validate token safety using RugCheck API
+    const validateTokenSafety = async (token: TokenData): Promise<TokenData> => {
+      try {
+        const response = await fetch(`${RUGCHECK_API}/tokens/${token.address}/report`, {
+          signal: AbortSignal.timeout(5000),
+        });
+        
+        if (response.ok) {
+          const data = await response.json();
+          
+          // Check freeze authority
+          if (data.token?.freezeAuthority && data.token.freezeAuthority !== null) {
+            token.freezeAuthority = data.token.freezeAuthority;
+            token.safetyReasons.push("⚠️ Freeze authority active");
+            token.riskScore = Math.min(token.riskScore + 20, 100);
+          }
+          
+          // Check mint authority
+          if (data.token?.mintAuthority && data.token.mintAuthority !== null) {
+            token.mintAuthority = data.token.mintAuthority;
+            token.safetyReasons.push("⚠️ Mint authority active");
+            token.riskScore = Math.min(token.riskScore + 15, 100);
+          }
+          
+          // Check holder count
+          token.holders = data.token?.holder_count || token.holders;
+          if (token.holders < 10) {
+            token.safetyReasons.push(`⚠️ Low holders: ${token.holders}`);
+            token.riskScore = Math.min(token.riskScore + 10, 100);
+          }
+          
+          // Check for honeypot risks
+          if (data.risks) {
+            const honeypotRisk = data.risks.find((r: any) => 
+              r.name?.toLowerCase().includes("honeypot") && (r.level === "danger" || r.level === "warn")
+            );
+            if (honeypotRisk) {
+              token.canSell = false;
+              token.isTradeable = false;
+              token.safetyReasons.push("🚨 HONEYPOT DETECTED");
+              token.riskScore = 100;
+            }
+          }
+        }
+      } catch (e) {
+        console.error('RugCheck error for', token.symbol, e);
+        token.safetyReasons.push("⚠️ Safety check unavailable");
+      }
+      
+      return token;
+    };
+
+    // Check if token is tradeable on Jupiter
+    // IMPORTANT: On network/DNS errors, DON'T mark as untradeable - keep original flags
+    // Jupiter API endpoints with fallbacks (some edge function environments have DNS issues)
+    const JUPITER_ENDPOINTS = [
+      "https://quote-api.jup.ag/v6/quote",
+      "https://api.jup.ag/quote/v6", // Alternative endpoint
+      "https://lite-api.jup.ag/v6/quote", // Lite API fallback
+    ];
+
+    // Retry fetch with exponential backoff and endpoint rotation
+    const fetchWithRetry = async (
+      buildUrl: (baseEndpoint: string) => string,
+      maxRetries: number = 3,
+      baseDelay: number = 500
+    ): Promise<Response | null> => {
+      for (let attempt = 0; attempt < maxRetries; attempt++) {
+        for (const endpoint of JUPITER_ENDPOINTS) {
+          try {
+            const url = buildUrl(endpoint);
+            const response = await fetch(url, {
+              signal: AbortSignal.timeout(8000), // Increased timeout
+              headers: {
+                'Accept': 'application/json',
+                'User-Agent': 'MemeSniper/1.0',
+              },
+            });
+            
+            if (response.ok) {
+              return response;
+            }
+            
+            // If rate limited, wait and try next endpoint
+            if (response.status === 429) {
+              const delay = baseDelay * Math.pow(2, attempt);
+              await new Promise(r => setTimeout(r, delay));
+              continue;
+            }
+          } catch (e: any) {
+            const errorMsg = e?.message || '';
+            const isDnsError = errorMsg.includes('dns') || errorMsg.includes('lookup') || 
+                              errorMsg.includes('hostname') || errorMsg.includes('ENOTFOUND');
+            
+            // Only log once per token, not per endpoint
+            if (attempt === 0 && endpoint === JUPITER_ENDPOINTS[0]) {
+              console.log(`[Jupiter] Network issue, trying fallbacks...`);
+            }
+            
+            // If it's a DNS error, try next endpoint immediately
+            if (isDnsError) continue;
+            
+            // For other errors, wait before retry
+            const delay = baseDelay * Math.pow(2, attempt);
+            await new Promise(r => setTimeout(r, delay));
+          }
+        }
+      }
+      return null;
+    };
+
+    const checkTradability = async (token: TokenData): Promise<TokenData> => {
+      // Pump.fun tokens are always tradeable via bonding curve - skip Jupiter check
+      if (token.isPumpFun) {
+        token.canBuy = true;
+        token.canSell = true;
+        token.isTradeable = true;
+        token.safetyReasons.push("✅ Pump.fun bonding curve (tradeable)");
+        return token;
+      }
+
+      try {
+        const params = new URLSearchParams({
+          inputMint: SOL_MINT,
+          outputMint: token.address,
+          amount: "1000000", // 0.001 SOL
+          slippageBps: "500",
+        });
+        
+        const buildUrl = (endpoint: string) => `${endpoint}?${params}`;
+        const response = await fetchWithRetry(buildUrl);
+        
+        if (response) {
+          const data = await response.json();
+          if (data.outAmount && parseInt(data.outAmount) > 0) {
+            token.canBuy = true;
+            token.isTradeable = true;
+            token.safetyReasons.push("✅ Tradeable on Jupiter");
+          } else if (data.routePlan && data.routePlan.length > 0) {
+            // Alternative response format
+            token.canBuy = true;
+            token.isTradeable = true;
+            token.safetyReasons.push("✅ Jupiter route available");
+          } else {
+            // No route found - but for new tokens this is expected
+            // Check if token has any liquidity info from scanner
+            if (token.liquidity && token.liquidity > 0) {
+              token.canBuy = true;
+              token.isTradeable = true;
+              token.safetyReasons.push("⚠️ No Jupiter route yet (new token)");
+            } else {
+              token.canBuy = false;
+              token.isTradeable = false;
+              token.safetyReasons.push("❌ No Jupiter route");
+            }
+          }
+        } else {
+          // All endpoints failed - likely infrastructure issue
+          // For Pump.fun graduated tokens or tokens with liquidity, allow trading
+          if (token.liquidity && token.liquidity > 1000) {
+            token.canBuy = true;
+            token.isTradeable = true;
+            token.safetyReasons.push("⚠️ Jupiter unavailable (has liquidity)");
+          } else {
+            // Keep defaults but warn user
+            token.safetyReasons.push("⚠️ Jupiter check skipped (service unavailable)");
+          }
+        }
+      } catch (e: any) {
+        console.error('Jupiter check unexpected error for', token.symbol, e);
+        // Unexpected error - don't block trading
+        token.safetyReasons.push("⚠️ Jupiter check incomplete");
+      }
+      
+      return token;
+    };
+
+    // Fetch Pump.fun new tokens
+    const fetchPumpFun = async () => {
+      // Pump.fun works with Solana chain
+      if (!chains.includes('solana')) return;
+
+      const pumpFunConfig = getApiConfig('pumpfun');
+      let baseUrl = pumpFunConfig?.base_url || PUMPFUN_API;
+      
+      // Validate URL scheme - only use HTTPS, fallback if WebSocket or invalid URL
+      if (baseUrl.startsWith('wss://') || baseUrl.startsWith('ws://') || !baseUrl.startsWith('http')) {
+        console.log(`[Pump.fun] Invalid URL scheme detected (${baseUrl}), using fallback`);
+        baseUrl = PUMPFUN_API;
+      }
+      
+      const endpoint = `${baseUrl}/coins?offset=0&limit=20&sort=created_timestamp&order=desc&includeNsfw=false`;
+      const startTime = Date.now();
+      
+      try {
+        console.log('Fetching from Pump.fun...');
+        const response = await fetch(endpoint, {
+          signal: AbortSignal.timeout(10000),
+          headers: {
+            'Accept': 'application/json',
+            'User-Agent': 'Mozilla/5.0 (compatible; TokenScanner/1.0)',
+          },
+        });
+        const responseTime = Date.now() - startTime;
+        
+        if (response.ok) {
+          await logApiHealth('pumpfun', endpoint, responseTime, response.status, true);
+          const data = await response.json();
+          
+          for (const coin of (data || []).slice(0, 15)) {
+            if (!coin) continue;
+            
+            // Calculate liquidity from virtual reserves
+            const virtualSolReserves = coin.virtual_sol_reserves || 0;
+            const liquidity = virtualSolReserves / 1e9; // Convert lamports to SOL
+            
+            if (liquidity >= minLiquidity || minLiquidity <= 1) { // Pump.fun tokens often have low initial liquidity
+              tokens.push({
+                id: `pumpfun-${coin.mint}`,
+                address: coin.mint || '',
+                name: coin.name || 'Unknown',
+                symbol: coin.symbol || '???',
+                chain: 'solana',
+                liquidity,
+                liquidityLocked: false,
+                lockPercentage: null,
+                priceUsd: coin.usd_market_cap ? coin.usd_market_cap / (coin.total_supply || 1) : 0,
+                priceChange24h: 0,
+                volume24h: 0,
+                marketCap: coin.usd_market_cap || 0,
+                holders: 0,
+                createdAt: coin.created_timestamp ? new Date(coin.created_timestamp).toISOString() : new Date().toISOString(),
+                earlyBuyers: Math.floor(Math.random() * 5) + 1,
+                buyerPosition: Math.floor(Math.random() * 3) + 1,
+                riskScore: coin.complete ? 40 : 60, // Lower risk if graduated
+                source: 'Pump.fun',
+                pairAddress: coin.bonding_curve || '',
+                isTradeable: true,
+                canBuy: true,
+                canSell: true,
+                freezeAuthority: null,
+                mintAuthority: null,
+                isPumpFun: !coin.complete, // True if still on bonding curve
+                safetyReasons: coin.complete ? ['✅ Graduated to Raydium'] : ['⚡ On Pump.fun bonding curve'],
+              });
+            }
+          }
+          console.log(`Pump.fun: Found ${tokens.filter(t => t.source === 'Pump.fun').length} tokens`);
+        } else {
+          const errorMsg = `HTTP ${response.status}: ${response.statusText}`;
+          await logApiHealth('pumpfun', endpoint, responseTime, response.status, false, errorMsg);
+          errors.push(`Pump.fun: ${errorMsg}`);
+          apiErrors.push({
+            apiName: pumpFunConfig?.api_name || 'Pump.fun',
+            apiType: 'pumpfun',
+            errorMessage: errorMsg,
+            endpoint,
+            timestamp: new Date().toISOString(),
+          });
+        }
+      } catch (e: any) {
+        const responseTime = Date.now() - startTime;
+        const errorMsg = e.name === 'TimeoutError' ? 'Request timeout' : (e.message || 'Network error');
+        await logApiHealth('pumpfun', endpoint, responseTime, 0, false, errorMsg);
+        console.error('Pump.fun error:', e);
+        errors.push(`Pump.fun: ${errorMsg}`);
+        apiErrors.push({
+          apiName: pumpFunConfig?.api_name || 'Pump.fun',
+          apiType: 'pumpfun',
+          errorMessage: errorMsg,
+          endpoint,
+          timestamp: new Date().toISOString(),
+        });
+      }
     };
 
     // DexScreener fetch function
@@ -169,7 +463,6 @@ serve(async (req) => {
           await logApiHealth('dexscreener', endpoint, responseTime, response.status, true);
           const data = await response.json();
           
-          // Safely extract pairs - handle different response structures
           let pairs: any[] = [];
           if (Array.isArray(data)) {
             pairs = data;
@@ -208,6 +501,13 @@ serve(async (req) => {
                 riskScore: Math.floor(Math.random() * 40) + 30,
                 source: 'DexScreener',
                 pairAddress: pair.pairAddress || '',
+                isTradeable: true,
+                canBuy: true,
+                canSell: true,
+                freezeAuthority: null,
+                mintAuthority: null,
+                isPumpFun: false,
+                safetyReasons: [],
               });
             }
           }
@@ -284,6 +584,13 @@ serve(async (req) => {
                 riskScore: Math.floor(Math.random() * 35) + 35,
                 source: 'GeckoTerminal',
                 pairAddress: pool.id,
+                isTradeable: true,
+                canBuy: true,
+                canSell: true,
+                freezeAuthority: null,
+                mintAuthority: null,
+                isPumpFun: false,
+                safetyReasons: [],
               });
             }
           }
@@ -320,7 +627,6 @@ serve(async (req) => {
       const birdeyeConfig = getApiConfig('birdeye');
       if (!birdeyeConfig) return;
       
-      // Get API key from secure source (env) with database fallback
       const apiKey = getApiKey('birdeye', birdeyeConfig.api_key_encrypted);
       if (!apiKey) return;
 
@@ -363,6 +669,13 @@ serve(async (req) => {
                 riskScore: Math.floor(Math.random() * 30) + 40,
                 source: 'Birdeye',
                 pairAddress: token.address,
+                isTradeable: true,
+                canBuy: true,
+                canSell: true,
+                freezeAuthority: null,
+                mintAuthority: null,
+                isPumpFun: false,
+                safetyReasons: [],
               });
             }
           }
@@ -394,35 +707,34 @@ serve(async (req) => {
       }
     };
 
-    // Jupiter health check function
-    const checkJupiter = async () => {
-      const jupiterConfig = getApiConfig('trade_execution');
-      if (!chains.includes('solana') || !jupiterConfig) return;
+    // Jupiter/Raydium health check
+    const checkTradeExecution = async () => {
+      const tradeConfig = getApiConfig('trade_execution');
+      if (!chains.includes('solana') || !tradeConfig) return;
 
-      const endpoint = `${jupiterConfig.base_url}/price/v2?ids=So11111111111111111111111111111111111111112`;
+      const endpoint = JUPITER_QUOTE_API;
       const startTime = Date.now();
       try {
         console.log('Checking Jupiter API health...');
-        const jupiterResponse = await fetch(endpoint, {
-          headers: { 'Accept': 'application/json' },
+        const params = new URLSearchParams({
+          inputMint: SOL_MINT,
+          outputMint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', // USDC
+          amount: '1000000',
+          slippageBps: '50',
+        });
+        
+        const response = await fetch(`${endpoint}?${params}`, {
           signal: AbortSignal.timeout(8000),
         });
         const responseTime = Date.now() - startTime;
         
-        if (jupiterResponse.ok) {
-          await logApiHealth('trade_execution', endpoint, responseTime, jupiterResponse.status, true);
+        if (response.ok) {
+          await logApiHealth('trade_execution', endpoint, responseTime, response.status, true);
           console.log('Jupiter API is healthy');
         } else {
-          const errorMsg = `HTTP ${jupiterResponse.status}: ${jupiterResponse.statusText}`;
-          await logApiHealth('trade_execution', endpoint, responseTime, jupiterResponse.status, false, errorMsg);
+          const errorMsg = `HTTP ${response.status}: ${response.statusText}`;
+          await logApiHealth('trade_execution', endpoint, responseTime, response.status, false, errorMsg);
           errors.push(`Jupiter: ${errorMsg}`);
-          apiErrors.push({
-            apiName: jupiterConfig.api_name,
-            apiType: 'trade_execution',
-            errorMessage: errorMsg,
-            endpoint,
-            timestamp: new Date().toISOString(),
-          });
         }
       } catch (e: any) {
         const responseTime = Date.now() - startTime;
@@ -430,42 +742,17 @@ serve(async (req) => {
         await logApiHealth('trade_execution', endpoint, responseTime, 0, false, errorMsg);
         console.error('Jupiter API error:', e);
         errors.push(`Jupiter: ${errorMsg}`);
-        apiErrors.push({
-          apiName: jupiterConfig.api_name,
-          apiType: 'trade_execution',
-          errorMessage: errorMsg,
-          endpoint,
-          timestamp: new Date().toISOString(),
-        });
       }
     };
 
-    // Execute all API calls in parallel for better performance
+    // Execute all API calls in parallel
     await Promise.allSettled([
+      fetchPumpFun(),
       fetchDexScreener(),
       fetchGeckoTerminal(),
       fetchBirdeye(),
-      checkJupiter(),
+      checkTradeExecution(),
     ]);
-
-    // Validate liquidity lock status using honeypot/rugcheck API
-    const honeypotConfig = getApiConfig('honeypot_rugcheck');
-    if (honeypotConfig && tokens.length > 0) {
-      console.log('Validating tokens with honeypot check...');
-      for (const token of tokens.slice(0, 10)) {
-        try {
-          const response = await fetch(`${honeypotConfig.base_url}/v2/IsHoneypot?address=${token.address}`);
-          if (response.ok) {
-            const data = await response.json();
-            token.riskScore = data.honeypotResult?.isHoneypot ? 100 : Math.min(token.riskScore, 50);
-            token.liquidityLocked = data.pair?.liquidity?.isLocked || false;
-            token.lockPercentage = data.pair?.liquidity?.lockPercentage || null;
-          }
-        } catch (e) {
-          console.error('Honeypot check error for', token.symbol, e);
-        }
-      }
-    }
 
     // Deduplicate tokens by address
     const uniqueTokens = tokens.reduce((acc: TokenData[], token) => {
@@ -475,22 +762,68 @@ serve(async (req) => {
       return acc;
     }, []);
 
-    // Sort by potential (low risk, high liquidity, early buyer position)
-    uniqueTokens.sort((a, b) => {
+    // CRITICAL: Filter out non-Solana tokens (only valid Solana addresses)
+    // This prevents Ethereum/BSC addresses from reaching the auto-sniper
+    const solanaOnlyTokens = uniqueTokens.filter(token => {
+      const isSolanaAddress = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(token.address);
+      const isEthereumAddress = token.address.startsWith('0x');
+      
+      if (isEthereumAddress || !isSolanaAddress) {
+        console.log(`[Filter] Removed non-Solana token: ${token.symbol} (${token.address})`);
+        return false;
+      }
+      return token.chain === 'solana';
+    });
+
+    // Validate tokens in parallel (limit to first 15 for performance)
+    const tokensToValidate = solanaOnlyTokens.slice(0, 15);
+    const validatedTokens = await Promise.all(
+      tokensToValidate.map(async (token) => {
+        // Skip Pump.fun tokens from additional validation (they have bonding curve)
+        if (token.isPumpFun) return token;
+        
+        // Run safety and tradability checks in parallel
+        const [safetyChecked, tradabilityChecked] = await Promise.all([
+          validateTokenSafety(token),
+          checkTradability(token),
+        ]);
+        
+        return {
+          ...token,
+          ...safetyChecked,
+          canBuy: tradabilityChecked.canBuy,
+          isTradeable: safetyChecked.isTradeable && tradabilityChecked.canBuy,
+          safetyReasons: [...safetyChecked.safetyReasons, ...tradabilityChecked.safetyReasons],
+        };
+      })
+    );
+
+    // Filter out non-tradeable tokens and sort by potential
+    const tradeableTokens = validatedTokens.filter(t => t.isTradeable);
+    
+    tradeableTokens.sort((a, b) => {
+      // Prioritize: low risk, high liquidity, early buyer position
       const scoreA = (a.buyerPosition || 10) * 10 + a.riskScore - (a.liquidity / 1000);
       const scoreB = (b.buyerPosition || 10) * 10 + b.riskScore - (b.liquidity / 1000);
       return scoreA - scoreB;
     });
 
-    console.log(`Found ${uniqueTokens.length} tokens matching criteria`);
+    console.log(`Found ${tradeableTokens.length} tradeable tokens out of ${uniqueTokens.length} total`);
 
     return new Response(
       JSON.stringify({
-        tokens: uniqueTokens,
+        tokens: tradeableTokens,
+        allTokens: uniqueTokens, // Include all for transparency
         errors,
         apiErrors,
         timestamp: new Date().toISOString(),
         apiCount: apiConfigs?.filter((c: ApiConfig) => c.is_enabled).length || 0,
+        stats: {
+          total: uniqueTokens.length,
+          tradeable: tradeableTokens.length,
+          pumpFun: uniqueTokens.filter(t => t.isPumpFun).length,
+          filtered: uniqueTokens.length - tradeableTokens.length,
+        },
       }),
       {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },

@@ -23,6 +23,14 @@ export interface ScannedToken {
   riskScore: number;
   source: string;
   pairAddress: string;
+  // Safety validation fields from token-scanner - CRITICAL for trade execution
+  isPumpFun?: boolean;       // True if on Pump.fun bonding curve
+  isTradeable?: boolean;     // True if scanner verified tradability  
+  canBuy?: boolean;          // True if buy is possible
+  canSell?: boolean;         // True if sell is possible
+  freezeAuthority?: string | null;
+  mintAuthority?: string | null;
+  safetyReasons?: string[];  // Array of safety check results
 }
 
 export interface ApiError {
@@ -67,6 +75,7 @@ const RATE_LIMIT_WINDOW_MS = 60000;
 
 const generateSingleDemoToken = (idx: number): ScannedToken => {
   const token = demoTokenNames[idx % demoTokenNames.length];
+  const isPumpFun = Math.random() > 0.4; // 60% are Pump.fun tokens
   return {
     id: `demo-${idx}-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
     address: `Demo${idx}...${Math.random().toString(36).substring(2, 8)}`,
@@ -85,14 +94,23 @@ const generateSingleDemoToken = (idx: number): ScannedToken => {
     earlyBuyers: Math.floor(Math.random() * 8) + 1,
     buyerPosition: Math.floor(Math.random() * 5) + 1,
     riskScore: Math.floor(Math.random() * 60) + 20,
-    source: 'Demo',
+    source: isPumpFun ? 'Pump.fun' : 'DexScreener',
     pairAddress: `DemoPair${idx}`,
+    // Safety validation fields - mark demo tokens as tradeable
+    isPumpFun: isPumpFun,
+    isTradeable: true,
+    canBuy: true,
+    canSell: true,
+    freezeAuthority: null,
+    mintAuthority: null,
+    safetyReasons: isPumpFun ? ['✅ Pump.fun bonding curve'] : ['✅ Demo token - always tradeable'],
   };
 };
 
 export function useTokenScanner() {
   const [tokens, setTokens] = useState<ScannedToken[]>([]);
   const [loading, setLoading] = useState(false);
+  const [isInitialLoad, setIsInitialLoad] = useState(true); // Track first load
   const [lastScan, setLastScan] = useState<string | null>(null);
   const [apiCount, setApiCount] = useState(0);
   const [errors, setErrors] = useState<string[]>([]);
@@ -146,39 +164,59 @@ export function useTokenScanner() {
     };
   }, [rateLimit.isLimited, rateLimit.resetTime]);
 
-  // Add tokens one by one with delay (tick-by-tick)
-  const addTokensIncrementally = useCallback((newTokens: ScannedToken[], onComplete?: () => void) => {
-    // Clear any existing interval
-    if (tickIntervalRef.current) {
-      clearInterval(tickIntervalRef.current);
-    }
-
-    let index = 0;
-    const addInterval = 150; // 150ms between each token
-
-    tickIntervalRef.current = setInterval(() => {
-      if (index < newTokens.length) {
-        const tokenToAdd = newTokens[index];
-        setTokens(prev => {
-          // Check if token already exists (by address)
-          const exists = prev.some(t => t.address === tokenToAdd.address);
-          if (exists) {
-            // Update existing token
-            return prev.map(t => t.address === tokenToAdd.address ? tokenToAdd : t);
-          }
-          // Add new token at the beginning
-          return [tokenToAdd, ...prev].slice(0, 50); // Keep max 50 tokens
-        });
-        index++;
-      } else {
-        // All tokens added
-        if (tickIntervalRef.current) {
-          clearInterval(tickIntervalRef.current);
-          tickIntervalRef.current = null;
+  // Merge new tokens seamlessly - no delay, instant update
+  const mergeTokens = useCallback((newTokens: ScannedToken[], onComplete?: () => void) => {
+    setTokens(prev => {
+      const tokenMap = new Map<string, ScannedToken>();
+      
+      // Add existing tokens to map
+      prev.forEach(t => tokenMap.set(t.address, t));
+      
+      // Merge new tokens - update existing or add new
+      newTokens.forEach(newToken => {
+        const existing = tokenMap.get(newToken.address);
+        if (existing) {
+          // Update existing token's price data only (keep position stable)
+          tokenMap.set(newToken.address, {
+            ...existing,
+            priceUsd: newToken.priceUsd,
+            priceChange24h: newToken.priceChange24h,
+            volume24h: newToken.volume24h,
+            liquidity: newToken.liquidity,
+            marketCap: newToken.marketCap,
+            holders: newToken.holders,
+            riskScore: newToken.riskScore,
+          });
+        } else {
+          // New token - add to map (will be placed at top)
+          tokenMap.set(newToken.address, newToken);
         }
-        if (onComplete) onComplete();
-      }
-    }, addInterval);
+      });
+      
+      // Convert back to array, new tokens first
+      const newAddresses = new Set(newTokens.map(t => t.address));
+      const existingAddresses = prev.map(t => t.address);
+      
+      // Build ordered array: new tokens first, then existing in their order
+      const orderedTokens: ScannedToken[] = [];
+      
+      // Add genuinely new tokens at top
+      newTokens.forEach(t => {
+        if (!existingAddresses.includes(t.address)) {
+          orderedTokens.push(tokenMap.get(t.address)!);
+        }
+      });
+      
+      // Add existing tokens (updated) in their original order
+      existingAddresses.forEach(addr => {
+        const token = tokenMap.get(addr);
+        if (token) orderedTokens.push(token);
+      });
+      
+      return orderedTokens.slice(0, 100); // Keep max 100 tokens
+    });
+    
+    onComplete?.();
   }, []);
 
   // Check and update rate limit status
@@ -243,12 +281,16 @@ export function useTokenScanner() {
     }
 
     scanInProgress.current = true;
-    setLoading(true);
+    
+    // Only show loading spinner on initial load - subsequent scans are background
+    if (isInitialLoad) {
+      setLoading(true);
+    }
     setErrors([]);
     setApiErrors([]);
 
     try {
-      // Demo mode: return simulated data incrementally
+      // Demo mode: return simulated data
       if (isDemo) {
         // Generate 3-5 new demo tokens per scan
         const numNewTokens = Math.floor(Math.random() * 3) + 3;
@@ -261,9 +303,10 @@ export function useTokenScanner() {
           }
         }
 
-        // Add tokens incrementally
-        addTokensIncrementally(newDemoTokens, () => {
+        // Merge tokens seamlessly (no flicker)
+        mergeTokens(newDemoTokens, () => {
           setLoading(false);
+          setIsInitialLoad(false);
           scanInProgress.current = false;
         });
 
@@ -288,14 +331,16 @@ export function useTokenScanner() {
 
       const result = data as ScanResult;
       
-      // Add tokens incrementally for smooth loading
+      // Merge tokens seamlessly (background update, no flicker)
       if (result.tokens && result.tokens.length > 0) {
-        addTokensIncrementally(result.tokens, () => {
+        mergeTokens(result.tokens, () => {
           setLoading(false);
+          setIsInitialLoad(false);
           scanInProgress.current = false;
         });
       } else {
         setLoading(false);
+        setIsInitialLoad(false);
         scanInProgress.current = false;
       }
 
@@ -305,12 +350,25 @@ export function useTokenScanner() {
       
       if (result.errors && result.errors.length > 0) {
         setErrors(result.errors);
-        const failedApis = result.apiErrors?.map(e => e.apiName).join(', ') || 'Unknown APIs';
-        toast({
-          title: 'Scan completed with warnings',
-          description: `${result.errors.length} API(s) had issues: ${failedApis}`,
-          variant: 'destructive',
-        });
+        // Build a clean list of failed APIs, filtering empty/undefined names
+        const failedApiNames = result.apiErrors
+          ?.map(e => e.apiName || e.apiType)
+          .filter(name => name && name.trim() !== '')
+          || [];
+        
+        // Only show destructive toast if ALL sources failed (no tokens returned)
+        // Otherwise just log - partial failures are normal for decentralized APIs
+        const hasTokens = result.tokens && result.tokens.length > 0;
+        if (!hasTokens && failedApiNames.length > 0) {
+          toast({
+            title: 'Scan failed',
+            description: `No tokens found. APIs with issues: ${failedApiNames.join(', ')}`,
+            variant: 'destructive',
+          });
+        } else if (failedApiNames.length > 0) {
+          // Partial success - just log, don't show destructive toast
+          console.log(`Scan completed with ${result.tokens?.length || 0} tokens. Some APIs had issues: ${failedApiNames.join(', ')}`);
+        }
       }
 
       return result;
@@ -322,10 +380,11 @@ export function useTokenScanner() {
         variant: 'destructive',
       });
       setLoading(false);
+      setIsInitialLoad(false);
       scanInProgress.current = false;
       return null;
     }
-  }, [toast, isDemo, isLive, addTokensIncrementally, checkRateLimit]);
+  }, [toast, isDemo, isLive, mergeTokens, checkRateLimit, isInitialLoad]);
 
   const getTopOpportunities = useCallback((limit: number = 5) => {
     return tokens

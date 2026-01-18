@@ -563,12 +563,12 @@ const AdminAnalytics = forwardRef<HTMLDivElement, object>(function AdminAnalytic
                     Scanner API Health Summary
                   </CardTitle>
                   <CardDescription>
-                    Real-time health status of token scanner APIs (DexScreener, GeckoTerminal, Birdeye, Jupiter)
+                    Real-time health status of token scanner APIs (DexScreener, GeckoTerminal, Birdeye, Raydium)
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                    {['dexscreener', 'geckoterminal', 'birdeye', 'jupiter'].map((apiType) => {
+                    {['dexscreener', 'geckoterminal', 'birdeye', 'raydium'].map((apiType) => {
                       const apiData = analytics.apiHealth.byType[apiType];
                       const config = apiConfigs.find((c: ApiConfig) => c.api_type === apiType);
                       const errorCount = analytics.apiErrors.byType[apiType] || 0;

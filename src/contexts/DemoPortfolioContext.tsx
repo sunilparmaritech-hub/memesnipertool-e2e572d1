@@ -72,7 +72,7 @@ interface DemoPortfolioContextType {
   losses: number;
 }
 
-const INITIAL_DEMO_BALANCE = 5000; // 5000 SOL
+const INITIAL_DEMO_BALANCE = 100; // 100 SOL
 const DEMO_STORAGE_KEY = 'demo_portfolio_state';
 
 const DemoPortfolioContext = createContext<DemoPortfolioContextType | undefined>(undefined);

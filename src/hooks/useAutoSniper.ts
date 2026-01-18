@@ -16,6 +16,13 @@ export interface TokenData {
   riskScore: number;
   categories: string[];
   priceUsd?: number;
+  // Scanner validation flags - CRITICAL for trade execution
+  isPumpFun?: boolean;      // True if on Pump.fun bonding curve
+  isTradeable?: boolean;    // True if scanner verified tradability
+  canBuy?: boolean;         // True if buy is possible
+  canSell?: boolean;        // True if sell is possible
+  source?: string;          // API source (e.g., 'Pump.fun', 'DexScreener')
+  safetyReasons?: string[]; // Array of safety check results
 }
 
 export interface SnipeDecision {
@@ -57,6 +64,15 @@ export interface AutoSniperResult {
   timestamp: string;
 }
 
+export interface EvaluateTokensOptions {
+  /**
+   * When true, do not show the "Enable auto-trading" / opportunities toast.
+   * Useful when the caller handles execution (e.g., wallet-signing flow) and will
+   * show its own UX.
+   */
+  suppressOpportunityToast?: boolean;
+}
+
 export function useAutoSniper() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<AutoSniperResult | null>(null);
@@ -76,18 +92,21 @@ export function useAutoSniper() {
   const evaluateTokens = useCallback(async (
     tokens: TokenData[],
     executeOnApproval: boolean = false,
-    onTradeExecuted?: () => void
+    onTradeExecuted?: () => void,
+    options?: EvaluateTokensOptions
   ): Promise<AutoSniperResult | null> => {
     // Prevent concurrent evaluations
     if (evaluatingRef.current) {
-      console.log('Auto-sniper evaluation already in progress, skipping...');
+      console.log('[Auto-sniper] Evaluation already in progress, skipping...');
       return null;
     }
 
-    // Throttle: minimum 20 seconds between runs
+    // Throttle: 5 seconds for live mode (wallet signing takes time anyway)
+    // 20 seconds for demo mode (fast simulation)
+    const throttleMs = isDemo ? 20000 : 5000;
     const now = Date.now();
-    if (now - lastEvalRef.current < 20000) {
-      console.log('Auto-sniper throttled, too soon since last run');
+    if (now - lastEvalRef.current < throttleMs) {
+      console.log(`[Auto-sniper] Throttled, wait ${Math.ceil((throttleMs - (now - lastEvalRef.current)) / 1000)}s`);
       return null;
     }
 
@@ -97,9 +116,9 @@ export function useAutoSniper() {
     setError(null);
 
     try {
-      // Demo mode guard - don't call real API
+      // Demo mode guard - don't call real API (demo trades handled in Scanner.tsx)
       if (isDemo) {
-        console.log('[Demo Guard] Skipping real auto-sniper API call in demo mode');
+        console.log('[Auto-sniper] Demo mode - skipping API call');
         evaluatingRef.current = false;
         setLoading(false);
         return null;
@@ -110,7 +129,7 @@ export function useAutoSniper() {
         throw new Error('Please sign in to use the auto-sniper');
       }
 
-      console.log(`Auto-sniper evaluating ${tokens.length} tokens, executeOnApproval: ${executeOnApproval}`);
+      console.log(`[Auto-sniper] Evaluating ${tokens.length} tokens:`, tokens.map(t => `${t.symbol}(${t.source || 'unknown'})`).join(', '));
 
       const { data, error: fnError } = await supabase.functions.invoke('auto-sniper', {
         body: { tokens, executeOnApproval },
@@ -164,10 +183,10 @@ export function useAutoSniper() {
         if (onTradeExecuted) {
           onTradeExecuted();
         }
-      } else if (approved > 0 && !executeOnApproval) {
+      } else if (approved > 0 && !executeOnApproval && !options?.suppressOpportunityToast) {
         toast({
-          title: 'Snipe Opportunities Found',
-          description: `${approved} token(s) passed all rules. Enable auto-trading to execute.`,
+          title: 'Opportunities Found',
+          description: `${approved} token(s) passed all rules.`,
         });
       }
 
@@ -186,7 +205,7 @@ export function useAutoSniper() {
       setLoading(false);
       evaluatingRef.current = false;
     }
-  }, [toast, addNotification]);
+  }, [toast, addNotification, isDemo]);
 
   const clearResult = useCallback(() => {
     setResult(null);

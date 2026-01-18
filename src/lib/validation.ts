@@ -10,7 +10,7 @@ export interface ValidationResult {
 // Trading parameter constraints
 export const TRADING_LIMITS = {
   MIN_LIQUIDITY: { min: 10, max: 100000, default: 300 },
-  TRADE_AMOUNT: { min: 0.01, max: 100, default: 0.1 },
+  TRADE_AMOUNT: { min: 0.001, max: 10, default: 0.1 }, // Updated: Min 0.001 SOL, Max 10 SOL
   TAKE_PROFIT: { min: 5, max: 1000, default: 100 },
   STOP_LOSS: { min: 1, max: 95, default: 20 },
   MAX_CONCURRENT_TRADES: { min: 1, max: 20, default: 3 },

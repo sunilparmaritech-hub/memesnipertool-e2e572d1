@@ -28,7 +28,14 @@ interface LiquidityBotPanelProps {
   onSave: () => void;
   isActive: boolean;
   onToggleActive: (active: boolean) => void;
+  autoEntryEnabled: boolean;
+  onAutoEntryChange: (enabled: boolean) => void;
+  autoExitEnabled: boolean;
+  onAutoExitChange: (enabled: boolean) => void;
   isDemo?: boolean;
+  walletConnected?: boolean;
+  walletAddress?: string | null;
+  walletBalance?: string | null;
 }
 
 export default function LiquidityBotPanel({
@@ -38,10 +45,15 @@ export default function LiquidityBotPanel({
   onSave,
   isActive,
   onToggleActive,
+  autoEntryEnabled,
+  onAutoEntryChange,
+  autoExitEnabled,
+  onAutoExitChange,
   isDemo = false,
+  walletConnected = false,
+  walletAddress = null,
+  walletBalance = null,
 }: LiquidityBotPanelProps) {
-  const [autoEntry, setAutoEntry] = useState(true);
-  const [autoExit, setAutoExit] = useState(true);
   const [targetBuyerPosition, setTargetBuyerPosition] = useState(2);
   const [validationError, setValidationError] = useState<string | null>(null);
 
@@ -93,28 +105,28 @@ export default function LiquidityBotPanel({
 
   return (
     <div className="bg-card/80 backdrop-blur-sm rounded-xl border border-border/50 overflow-hidden flex flex-col">
-      {/* Header - Fixed height */}
-      <div className="p-4 border-b border-border/50 shrink-0">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-3">
-            <div className={`w-11 h-11 rounded-xl flex items-center justify-center border transition-colors shrink-0 ${
+      {/* Header - Mobile compact */}
+      <div className="p-3 md:p-4 border-b border-border/50 shrink-0">
+        <div className="flex items-center justify-between mb-3 md:mb-4">
+          <div className="flex items-center gap-2 md:gap-3">
+            <div className={`w-9 h-9 md:w-11 md:h-11 rounded-xl flex items-center justify-center border transition-colors shrink-0 ${
               isActive 
                 ? 'bg-gradient-to-br from-success/20 to-success/5 border-success/30' 
                 : 'bg-secondary border-border/50'
             }`}>
-              <Bot className={`w-5 h-5 ${isActive ? 'text-success' : 'text-muted-foreground'}`} />
+              <Bot className={`w-4 h-4 md:w-5 md:h-5 ${isActive ? 'text-success' : 'text-muted-foreground'}`} />
             </div>
             <div className="min-w-0">
-              <h2 className="font-bold text-foreground text-lg truncate">Liquidity Bot</h2>
-              <p className={`text-xs font-medium ${isActive ? 'text-success' : 'text-muted-foreground'}`}>
+              <h2 className="font-bold text-foreground text-base md:text-lg truncate">Liquidity Bot</h2>
+              <p className={`text-[10px] md:text-xs font-medium ${isActive ? 'text-success' : 'text-muted-foreground'}`}>
                 {isActive ? '● Active' : '○ Inactive'}
               </p>
             </div>
           </div>
           
-          <div className="flex items-center gap-2 shrink-0">
-            <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-foreground">
-              <Settings2 className="w-4 h-4" />
+          <div className="flex items-center gap-1.5 md:gap-2 shrink-0">
+            <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-foreground w-8 h-8 md:w-9 md:h-9">
+              <Settings2 className="w-3.5 h-3.5 md:w-4 md:h-4" />
             </Button>
             <Switch
               checked={isActive}
@@ -124,54 +136,86 @@ export default function LiquidityBotPanel({
           </div>
         </div>
         
-        {/* Auto Entry/Exit Toggles */}
-        <div className="flex items-center gap-4 p-3 bg-secondary/40 rounded-lg">
-          <div className="flex items-center gap-2 flex-1">
-            <span className="text-sm text-muted-foreground whitespace-nowrap">Auto Entry</span>
+        {/* Wallet Status Indicator - Mobile compact */}
+        <div className={`flex items-center gap-2 md:gap-3 p-2 md:p-3 rounded-lg border ${
+          walletConnected 
+            ? 'bg-success/10 border-success/30' 
+            : 'bg-warning/10 border-warning/30'
+        }`}>
+          <div className={`w-7 h-7 md:w-8 md:h-8 rounded-lg flex items-center justify-center shrink-0 ${
+            walletConnected ? 'bg-success/20' : 'bg-warning/20'
+          }`}>
+            {walletConnected ? (
+              <Shield className="w-3.5 h-3.5 md:w-4 md:h-4 text-success" />
+            ) : (
+              <AlertCircle className="w-3.5 h-3.5 md:w-4 md:h-4 text-warning" />
+            )}
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className={`text-[10px] md:text-xs font-medium ${walletConnected ? 'text-success' : 'text-warning'}`}>
+              {walletConnected ? 'Wallet Connected' : 'No Wallet'}
+            </p>
+            <p className="text-[10px] md:text-xs text-muted-foreground truncate">
+              {walletConnected 
+                ? `${walletAddress?.slice(0, 4)}...${walletAddress?.slice(-3)} • ${walletBalance}`
+                : isDemo ? 'Demo mode' : 'Connect for live trading'}
+            </p>
+          </div>
+          {!isDemo && !walletConnected && (
+            <span className="text-[9px] md:text-[10px] px-1.5 py-0.5 rounded bg-warning/20 text-warning font-medium shrink-0">
+              Required
+            </span>
+          )}
+        </div>
+        
+        {/* Auto Entry/Exit Toggles - Mobile compact */}
+        <div className="flex items-center gap-3 md:gap-4 p-2 md:p-3 bg-secondary/40 rounded-lg mt-3">
+          <div className="flex items-center gap-1.5 md:gap-2 flex-1">
+            <span className="text-xs md:text-sm text-muted-foreground whitespace-nowrap">Auto Entry</span>
             <Switch
-              checked={autoEntry}
-              onCheckedChange={setAutoEntry}
-              className="data-[state=checked]:bg-success"
+              checked={autoEntryEnabled}
+              onCheckedChange={onAutoEntryChange}
+              className="data-[state=checked]:bg-success scale-90 md:scale-100"
             />
           </div>
-          <div className="w-px h-6 bg-border shrink-0" />
-          <div className="flex items-center gap-2 flex-1">
-            <span className="text-sm text-muted-foreground whitespace-nowrap">Auto Exit</span>
+          <div className="w-px h-5 md:h-6 bg-border shrink-0" />
+          <div className="flex items-center gap-1.5 md:gap-2 flex-1">
+            <span className="text-xs md:text-sm text-muted-foreground whitespace-nowrap">Auto Exit</span>
             <Switch
-              checked={autoExit}
-              onCheckedChange={setAutoExit}
-              className="data-[state=checked]:bg-success"
+              checked={autoExitEnabled}
+              onCheckedChange={onAutoExitChange}
+              className="data-[state=checked]:bg-success scale-90 md:scale-100"
             />
           </div>
         </div>
       </div>
       
-      {/* Settings */}
-      <div className="p-4 space-y-4">
+      {/* Settings - Mobile optimized spacing */}
+      <div className="p-3 md:p-4 space-y-3 md:space-y-4 overflow-y-auto flex-1">
         {/* Validation Error */}
         {validationError && (
           <div className="flex items-center gap-2 p-2 bg-destructive/10 rounded-lg border border-destructive/20">
-            <AlertCircle className="w-4 h-4 text-destructive shrink-0" />
-            <span className="text-xs text-destructive">{validationError}</span>
+            <AlertCircle className="w-3.5 h-3.5 md:w-4 md:h-4 text-destructive shrink-0" />
+            <span className="text-[10px] md:text-xs text-destructive">{validationError}</span>
           </div>
         )}
 
         {/* Min Liquidity */}
-        <div className="p-3 bg-secondary/30 rounded-xl">
+        <div className="p-2.5 md:p-3 bg-secondary/30 rounded-xl">
           <div className="flex items-center justify-between mb-2">
-            <div className="flex items-center gap-2 text-xs">
-              <DollarSign className="w-3.5 h-3.5 text-primary" />
+            <div className="flex items-center gap-1.5 md:gap-2 text-[10px] md:text-xs">
+              <DollarSign className="w-3 h-3 md:w-3.5 md:h-3.5 text-primary" />
               <span className="text-muted-foreground font-medium">Min Liquidity (SOL)</span>
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <HelpCircle className="w-3 h-3 text-muted-foreground/50 cursor-help" />
+                  <HelpCircle className="w-3 h-3 text-muted-foreground/50 cursor-help hidden md:block" />
                 </TooltipTrigger>
                 <TooltipContent side="top" className="max-w-[200px]">
-                  <p className="text-xs">Minimum liquidity pool size required before the bot will consider trading a token. Higher = safer but fewer opportunities.</p>
+                  <p className="text-xs">Minimum liquidity pool size required before the bot will consider trading a token.</p>
                 </TooltipContent>
               </Tooltip>
             </div>
-            <span className="text-primary font-bold">{settings.min_liquidity}</span>
+            <span className="text-primary font-bold text-sm md:text-base">{settings.min_liquidity}</span>
           </div>
           <Slider
             value={[settings.min_liquidity]}
@@ -183,18 +227,18 @@ export default function LiquidityBotPanel({
           />
         </div>
         
-        {/* Target Buyer Position */}
-        <div className="p-3 bg-secondary/30 rounded-xl">
-          <div className="flex items-center gap-2 text-xs text-muted-foreground font-medium mb-2">
-            <Target className="w-3.5 h-3.5 text-primary" />
-            Target Buyer Position (Momentum Entry)
+        {/* Target Buyer Position - Mobile compact grid */}
+        <div className="p-2.5 md:p-3 bg-secondary/30 rounded-xl">
+          <div className="flex items-center gap-1.5 md:gap-2 text-[10px] md:text-xs text-muted-foreground font-medium mb-2">
+            <Target className="w-3 h-3 md:w-3.5 md:h-3.5 text-primary" />
+            Target Position
           </div>
-          <div className="grid grid-cols-5 gap-1.5">
+          <div className="grid grid-cols-5 gap-1 md:gap-1.5 mb-1.5 md:mb-2">
             {[1, 2, 3, 4, 5].map((pos) => (
               <button
                 key={pos}
                 onClick={() => setTargetBuyerPosition(pos)}
-                className={`py-2 rounded-lg font-semibold text-xs transition-all ${
+                className={`py-1.5 md:py-2 rounded-lg font-semibold text-[10px] md:text-xs transition-all ${
                   targetBuyerPosition === pos
                     ? 'bg-primary text-primary-foreground shadow-lg shadow-primary/25'
                     : 'bg-secondary text-muted-foreground hover:bg-secondary/80 hover:text-foreground'
@@ -204,25 +248,35 @@ export default function LiquidityBotPanel({
               </button>
             ))}
           </div>
+          <div className="grid grid-cols-5 gap-1 md:gap-1.5">
+            {[6, 7, 8, 9, 10].map((pos) => (
+              <button
+                key={pos}
+                onClick={() => setTargetBuyerPosition(pos)}
+                className={`py-1.5 md:py-2 rounded-lg font-semibold text-[10px] md:text-xs transition-all ${
+                  targetBuyerPosition === pos
+                    ? 'bg-primary text-primary-foreground shadow-lg shadow-primary/25'
+                    : 'bg-secondary text-muted-foreground hover:bg-secondary/80 hover:text-foreground'
+                }`}
+              >
+                #{pos}
+              </button>
+            ))}
+          </div>
+          <p className="text-[9px] md:text-[10px] text-muted-foreground mt-1.5 md:mt-2 text-center">
+            Enter as buyer #{targetBuyerPosition}
+          </p>
         </div>
         
-        {/* Take Profit & Stop Loss */}
-        <div className="grid grid-cols-2 gap-2">
-          <div className="p-3 bg-success/10 rounded-xl border border-success/20">
-            <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center gap-1 text-xs">
-                <TrendingUp className="w-3.5 h-3.5 text-success" />
+        {/* Take Profit & Stop Loss - Mobile compact */}
+        <div className="grid grid-cols-2 gap-1.5 md:gap-2">
+          <div className="p-2 md:p-3 bg-success/10 rounded-xl border border-success/20">
+            <div className="flex items-center justify-between mb-1.5 md:mb-2">
+              <div className="flex items-center gap-1 text-[10px] md:text-xs">
+                <TrendingUp className="w-3 h-3 md:w-3.5 md:h-3.5 text-success" />
                 <span className="text-muted-foreground font-medium">TP</span>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <HelpCircle className="w-3 h-3 text-muted-foreground/50 cursor-help" />
-                  </TooltipTrigger>
-                  <TooltipContent side="top" className="max-w-[180px]">
-                    <p className="text-xs">Take Profit: Auto-sell when position gains this percentage.</p>
-                  </TooltipContent>
-                </Tooltip>
               </div>
-              <span className="text-success font-bold">{settings.profit_take_percentage}%</span>
+              <span className="text-success font-bold text-sm md:text-base">{settings.profit_take_percentage}%</span>
             </div>
             <Slider
               value={[settings.profit_take_percentage]}
@@ -233,21 +287,13 @@ export default function LiquidityBotPanel({
               className="[&_[role=slider]]:bg-success [&_[role=slider]]:border-success"
             />
           </div>
-          <div className="p-3 bg-destructive/10 rounded-xl border border-destructive/20">
-            <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center gap-1 text-xs">
-                <TrendingDown className="w-3.5 h-3.5 text-destructive" />
+          <div className="p-2 md:p-3 bg-destructive/10 rounded-xl border border-destructive/20">
+            <div className="flex items-center justify-between mb-1.5 md:mb-2">
+              <div className="flex items-center gap-1 text-[10px] md:text-xs">
+                <TrendingDown className="w-3 h-3 md:w-3.5 md:h-3.5 text-destructive" />
                 <span className="text-muted-foreground font-medium">SL</span>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <HelpCircle className="w-3 h-3 text-muted-foreground/50 cursor-help" />
-                  </TooltipTrigger>
-                  <TooltipContent side="top" className="max-w-[180px]">
-                    <p className="text-xs">Stop Loss: Auto-sell when position drops this percentage to limit losses.</p>
-                  </TooltipContent>
-                </Tooltip>
               </div>
-              <span className="text-destructive font-bold">{settings.stop_loss_percentage}%</span>
+              <span className="text-destructive font-bold text-sm md:text-base">{settings.stop_loss_percentage}%</span>
             </div>
             <Slider
               value={[settings.stop_loss_percentage]}
@@ -260,40 +306,36 @@ export default function LiquidityBotPanel({
           </div>
         </div>
         
-        {/* Buy Amount & Stats */}
-        <div className="grid grid-cols-2 gap-2">
-          <div className="p-3 bg-secondary/30 rounded-xl">
-            <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center gap-1 text-xs">
-                <Zap className="w-3.5 h-3.5 text-warning" />
-                <span className="text-muted-foreground font-medium">Buy (SOL)</span>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <HelpCircle className="w-3 h-3 text-muted-foreground/50 cursor-help" />
-                  </TooltipTrigger>
-                  <TooltipContent side="top" className="max-w-[180px]">
-                    <p className="text-xs">Amount in SOL to spend on each trade. {isDemo ? 'Demo balance will be used.' : 'Uses your connected wallet.'}</p>
-                  </TooltipContent>
-                </Tooltip>
+        {/* Buy Amount & Max Trades - Mobile compact */}
+        <div className="grid grid-cols-2 gap-1.5 md:gap-2">
+          <div className="p-2 md:p-3 bg-secondary/30 rounded-xl">
+            <div className="flex items-center justify-between mb-1.5 md:mb-2">
+              <div className="flex items-center gap-1 text-[10px] md:text-xs">
+                <Zap className="w-3 h-3 md:w-3.5 md:h-3.5 text-warning" />
+                <span className="text-muted-foreground font-medium">Buy</span>
               </div>
-              <span className="text-foreground font-bold">{settings.trade_amount}</span>
+              <span className="text-foreground font-bold text-sm md:text-base">{settings.trade_amount.toFixed(3)}</span>
             </div>
             <Slider
-              value={[settings.trade_amount * 10]}
-              onValueChange={([v]) => handleUpdateField('trade_amount', v / 10)}
+              value={[settings.trade_amount * 1000]}
+              onValueChange={([v]) => handleUpdateField('trade_amount', v / 1000)}
               min={1}
-              max={50}
+              max={10000}
               step={1}
               className="[&_[role=slider]]:bg-warning [&_[role=slider]]:border-warning"
             />
+            <div className="flex justify-between text-[9px] md:text-[10px] text-muted-foreground mt-1">
+              <span>0.001</span>
+              <span>10 SOL</span>
+            </div>
           </div>
-          <div className="p-3 bg-secondary/30 rounded-xl">
-            <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center gap-1 text-xs">
-                <Users className="w-3.5 h-3.5 text-primary" />
-                <span className="text-muted-foreground font-medium">Max Trades</span>
+          <div className="p-2 md:p-3 bg-secondary/30 rounded-xl">
+            <div className="flex items-center justify-between mb-1.5 md:mb-2">
+              <div className="flex items-center gap-1 text-[10px] md:text-xs">
+                <Users className="w-3 h-3 md:w-3.5 md:h-3.5 text-primary" />
+                <span className="text-muted-foreground font-medium">Max</span>
               </div>
-              <span className="text-foreground font-bold">{settings.max_concurrent_trades}</span>
+              <span className="text-foreground font-bold text-sm md:text-base">{settings.max_concurrent_trades}</span>
             </div>
             <Slider
               value={[settings.max_concurrent_trades]}

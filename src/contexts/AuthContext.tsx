@@ -1,3 +1,4 @@
+// Authentication context with session management
 import { createContext, useContext, useEffect, useState, useRef, useCallback, ReactNode } from "react";
 import { User, Session } from "@supabase/supabase-js";
 import { supabase } from "@/integrations/supabase/client";
@@ -18,6 +19,8 @@ interface AuthContextType {
   role: AppRole | null;
   loading: boolean;
   isAdmin: boolean;
+  isSuspended: boolean;
+  suspensionReason: string | null;
   sessionExpiring: boolean;
   sessionExpiresIn: number;
   signUp: (email: string, password: string) => Promise<{ error: Error | null }>;
@@ -42,6 +45,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [session, setSession] = useState<Session | null>(null);
   const [role, setRole] = useState<AppRole | null>(null);
   const [loading, setLoading] = useState(true);
+  const [isSuspended, setIsSuspended] = useState(false);
+  const [suspensionReason, setSuspensionReason] = useState<string | null>(null);
   const [sessionExpiring, setSessionExpiring] = useState(false);
   const [sessionExpiresIn, setSessionExpiresIn] = useState(0);
   
@@ -213,6 +218,29 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     }
   };
 
+  const fetchSuspensionStatus = async (userId: string) => {
+    try {
+      const { data, error } = await supabase
+        .from("profiles")
+        .select("is_suspended, suspension_reason")
+        .eq("user_id", userId)
+        .single();
+
+      if (error) {
+        console.error("Error fetching suspension status:", error);
+        return { isSuspended: false, reason: null };
+      }
+
+      return {
+        isSuspended: data?.is_suspended || false,
+        reason: data?.suspension_reason || null,
+      };
+    } catch (err) {
+      console.error("Error fetching suspension status:", err);
+      return { isSuspended: false, reason: null };
+    }
+  };
+
   useEffect(() => {
     // Set up auth state listener FIRST
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
@@ -220,13 +248,19 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         setSession(session);
         setUser(session?.user ?? null);
 
-        // Defer role fetching to avoid deadlock
+        // Defer role and suspension fetching to avoid deadlock
         if (session?.user) {
           setTimeout(() => {
             fetchUserRole(session.user.id).then(setRole);
+            fetchSuspensionStatus(session.user.id).then(({ isSuspended: suspended, reason }) => {
+              setIsSuspended(suspended);
+              setSuspensionReason(reason);
+            });
           }, 0);
         } else {
           setRole(null);
+          setIsSuspended(false);
+          setSuspensionReason(null);
         }
 
         // Handle specific auth events
@@ -235,6 +269,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         } else if (event === 'SIGNED_OUT') {
           clearSessionTimers();
           setSessionExpiring(false);
+          setIsSuspended(false);
+          setSuspensionReason(null);
         }
       }
     );
@@ -245,8 +281,13 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       setUser(session?.user ?? null);
       
       if (session?.user) {
-        fetchUserRole(session.user.id).then((r) => {
+        Promise.all([
+          fetchUserRole(session.user.id),
+          fetchSuspensionStatus(session.user.id),
+        ]).then(([r, { isSuspended: suspended, reason }]) => {
           setRole(r);
+          setIsSuspended(suspended);
+          setSuspensionReason(reason);
           setLoading(false);
         });
       } else {
@@ -299,6 +340,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         role,
         loading,
         isAdmin: role === "admin",
+        isSuspended,
+        suspensionReason,
         sessionExpiring,
         sessionExpiresIn,
         signUp,

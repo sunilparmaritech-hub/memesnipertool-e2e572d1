@@ -102,7 +102,7 @@ const Index = forwardRef<HTMLDivElement, object>(function Index(_props, ref) {
 
   return (
     <AppLayout>
-      <div className="container mx-auto max-w-7xl px-4 space-y-6">
+      <div className="container mx-auto max-w-7xl px-3 md:px-4 space-y-4 md:space-y-6">
         {/* Demo Mode Banner */}
         {isDemo && (
           <Alert className="bg-warning/10 border-warning/30">
@@ -150,10 +150,10 @@ const Index = forwardRef<HTMLDivElement, object>(function Index(_props, ref) {
           winCount={winCount}
         />
 
-        {/* Main Content Grid */}
-        <div className="grid lg:grid-cols-3 gap-6">
-          {/* Left Column - 2/3 width */}
-          <div className="lg:col-span-2 space-y-6">
+        {/* Main Content Grid - Mobile stacked */}
+        <div className="grid gap-4 md:gap-6 lg:grid-cols-3">
+          {/* Left Column - 2/3 width on desktop */}
+          <div className="lg:col-span-2 space-y-4 md:space-y-6">
             {/* Portfolio Chart */}
             <Card className="relative overflow-hidden border-0 bg-gradient-to-br from-card/90 to-card/60 backdrop-blur-xl animate-fade-in">
               <div className="absolute inset-0 opacity-30">
@@ -210,8 +210,8 @@ const Index = forwardRef<HTMLDivElement, object>(function Index(_props, ref) {
               </CardContent>
             </Card>
 
-            {/* Active Trades + Market Overview */}
-            <div className="grid md:grid-cols-2 gap-6">
+            {/* Active Trades + Market Overview - Mobile stacked */}
+            <div className="grid gap-4 md:gap-6 md:grid-cols-2">
               <ActiveTradesCard 
                 positions={openPositions} 
                 loading={positionsLoading}
@@ -221,7 +221,7 @@ const Index = forwardRef<HTMLDivElement, object>(function Index(_props, ref) {
           </div>
 
           {/* Right Column */}
-          <div className="space-y-6">
+          <div className="space-y-4 md:space-y-6">
             {/* Quick Actions */}
             <QuickActions />
             

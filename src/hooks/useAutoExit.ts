@@ -76,10 +76,16 @@ export function useAutoExit() {
       setResults(data.results || []);
       setLastCheck(data.timestamp);
 
-      const summary = data.summary as AutoExitSummary;
+      const summary = data.summary as AutoExitSummary | undefined;
+
+      // Guard against missing summary
+      if (!summary) {
+        console.log('Auto-exit returned no summary');
+        return { results: data.results || [], summary: { total: 0, holding: 0, takeProfitTriggered: 0, stopLossTriggered: 0, executed: 0 } };
+      }
 
       // Notify on exits
-      if (summary.takeProfitTriggered > 0 || summary.stopLossTriggered > 0) {
+      if ((summary.takeProfitTriggered || 0) > 0 || (summary.stopLossTriggered || 0) > 0) {
         const exitResults = (data.results as ExitResult[]).filter(r => r.action !== 'hold');
         
         exitResults.forEach((result) => {

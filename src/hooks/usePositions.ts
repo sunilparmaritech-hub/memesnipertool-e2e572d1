@@ -117,6 +117,25 @@ export function usePositions() {
       const newPosition = data as Position;
       setPositions(prev => [newPosition, ...prev]);
       
+      // Log activity
+      supabase.from('user_activity_logs').insert({
+        user_id: user.id,
+        activity_type: 'position_opened',
+        activity_category: 'trading',
+        description: `Opened position: ${tokenSymbol} with ${amount} tokens at $${entryPrice.toFixed(6)}`,
+        metadata: {
+          position_id: newPosition.id,
+          token_address: tokenAddress,
+          token_symbol: tokenSymbol,
+          entry_price: entryPrice,
+          amount,
+          profit_take_percent: profitTakePercent,
+          stop_loss_percent: stopLossPercent,
+        },
+      }).then(({ error: logError }) => {
+        if (logError) console.error('Failed to log activity:', logError);
+      });
+      
       toast({
         title: 'Position Created',
         description: `Tracking ${tokenSymbol} with TP: ${profitTakePercent}% / SL: ${stopLossPercent}%`,
@@ -157,13 +176,19 @@ export function usePositions() {
       // Refresh positions after check
       await fetchPositions();
 
-      const summary = data.summary as AutoExitSummary;
+      const summary = data.summary as AutoExitSummary | undefined;
       
-      if (summary.takeProfitTriggered > 0 || summary.stopLossTriggered > 0) {
+      // Guard against missing summary
+      if (!summary) {
+        console.log('Auto-exit returned no summary');
+        return { results: data.results || [], summary: { total: 0, holding: 0, takeProfitTriggered: 0, stopLossTriggered: 0, executed: 0 } };
+      }
+      
+      if ((summary.takeProfitTriggered || 0) > 0 || (summary.stopLossTriggered || 0) > 0) {
         toast({
           title: 'Exit Conditions Met',
-          description: `Take Profit: ${summary.takeProfitTriggered}, Stop Loss: ${summary.stopLossTriggered}${executeExits ? `, Executed: ${summary.executed}` : ''}`,
-          variant: summary.stopLossTriggered > 0 ? 'destructive' : 'default',
+          description: `Take Profit: ${summary.takeProfitTriggered || 0}, Stop Loss: ${summary.stopLossTriggered || 0}${executeExits ? `, Executed: ${summary.executed || 0}` : ''}`,
+          variant: (summary.stopLossTriggered || 0) > 0 ? 'destructive' : 'default',
         });
       }
 
@@ -205,6 +230,28 @@ export function usePositions() {
         .eq('id', positionId);
 
       if (error) throw error;
+
+      // Log activity
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        supabase.from('user_activity_logs').insert({
+          user_id: user.id,
+          activity_type: 'position_closed',
+          activity_category: 'trading',
+          description: `Closed position: ${position.token_symbol} with ${profitLossPercent >= 0 ? '+' : ''}${profitLossPercent.toFixed(2)}% P&L`,
+          metadata: {
+            position_id: positionId,
+            token_symbol: position.token_symbol,
+            entry_price: position.entry_price,
+            exit_price: exitPrice,
+            profit_loss_percent: profitLossPercent,
+            profit_loss_value: profitLossValue,
+            exit_reason: 'manual',
+          },
+        }).then(({ error: logError }) => {
+          if (logError) console.error('Failed to log activity:', logError);
+        });
+      }
 
       await fetchPositions();
       

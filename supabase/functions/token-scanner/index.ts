@@ -333,11 +333,16 @@ serve(async (req) => {
         for (const pool of pools) {
           try {
             // Determine which mint is base (SOL/USDC) and which is token
-            const mintA = pool.mintA;
-            const mintB = pool.mintB;
+            const mintA: string = pool.mintA || '';
+            const mintB: string = pool.mintB || '';
             
-            let baseMint: string | null = null;
-            let quoteMint: string | null = null;
+            if (!mintA || !mintB) {
+              console.log(`[Scanner] DISCARDED: Pool ${pool.id} - missing mints`);
+              continue;
+            }
+            
+            let baseMint: string;
+            let quoteMint: string;
             
             if (VALID_BASE_MINTS.includes(mintA)) {
               baseMint = mintA;

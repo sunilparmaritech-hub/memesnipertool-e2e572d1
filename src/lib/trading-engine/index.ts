@@ -1,4 +1,39 @@
 /**
+ * Trading Engine - Modular 3-Stage Solana Sniping
+ * 
+ * STAGE 1: Strict Raydium Pool Detection (raydium-pool-detector.ts)
+ * STAGE 2: Raydium Sniping (raydium-sniper.ts)
+ * STAGE 3: Jupiter Trading (jupiter-trader.ts)
+ */
+
+// Export all types
+export * from './types';
+
+// Export configuration
+export * from './config';
+
+// Export Stage 1: Raydium Pool Detection (STRICT)
+export { 
+  detectTradablePool,
+  scanForNewRaydiumPools,
+  batchValidateTradability,
+  type TradablePoolResult,
+  type PoolValidationConfig,
+} from './raydium-pool-detector';
+
+// Export Stage 1: Legacy Liquidity Detection (now uses strict Raydium detection)
+export { detectLiquidity, monitorLiquidity } from './liquidity-detector';
+
+// Export Stage 2: Raydium Sniping
+export { executeRaydiumSnipe, getRaydiumPrice, buildRaydiumSwapTransaction } from './raydium-sniper';
+
+// Export Stage 3: Jupiter Trading
+export { executeJupiterTrade, checkJupiterIndexStatus, pollForJupiterIndexing } from './jupiter-trader';
+
+// Export Controller
+export { executeTradingFlow, TradingController } from './controller';
+
+/**
  * Trading Engine Module
  * Modular 3-stage Solana sniping engine
  * 

@@ -1,6 +1,16 @@
 /**
- * Stage 1: Liquidity Detection
- * Monitors for new pool creation and validates token safety
+ * Stage 1: Liquidity Detection (REFACTORED)
+ * 
+ * IMPORTANT: This module now uses STRICT Raydium-only detection.
+ * Pump.fun bonding curve tokens are EXCLUDED - only graduated Raydium pools are considered.
+ * 
+ * A token is TRADABLE only if ALL conditions pass:
+ * 1. Raydium AMM pool exists
+ * 2. Base mint is SOL or USDC
+ * 3. Both vault balances > 0
+ * 4. Liquidity >= minLiquidity
+ * 5. Swap simulation succeeds
+ * 6. NOT on Pump.fun bonding curve
  */
 
 import { supabase } from '@/integrations/supabase/client';
@@ -11,11 +21,15 @@ import type {
   RiskAssessment,
   TradingEventCallback,
 } from './types';
-import { API_ENDPOINTS, SOL_MINT } from './config';
+import { API_ENDPOINTS, SOL_MINT, USDC_MINT } from './config';
+import { detectTradablePool, type TradablePoolResult, type PoolValidationConfig } from './raydium-pool-detector';
+
+// Valid base mints for tradable pools
+const VALID_BASE_MINTS = [SOL_MINT, USDC_MINT];
 
 /**
  * Detect liquidity for a token address
- * Checks Pump.fun, Raydium, and other DEXes
+ * NOW USES STRICT RAYDIUM-ONLY DETECTION
  */
 export async function detectLiquidity(
   tokenAddress: string,
@@ -25,131 +39,73 @@ export async function detectLiquidity(
   const startTime = Date.now();
   
   try {
-    // Step 1: Check Pump.fun first (fastest for new tokens)
-    const pumpFunResult = await checkPumpFunLiquidity(tokenAddress);
+    // Convert TradingConfig to PoolValidationConfig
+    const poolConfig: PoolValidationConfig = {
+      minLiquidity: config.minLiquidity,
+      rpcUrl: '', // Will use default endpoints
+    };
     
-    if (pumpFunResult) {
-      onEvent?.({ type: 'LIQUIDITY_DETECTED', data: pumpFunResult });
-      
-      // Validate liquidity amount
-      if (pumpFunResult.liquidityAmount < config.minLiquidity) {
-        return {
-          status: 'LP_INSUFFICIENT',
-          liquidityInfo: pumpFunResult,
-          riskAssessment: null,
-          error: `Liquidity ${pumpFunResult.liquidityAmount} SOL below minimum ${config.minLiquidity} SOL`,
-          detectedAt: startTime,
-        };
-      }
-      
-      // Run risk assessment
-      const riskAssessment = await assessRisk(tokenAddress, config);
-      
-      if (!riskAssessment.passed) {
-        onEvent?.({ type: 'RISK_CHECK_FAILED', data: riskAssessment });
-        return {
-          status: 'RISK_FAILED',
-          liquidityInfo: pumpFunResult,
-          riskAssessment,
-          error: `Risk check failed: ${riskAssessment.reasons.join(', ')}`,
-          detectedAt: startTime,
-        };
-      }
-      
-      onEvent?.({ type: 'RISK_CHECK_PASSED', data: riskAssessment });
-      
+    // Use strict Raydium pool detection
+    const poolResult = await detectTradablePool(tokenAddress, poolConfig);
+    
+    if (poolResult.status === 'DISCARDED') {
       return {
-        status: 'LP_READY',
-        liquidityInfo: pumpFunResult,
-        riskAssessment,
+        status: 'LP_NOT_FOUND',
+        liquidityInfo: null,
+        riskAssessment: null,
+        error: poolResult.reason || 'Pool not tradable',
         detectedAt: startTime,
       };
     }
     
-    // Step 2: Check Raydium pools
-    const raydiumResult = await checkRaydiumLiquidity(tokenAddress);
+    // Pool is TRADABLE - convert to LiquidityInfo
+    const liquidityInfo: LiquidityInfo = {
+      tokenAddress,
+      tokenName: poolResult.tokenName || 'Unknown',
+      tokenSymbol: poolResult.tokenSymbol || 'UNKNOWN',
+      poolAddress: poolResult.poolAddress || '',
+      poolType: 'raydium', // Now always Raydium
+      baseMint: poolResult.baseMint || SOL_MINT,
+      quoteMint: poolResult.quoteMint || tokenAddress,
+      liquidityAmount: poolResult.liquidity || 0,
+      lpTokenMint: poolResult.lpTokenMint || null,
+      timestamp: poolResult.detectedAt || Date.now(),
+      blockHeight: 0,
+    };
     
-    if (raydiumResult) {
-      onEvent?.({ type: 'LIQUIDITY_DETECTED', data: raydiumResult });
-      
-      if (raydiumResult.liquidityAmount < config.minLiquidity) {
-        return {
-          status: 'LP_INSUFFICIENT',
-          liquidityInfo: raydiumResult,
-          riskAssessment: null,
-          error: `Liquidity ${raydiumResult.liquidityAmount} SOL below minimum ${config.minLiquidity} SOL`,
-          detectedAt: startTime,
-        };
-      }
-      
-      const riskAssessment = await assessRisk(tokenAddress, config);
-      
-      if (!riskAssessment.passed) {
-        onEvent?.({ type: 'RISK_CHECK_FAILED', data: riskAssessment });
-        return {
-          status: 'RISK_FAILED',
-          liquidityInfo: raydiumResult,
-          riskAssessment,
-          error: `Risk check failed: ${riskAssessment.reasons.join(', ')}`,
-          detectedAt: startTime,
-        };
-      }
-      
-      onEvent?.({ type: 'RISK_CHECK_PASSED', data: riskAssessment });
-      
+    onEvent?.({ type: 'LIQUIDITY_DETECTED', data: liquidityInfo });
+    
+    // Verify liquidity meets minimum
+    if (liquidityInfo.liquidityAmount < config.minLiquidity) {
       return {
-        status: 'LP_READY',
-        liquidityInfo: raydiumResult,
-        riskAssessment,
+        status: 'LP_INSUFFICIENT',
+        liquidityInfo,
+        riskAssessment: null,
+        error: `Liquidity ${liquidityInfo.liquidityAmount.toFixed(2)} SOL below minimum ${config.minLiquidity} SOL`,
         detectedAt: startTime,
       };
     }
     
-    // Step 3: Check DexScreener for any DEX listing
-    const dexScreenerResult = await checkDexScreenerLiquidity(tokenAddress);
+    // Run risk assessment
+    const riskAssessment = await assessRisk(tokenAddress, config);
     
-    if (dexScreenerResult) {
-      onEvent?.({ type: 'LIQUIDITY_DETECTED', data: dexScreenerResult });
-      
-      if (dexScreenerResult.liquidityAmount < config.minLiquidity) {
-        return {
-          status: 'LP_INSUFFICIENT',
-          liquidityInfo: dexScreenerResult,
-          riskAssessment: null,
-          error: `Liquidity ${dexScreenerResult.liquidityAmount} SOL below minimum ${config.minLiquidity} SOL`,
-          detectedAt: startTime,
-        };
-      }
-      
-      const riskAssessment = await assessRisk(tokenAddress, config);
-      
-      if (!riskAssessment.passed) {
-        onEvent?.({ type: 'RISK_CHECK_FAILED', data: riskAssessment });
-        return {
-          status: 'RISK_FAILED',
-          liquidityInfo: dexScreenerResult,
-          riskAssessment,
-          error: `Risk check failed: ${riskAssessment.reasons.join(', ')}`,
-          detectedAt: startTime,
-        };
-      }
-      
-      onEvent?.({ type: 'RISK_CHECK_PASSED', data: riskAssessment });
-      
+    if (!riskAssessment.passed) {
+      onEvent?.({ type: 'RISK_CHECK_FAILED', data: riskAssessment });
       return {
-        status: 'LP_READY',
-        liquidityInfo: dexScreenerResult,
+        status: 'RISK_FAILED',
+        liquidityInfo,
         riskAssessment,
+        error: `Risk check failed: ${riskAssessment.reasons.join(', ')}`,
         detectedAt: startTime,
       };
     }
     
-    // No liquidity found
+    onEvent?.({ type: 'RISK_CHECK_PASSED', data: riskAssessment });
+    
     return {
-      status: 'LP_NOT_FOUND',
-      liquidityInfo: null,
-      riskAssessment: null,
-      error: 'No liquidity pool found for token',
+      status: 'LP_READY',
+      liquidityInfo,
+      riskAssessment,
       detectedAt: startTime,
     };
     
@@ -165,142 +121,20 @@ export async function detectLiquidity(
 }
 
 /**
- * Check Pump.fun for token liquidity
+ * REMOVED: checkPumpFunLiquidity
+ * Pump.fun bonding curve tokens are NO LONGER considered tradable.
+ * Only tokens that have graduated to Raydium are accepted.
  */
-async function checkPumpFunLiquidity(tokenAddress: string): Promise<LiquidityInfo | null> {
-  try {
-    const response = await fetch(`${API_ENDPOINTS.pumpFunToken}/${tokenAddress}`, {
-      signal: AbortSignal.timeout(10000),
-    });
-    
-    if (!response.ok) return null;
-    
-    const data = await response.json();
-    
-    if (!data || !data.mint) return null;
-    
-    // Calculate liquidity from virtual reserves
-    const virtualSolReserves = data.virtual_sol_reserves || 0;
-    const liquidityInSol = virtualSolReserves / 1e9; // Convert lamports to SOL
-    
-    return {
-      tokenAddress: data.mint,
-      tokenName: data.name || 'Unknown',
-      tokenSymbol: data.symbol || 'UNKNOWN',
-      poolAddress: data.bonding_curve || '',
-      poolType: 'pump_fun',
-      baseMint: SOL_MINT,
-      quoteMint: data.mint,
-      liquidityAmount: liquidityInSol,
-      lpTokenMint: null,
-      timestamp: Date.now(),
-      blockHeight: 0,
-    };
-  } catch {
-    return null;
-  }
-}
 
 /**
- * Check Raydium for token liquidity
+ * REMOVED: checkRaydiumLiquidity (replaced by detectTradablePool)
+ * The new detectTradablePool function provides stricter validation.
  */
-async function checkRaydiumLiquidity(tokenAddress: string): Promise<LiquidityInfo | null> {
-  try {
-    const response = await fetch(
-      `${API_ENDPOINTS.raydiumPools}?mint=${tokenAddress}`,
-      { signal: AbortSignal.timeout(10000) }
-    );
-    
-    if (!response.ok) return null;
-    
-    const data = await response.json();
-    
-    if (!data.data || data.data.length === 0) return null;
-    
-    // Find the best pool (highest liquidity)
-    const pools = data.data.filter((p: any) => 
-      p.mintA === tokenAddress || p.mintB === tokenAddress
-    );
-    
-    if (pools.length === 0) return null;
-    
-    const bestPool = pools.reduce((best: any, current: any) => 
-      (current.tvl || 0) > (best.tvl || 0) ? current : best
-    );
-    
-    const isBaseSol = bestPool.mintA === SOL_MINT;
-    
-    return {
-      tokenAddress,
-      tokenName: bestPool.name || 'Unknown',
-      tokenSymbol: bestPool.symbol || 'UNKNOWN',
-      poolAddress: bestPool.id,
-      poolType: 'raydium',
-      baseMint: isBaseSol ? SOL_MINT : bestPool.mintA,
-      quoteMint: isBaseSol ? bestPool.mintB : tokenAddress,
-      liquidityAmount: (bestPool.tvl || 0) / 2, // Approximate SOL side
-      lpTokenMint: bestPool.lpMint || null,
-      timestamp: Date.now(),
-      blockHeight: 0,
-    };
-  } catch {
-    return null;
-  }
-}
 
 /**
- * Check DexScreener for any DEX listing
+ * REMOVED: checkDexScreenerLiquidity
+ * DexScreener discovery is too broad - we only accept verified Raydium pools.
  */
-async function checkDexScreenerLiquidity(tokenAddress: string): Promise<LiquidityInfo | null> {
-  try {
-    const response = await fetch(`${API_ENDPOINTS.dexScreener}/${tokenAddress}`, {
-      signal: AbortSignal.timeout(10000),
-    });
-    
-    if (!response.ok) return null;
-    
-    const data = await response.json();
-    
-    if (!data.pairs || data.pairs.length === 0) return null;
-    
-    // Filter for Solana pairs only
-    const solanaPairs = data.pairs.filter((p: any) => p.chainId === 'solana');
-    
-    if (solanaPairs.length === 0) return null;
-    
-    // Get the highest liquidity pair
-    const bestPair = solanaPairs.reduce((best: any, current: any) => 
-      (current.liquidity?.usd || 0) > (best.liquidity?.usd || 0) ? current : best
-    );
-    
-    // Estimate SOL liquidity (rough conversion)
-    const liquidityUsd = bestPair.liquidity?.usd || 0;
-    const solPrice = 150; // Approximate, should fetch dynamically
-    const liquidityInSol = liquidityUsd / solPrice / 2;
-    
-    // Determine pool type
-    let poolType: LiquidityInfo['poolType'] = 'unknown';
-    const dexId = bestPair.dexId?.toLowerCase() || '';
-    if (dexId.includes('raydium')) poolType = 'raydium';
-    else if (dexId.includes('orca')) poolType = 'orca';
-    
-    return {
-      tokenAddress,
-      tokenName: bestPair.baseToken?.name || 'Unknown',
-      tokenSymbol: bestPair.baseToken?.symbol || 'UNKNOWN',
-      poolAddress: bestPair.pairAddress,
-      poolType,
-      baseMint: bestPair.quoteToken?.address || SOL_MINT,
-      quoteMint: tokenAddress,
-      liquidityAmount: liquidityInSol,
-      lpTokenMint: null,
-      timestamp: Date.now(),
-      blockHeight: 0,
-    };
-  } catch {
-    return null;
-  }
-}
 
 /**
  * Assess token risk using RugCheck and other validators

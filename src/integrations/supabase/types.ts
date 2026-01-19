@@ -14,6 +14,30 @@ export type Database = {
   }
   public: {
     Tables: {
+      admin_settings: {
+        Row: {
+          created_at: string
+          id: string
+          setting_key: string
+          setting_value: Json | null
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          setting_key: string
+          setting_value?: Json | null
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          setting_key?: string
+          setting_value?: Json | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
       api_configurations: {
         Row: {
           api_key_encrypted: string | null
@@ -242,6 +266,8 @@ export type Database = {
           display_name: string | null
           email: string | null
           id: string
+          is_suspended: boolean | null
+          suspension_reason: string | null
           updated_at: string
           user_id: string
           wallet_address: string | null
@@ -251,6 +277,8 @@ export type Database = {
           display_name?: string | null
           email?: string | null
           id?: string
+          is_suspended?: boolean | null
+          suspension_reason?: string | null
           updated_at?: string
           user_id: string
           wallet_address?: string | null
@@ -260,6 +288,8 @@ export type Database = {
           display_name?: string | null
           email?: string | null
           id?: string
+          is_suspended?: boolean | null
+          suspension_reason?: string | null
           updated_at?: string
           user_id?: string
           wallet_address?: string | null
@@ -401,6 +431,36 @@ export type Database = {
           metadata?: Json | null
           severity?: string | null
           user_id?: string | null
+        }
+        Relationships: []
+      }
+      user_activity_logs: {
+        Row: {
+          action: string
+          created_at: string
+          details: Json | null
+          id: string
+          ip_address: string | null
+          user_agent: string | null
+          user_id: string
+        }
+        Insert: {
+          action: string
+          created_at?: string
+          details?: Json | null
+          id?: string
+          ip_address?: string | null
+          user_agent?: string | null
+          user_id: string
+        }
+        Update: {
+          action?: string
+          created_at?: string
+          details?: Json | null
+          id?: string
+          ip_address?: string | null
+          user_agent?: string | null
+          user_id?: string
         }
         Relationships: []
       }

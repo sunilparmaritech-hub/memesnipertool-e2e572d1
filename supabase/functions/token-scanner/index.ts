@@ -301,15 +301,71 @@ serve(async (req) => {
     };
 
     /**
+     * Fallback: Fetch Raydium pools from DexScreener when Raydium API fails
+     */
+    const fetchRaydiumPoolsFromDexScreener = async (): Promise<any[]> => {
+      try {
+        console.log('[Scanner] Using DexScreener fallback for Raydium pools...');
+        
+        // Fetch latest Solana pairs from DexScreener
+        const response = await fetch('https://api.dexscreener.com/latest/dex/search?q=raydium', {
+          signal: AbortSignal.timeout(10000),
+        });
+        
+        if (!response.ok) {
+          console.log('[Scanner] DexScreener fallback failed:', response.status);
+          return [];
+        }
+        
+        const data = await response.json();
+        const pairs = data.pairs || [];
+        
+        // Filter for Solana Raydium pools only
+        const raydiumPools = pairs.filter((p: any) => 
+          p.chainId === 'solana' && 
+          p.dexId?.toLowerCase().includes('raydium')
+        ).slice(0, 30);
+        
+        console.log(`[Scanner] DexScreener found ${raydiumPools.length} Raydium pools`);
+        
+        // Transform to Raydium-like format
+        return raydiumPools.map((p: any) => ({
+          id: p.pairAddress,
+          mintA: p.quoteToken?.address === SOL_MINT || p.quoteToken?.address === USDC_MINT 
+            ? p.quoteToken?.address 
+            : p.baseToken?.address,
+          mintB: p.quoteToken?.address === SOL_MINT || p.quoteToken?.address === USDC_MINT 
+            ? p.baseToken?.address 
+            : p.quoteToken?.address,
+          mintAmountA: parseFloat(p.liquidity?.quote || 0),
+          mintAmountB: parseFloat(p.liquidity?.base || 0),
+          name: p.baseToken?.name || 'Unknown',
+          symbol: p.baseToken?.symbol || 'UNKNOWN',
+          price: parseFloat(p.priceUsd || 0),
+          priceChange24h: parseFloat(p.priceChange?.h24 || 0),
+          volume24h: parseFloat(p.volume?.h24 || 0),
+          tvl: parseFloat(p.liquidity?.usd || 0),
+          lpMint: p.pairAddress, // Use pair address as LP identifier
+          openTime: p.pairCreatedAt ? Math.floor(p.pairCreatedAt / 1000) : Date.now() / 1000,
+          fromDexScreener: true,
+        }));
+      } catch (e) {
+        console.error('[Scanner] DexScreener fallback error:', e);
+        return [];
+      }
+    };
+
+    /**
      * MAIN SCANNER: Fetch new Raydium pools and validate tradability
      */
     const fetchRaydiumPools = async () => {
       const startTime = Date.now();
+      let pools: any[] = [];
       
       try {
         console.log('[Scanner] Fetching new Raydium pools...');
         
-        // Fetch recently created pools sorted by open_time
+        // Try Raydium API first
         const endpoint = `${RAYDIUM_POOLS_API}?sort=open_time&order=desc&pageSize=30`;
         const response = await fetch(endpoint, {
           signal: AbortSignal.timeout(15000),
@@ -320,13 +376,20 @@ serve(async (req) => {
         if (!response.ok) {
           const errorMsg = `HTTP ${response.status}: ${response.statusText}`;
           await logApiHealth('raydium', endpoint, responseTime, response.status, false, errorMsg);
-          errors.push(`Raydium: ${errorMsg}`);
-          return;
+          console.log(`[Scanner] Raydium API failed: ${errorMsg}, trying DexScreener fallback...`);
+          
+          // Use DexScreener fallback
+          pools = await fetchRaydiumPoolsFromDexScreener();
+          
+          if (pools.length === 0) {
+            errors.push(`Raydium: ${errorMsg} (DexScreener fallback also empty)`);
+            return;
+          }
+        } else {
+          await logApiHealth('raydium', endpoint, responseTime, response.status, true);
+          const data = await response.json();
+          pools = data.data || [];
         }
-        
-        await logApiHealth('raydium', endpoint, responseTime, response.status, true);
-        const data = await response.json();
-        const pools = data.data || [];
         
         console.log(`[Scanner] Found ${pools.length} Raydium pools to evaluate`);
         

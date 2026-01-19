@@ -77,6 +77,11 @@ interface TradableToken {
   freezeAuthority: string | null;
   mintAuthority: string | null;
   safetyReasons: string[];
+  // Frontend compatibility fields
+  isPumpFun?: boolean;
+  isTradeable?: boolean;
+  canBuy?: boolean;
+  canSell?: boolean;
 }
 
 interface ApiError {
@@ -201,35 +206,26 @@ serve(async (req) => {
 
     /**
      * STEP 2: Simulate swap to verify pool is tradable
-     * MANDATORY - if simulation fails, pool is NOT tradable
+     * Try Jupiter first (faster), then Raydium as fallback
      */
     const simulateSwap = async (
       tokenAddress: string,
       baseMint: string
-    ): Promise<{ success: boolean; error?: string }> => {
+    ): Promise<{ success: boolean; error?: string; source?: string }> => {
+      // Validate addresses first
+      if (!tokenAddress || !baseMint) {
+        return { success: false, error: 'Missing token or base mint' };
+      }
+      
+      // Skip if token is a major token (SOL, USDC)
+      if (tokenAddress === SOL_MINT || tokenAddress === USDC_MINT) {
+        return { success: false, error: 'Cannot swap major tokens' };
+      }
+      
+      const amountInLamports = 1000000; // 0.001 SOL
+      
+      // Try Jupiter first (usually faster and more reliable)
       try {
-        const amountInLamports = 1000000; // 0.001 SOL
-        
-        // Try Raydium swap quote
-        const url = `${RAYDIUM_SWAP_API}/compute/swap-base-in?` +
-          `inputMint=${baseMint}&` +
-          `outputMint=${tokenAddress}&` +
-          `amount=${amountInLamports}&` +
-          `slippageBps=1000`;
-        
-        const response = await fetch(url, {
-          signal: AbortSignal.timeout(8000),
-        });
-        
-        if (response.ok) {
-          const data = await response.json();
-          if (data.success && data.data?.outputAmount > 0) {
-            console.log(`[Swap] Raydium simulation SUCCESS for ${tokenAddress}`);
-            return { success: true };
-          }
-        }
-        
-        // Fallback: Try Jupiter
         const jupUrl = `https://quote-api.jup.ag/v6/quote?` +
           `inputMint=${baseMint}&` +
           `outputMint=${tokenAddress}&` +
@@ -237,21 +233,44 @@ serve(async (req) => {
           `slippageBps=1000`;
         
         const jupResponse = await fetch(jupUrl, {
-          signal: AbortSignal.timeout(8000),
+          signal: AbortSignal.timeout(5000),
         });
         
         if (jupResponse.ok) {
           const jupData = await jupResponse.json();
           if (jupData.outAmount && parseInt(jupData.outAmount) > 0) {
-            console.log(`[Swap] Jupiter simulation SUCCESS for ${tokenAddress}`);
-            return { success: true };
+            console.log(`[Swap] Jupiter simulation SUCCESS for ${tokenAddress.slice(0, 8)}...`);
+            return { success: true, source: 'jupiter' };
           }
         }
-        
-        return { success: false, error: 'No swap route on Raydium or Jupiter' };
       } catch (e: any) {
-        return { success: false, error: e.message || 'Swap simulation failed' };
+        console.log(`[Swap] Jupiter failed for ${tokenAddress.slice(0, 8)}...: ${e.message}`);
       }
+      
+      // Fallback: Try Raydium
+      try {
+        const raydiumUrl = `${RAYDIUM_SWAP_API}/compute/swap-base-in?` +
+          `inputMint=${baseMint}&` +
+          `outputMint=${tokenAddress}&` +
+          `amount=${amountInLamports}&` +
+          `slippageBps=1000`;
+        
+        const response = await fetch(raydiumUrl, {
+          signal: AbortSignal.timeout(5000),
+        });
+        
+        if (response.ok) {
+          const data = await response.json();
+          if (data.success && data.data?.outputAmount > 0) {
+            console.log(`[Swap] Raydium simulation SUCCESS for ${tokenAddress.slice(0, 8)}...`);
+            return { success: true, source: 'raydium' };
+          }
+        }
+      } catch (e: any) {
+        console.log(`[Swap] Raydium failed for ${tokenAddress.slice(0, 8)}...: ${e.message}`);
+      }
+      
+      return { success: false, error: 'No swap route found' };
     };
 
     /**
@@ -307,52 +326,119 @@ serve(async (req) => {
       try {
         console.log('[Scanner] Using DexScreener fallback for Raydium pools...');
         
-        // Fetch latest Solana pairs from DexScreener
-        const response = await fetch('https://api.dexscreener.com/latest/dex/search?q=raydium', {
-          signal: AbortSignal.timeout(10000),
-        });
+        // Try multiple search strategies to find new Raydium pools
+        const searchQueries = ['new', 'pump', 'solana'];
+        let allPairs: any[] = [];
         
-        if (!response.ok) {
-          console.log('[Scanner] DexScreener fallback failed:', response.status);
-          return [];
+        for (const query of searchQueries) {
+          try {
+            const response = await fetch(`https://api.dexscreener.com/latest/dex/search?q=${query}`, {
+              signal: AbortSignal.timeout(8000),
+            });
+            
+            if (response.ok) {
+              const data = await response.json();
+              if (data.pairs) {
+                allPairs.push(...data.pairs);
+              }
+            }
+          } catch (e) {
+            console.log(`[Scanner] DexScreener search '${query}' failed`);
+          }
         }
         
-        const data = await response.json();
-        const pairs = data.pairs || [];
+        // Deduplicate by pair address
+        const pairMap = new Map<string, any>();
+        for (const p of allPairs) {
+          if (!pairMap.has(p.pairAddress)) {
+            pairMap.set(p.pairAddress, p);
+          }
+        }
         
-        // Filter for Solana Raydium pools only
-        const raydiumPools = pairs.filter((p: any) => 
-          p.chainId === 'solana' && 
-          p.dexId?.toLowerCase().includes('raydium')
-        ).slice(0, 30);
+        // Filter for Solana Raydium pools with SOL or USDC
+        const raydiumPools = Array.from(pairMap.values()).filter((p: any) => {
+          if (p.chainId !== 'solana') return false;
+          if (!p.dexId?.toLowerCase().includes('raydium')) return false;
+          
+          // Must have SOL or USDC as one of the tokens
+          const hasValidBase = 
+            p.quoteToken?.address === SOL_MINT || 
+            p.quoteToken?.address === USDC_MINT ||
+            p.baseToken?.address === SOL_MINT ||
+            p.baseToken?.address === USDC_MINT;
+          
+          return hasValidBase;
+        }).slice(0, 50);
         
-        console.log(`[Scanner] DexScreener found ${raydiumPools.length} Raydium pools`);
+        console.log(`[Scanner] DexScreener found ${raydiumPools.length} Raydium pools with SOL/USDC`);
+        
+        if (raydiumPools.length === 0) {
+          // Fallback to any Solana Raydium pools (looser filter)
+          const anyRaydiumPools = Array.from(pairMap.values()).filter((p: any) => 
+            p.chainId === 'solana' && 
+            p.dexId?.toLowerCase().includes('raydium')
+          ).slice(0, 50);
+          
+          console.log(`[Scanner] DexScreener fallback: ${anyRaydiumPools.length} Raydium pools (any pair)`);
+          
+          // Transform to Raydium-like format
+          return anyRaydiumPools.map((p: any) => transformDexScreenerPair(p));
+        }
         
         // Transform to Raydium-like format
-        return raydiumPools.map((p: any) => ({
-          id: p.pairAddress,
-          mintA: p.quoteToken?.address === SOL_MINT || p.quoteToken?.address === USDC_MINT 
-            ? p.quoteToken?.address 
-            : p.baseToken?.address,
-          mintB: p.quoteToken?.address === SOL_MINT || p.quoteToken?.address === USDC_MINT 
-            ? p.baseToken?.address 
-            : p.quoteToken?.address,
-          mintAmountA: parseFloat(p.liquidity?.quote || 0),
-          mintAmountB: parseFloat(p.liquidity?.base || 0),
-          name: p.baseToken?.name || 'Unknown',
-          symbol: p.baseToken?.symbol || 'UNKNOWN',
-          price: parseFloat(p.priceUsd || 0),
-          priceChange24h: parseFloat(p.priceChange?.h24 || 0),
-          volume24h: parseFloat(p.volume?.h24 || 0),
-          tvl: parseFloat(p.liquidity?.usd || 0),
-          lpMint: p.pairAddress, // Use pair address as LP identifier
-          openTime: p.pairCreatedAt ? Math.floor(p.pairCreatedAt / 1000) : Date.now() / 1000,
-          fromDexScreener: true,
-        }));
+        return raydiumPools.map((p: any) => transformDexScreenerPair(p));
       } catch (e) {
         console.error('[Scanner] DexScreener fallback error:', e);
         return [];
       }
+    };
+    
+    // Helper to transform DexScreener pair to Raydium-like format
+    const transformDexScreenerPair = (p: any): any => {
+      // Determine which token is the base (SOL/USDC) and which is the meme token
+      const isQuoteBase = p.quoteToken?.address === SOL_MINT || p.quoteToken?.address === USDC_MINT;
+      const isBaseBase = p.baseToken?.address === SOL_MINT || p.baseToken?.address === USDC_MINT;
+      
+      let baseMint: string;
+      let quoteMint: string;
+      let tokenInfo: any;
+      
+      if (isQuoteBase) {
+        baseMint = p.quoteToken?.address;
+        quoteMint = p.baseToken?.address;
+        tokenInfo = p.baseToken;
+      } else if (isBaseBase) {
+        baseMint = p.baseToken?.address;
+        quoteMint = p.quoteToken?.address;
+        tokenInfo = p.quoteToken;
+      } else {
+        // Neither is SOL/USDC - use baseToken as the meme token, assume SOL pair
+        baseMint = SOL_MINT;
+        quoteMint = p.baseToken?.address || p.quoteToken?.address;
+        tokenInfo = p.baseToken || p.quoteToken;
+      }
+      
+      // Calculate liquidity in SOL from USD
+      const liquidityUsd = parseFloat(p.liquidity?.usd || 0);
+      const solPrice = 150; // Fallback SOL price
+      const liquidityInSol = liquidityUsd / 2 / solPrice; // Half is SOL, half is token
+      
+      return {
+        id: p.pairAddress,
+        mintA: baseMint,
+        mintB: quoteMint,
+        mintAmountA: liquidityInSol, // SOL amount estimate
+        mintAmountB: 1, // Placeholder for token amount
+        name: tokenInfo?.name || 'Unknown',
+        symbol: tokenInfo?.symbol || 'UNKNOWN',
+        price: parseFloat(p.priceUsd || 0),
+        priceChange24h: parseFloat(p.priceChange?.h24 || 0),
+        volume24h: parseFloat(p.volume?.h24 || 0),
+        tvl: liquidityUsd,
+        lpMint: p.pairAddress,
+        openTime: p.pairCreatedAt ? Math.floor(p.pairCreatedAt / 1000) : Date.now() / 1000,
+        fromDexScreener: true,
+      };
     };
 
     /**
@@ -481,6 +567,7 @@ serve(async (req) => {
             // CHECK 3: Calculate and validate liquidity
             let liquidityInSol = 0;
             if (baseMint === SOL_MINT) {
+              // Handle both raw lamports (>1M) and already-converted SOL values
               liquidityInSol = baseVault > 1000000 ? baseVault / 1e9 : baseVault;
             } else {
               // USDC - estimate SOL (1 SOL ≈ $150)
@@ -488,8 +575,13 @@ serve(async (req) => {
               liquidityInSol = usdcAmount / 150;
             }
             
+            // For DexScreener data, use TVL if available and liquidity seems wrong
+            if (pool.fromDexScreener && pool.tvl && liquidityInSol < 1) {
+              liquidityInSol = pool.tvl / 300; // Estimate: TVL in USD / ~$300 per SOL (2x price for safety)
+            }
+            
             if (liquidityInSol < minLiquidity) {
-              console.log(`[Scanner] DISCARDED: ${quoteMint} - liquidity ${liquidityInSol.toFixed(2)} < ${minLiquidity} SOL`);
+              console.log(`[Scanner] DISCARDED: ${quoteMint.slice(0, 8)}... - liquidity ${liquidityInSol.toFixed(2)} < ${minLiquidity} SOL`);
               continue;
             }
             
@@ -556,7 +648,7 @@ serve(async (req) => {
               earlyBuyers: Math.floor(Math.random() * 5) + 1,
               buyerPosition: Math.floor(Math.random() * 3) + 1,
               riskScore: 30, // Lower base risk for verified Raydium pools
-              source: 'Raydium',
+              source: swapResult.source === 'jupiter' ? 'Jupiter' : 'Raydium',
               pairAddress: pool.id,
               status: 'TRADABLE',
               poolType: 'raydium_v4',
@@ -567,7 +659,12 @@ serve(async (req) => {
               discardReason: null,
               freezeAuthority: null,
               mintAuthority: null,
-              safetyReasons: ['✅ Verified Raydium pool', '✅ Swap simulation passed'],
+              safetyReasons: ['✅ Verified Raydium pool', `✅ Swap via ${swapResult.source || 'Jupiter'}`],
+              // Frontend compatibility fields
+              isPumpFun: false,
+              isTradeable: true,
+              canBuy: true,
+              canSell: true,
             };
             
             // Run safety validation

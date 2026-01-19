@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 
+// Must match database enum: api_type
 export type ApiType = 
   | 'dexscreener'
   | 'geckoterminal'
@@ -9,10 +10,8 @@ export type ApiType =
   | 'dextools'
   | 'honeypot_rugcheck'
   | 'liquidity_lock'
-  | 'jupiter'
-  | 'raydium'
-  | 'rpc_provider'
-  | 'pumpfun';
+  | 'trade_execution'
+  | 'rpc_provider';
 
 export type ApiStatus = 'active' | 'inactive' | 'error' | 'rate_limited';
 

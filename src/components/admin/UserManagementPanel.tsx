@@ -274,10 +274,8 @@ export function UserManagementPanel() {
       // Log the activity
       await supabase.from("user_activity_logs").insert({
         user_id: selectedUser.user_id,
-        activity_type: "account_suspended",
-        activity_category: "admin_action",
-        description: `Account suspended: ${suspendReason || "No reason provided"}`,
-        metadata: { suspended_by: "admin" },
+        action: "account_suspended",
+        details: { reason: suspendReason || "No reason provided", suspended_by: "admin" },
       });
 
       setUsers((prev) =>
@@ -316,10 +314,8 @@ export function UserManagementPanel() {
       // Log the activity
       await supabase.from("user_activity_logs").insert({
         user_id: userId,
-        activity_type: "account_unsuspended",
-        activity_category: "admin_action",
-        description: "Account reactivated by admin",
-        metadata: { unsuspended_by: "admin" },
+        action: "account_unsuspended",
+        details: { unsuspended_by: "admin" },
       });
 
       setUsers((prev) =>

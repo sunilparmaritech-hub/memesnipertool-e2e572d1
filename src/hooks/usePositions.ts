@@ -120,10 +120,8 @@ export function usePositions() {
       // Log activity
       supabase.from('user_activity_logs').insert({
         user_id: user.id,
-        activity_type: 'position_opened',
-        activity_category: 'trading',
-        description: `Opened position: ${tokenSymbol} with ${amount} tokens at $${entryPrice.toFixed(6)}`,
-        metadata: {
+        action: 'position_opened',
+        details: {
           position_id: newPosition.id,
           token_address: tokenAddress,
           token_symbol: tokenSymbol,
@@ -236,10 +234,8 @@ export function usePositions() {
       if (user) {
         supabase.from('user_activity_logs').insert({
           user_id: user.id,
-          activity_type: 'position_closed',
-          activity_category: 'trading',
-          description: `Closed position: ${position.token_symbol} with ${profitLossPercent >= 0 ? '+' : ''}${profitLossPercent.toFixed(2)}% P&L`,
-          metadata: {
+          action: 'position_closed',
+          details: {
             position_id: positionId,
             token_symbol: position.token_symbol,
             entry_price: position.entry_price,

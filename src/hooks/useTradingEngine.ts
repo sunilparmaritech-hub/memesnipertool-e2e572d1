@@ -1,12 +1,30 @@
 /**
  * React Hook for the 3-Stage Trading Engine
  * Wraps the trading engine with state management and wallet integration
+ * 
+ * CRITICAL: This hook now persists positions to the database after successful snipes
+ * 
+ * Positions are saved with user's TP/SL settings from the config parameter
  */
 
 import { useState, useCallback, useRef } from 'react';
 import { VersionedTransaction } from '@solana/web3.js';
 import { useToast } from '@/hooks/use-toast';
 import { useAppMode } from '@/contexts/AppModeContext';
+import { supabase } from '@/integrations/supabase/client';
+
+// Extended config with TP/SL settings for position persistence
+export interface TradingEngineConfig {
+  buyAmount?: number;
+  slippage?: number;
+  priorityFee?: number;
+  minLiquidity?: number;
+  maxRiskScore?: number;
+  skipRiskCheck?: boolean;
+  // Position management settings
+  profitTakePercent?: number;
+  stopLossPercent?: number;
+}
 
 import {
   runTradingFlow,
@@ -149,12 +167,13 @@ export function useTradingEngine() {
 
   /**
    * Quick snipe a token - detect liquidity and execute immediately
+   * @param config - Trading config including profitTakePercent and stopLossPercent for position persistence
    */
   const snipeToken = useCallback(async (
     tokenAddress: string,
     walletAddress: string,
     walletSignAndSend: (tx: VersionedTransaction) => Promise<SignAndSendResult>,
-    config?: Partial<TradingConfig>
+    config?: TradingEngineConfig
   ): Promise<TradingFlowResult | null> => {
     if (isExecutingRef.current) {
       console.log('[TradingEngine] Already executing, skipping');
@@ -184,6 +203,7 @@ export function useTradingEngine() {
         position: {
           tokenAddress,
           tokenSymbol: 'DEMO',
+          tokenName: 'Demo Token',
           entryPrice: 0.0001,
           tokenAmount: 1000000,
           solSpent: config?.buyAmount || 0.1,
@@ -228,6 +248,95 @@ export function useTradingEngine() {
         onEvent: handleEvent,
         abortSignal: abortControllerRef.current.signal,
       });
+
+      // CRITICAL: Persist position to database after successful snipe
+      if (result.status === 'SUCCESS' && result.position) {
+        try {
+          const { data: { user } } = await supabase.auth.getUser();
+          if (user) {
+            const position = result.position;
+            const entryValue = position.solSpent;
+            
+            // Save position with user's TP/SL settings from config
+            const profitTakePercent = config?.profitTakePercent ?? 100;
+            const stopLossPercent = config?.stopLossPercent ?? 20;
+            
+            // CRITICAL: Fetch USD price at entry time for accurate P&L calculations
+            // The position.entryPrice is in SOL per token, we need USD for consistent calculations
+            let entryPriceUsd: number | null = null;
+            try {
+              const dexRes = await fetch(
+                `https://api.dexscreener.com/latest/dex/tokens/${position.tokenAddress}`,
+                { signal: AbortSignal.timeout(5000) }
+              );
+              if (dexRes.ok) {
+                const dexData = await dexRes.json();
+                const solanaPair = dexData.pairs?.find((p: { chainId: string }) => p.chainId === 'solana');
+                if (solanaPair?.priceUsd) {
+                  entryPriceUsd = parseFloat(solanaPair.priceUsd);
+                  console.log(`[TradingEngine] Got USD entry price: $${entryPriceUsd}`);
+                }
+              }
+            } catch (priceErr) {
+              console.log('[TradingEngine] Could not fetch USD price, will use DexScreener later');
+            }
+            
+            console.log(`[TradingEngine] Saving position with TP: ${profitTakePercent}%, SL: ${stopLossPercent}%`);
+            
+            const { data: savedPosition, error: dbError } = await supabase
+              .from('positions')
+              .insert({
+                user_id: user.id,
+                token_address: position.tokenAddress,
+                token_symbol: position.tokenSymbol,
+                token_name: position.tokenName || position.tokenSymbol,
+                chain: 'solana',
+                // Store both SOL and USD entry prices for flexibility
+                entry_price: entryPriceUsd ?? position.entryPrice, // Use USD if available
+                entry_price_usd: entryPriceUsd, // Explicit USD column
+                current_price: entryPriceUsd ?? position.entryPrice,
+                amount: position.tokenAmount,
+                entry_value: entryValue,
+                current_value: entryPriceUsd ? position.tokenAmount * entryPriceUsd : entryValue,
+                profit_take_percent: profitTakePercent,
+                stop_loss_percent: stopLossPercent,
+                status: 'open',
+              })
+              .select()
+              .single();
+
+            if (dbError) {
+              console.error('[TradingEngine] Failed to persist position:', dbError);
+            } else {
+              console.log('[TradingEngine] Position saved to database:', savedPosition?.id);
+            }
+
+            // Log to trade_history for Transaction History display
+            const { error: historyError } = await supabase
+              .from('trade_history')
+              .insert({
+                user_id: user.id,
+                token_address: position.tokenAddress,
+                token_symbol: position.tokenSymbol,
+                token_name: position.tokenName || position.tokenSymbol,
+                trade_type: 'buy',
+                amount: position.tokenAmount,
+                price_sol: position.entryPrice,
+                price_usd: entryPriceUsd,
+                status: 'confirmed',
+                tx_hash: position.entryTxHash,
+              });
+
+            if (historyError) {
+              console.error('[TradingEngine] Failed to log trade history:', historyError);
+            } else {
+              console.log('[TradingEngine] Trade logged to history');
+            }
+          }
+        } catch (persistError) {
+          console.error('[TradingEngine] Position persistence error:', persistError);
+        }
+      }
 
       setState(prev => ({
         ...prev,

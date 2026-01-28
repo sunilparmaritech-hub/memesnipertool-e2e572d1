@@ -1,14 +1,15 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { validateAutoSniperInput, type TokenData as ValidatedTokenData } from "../_shared/validation.ts";
+import { fetchJupiterQuoteWithRetry } from "../_shared/jupiter-retry.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-// Jupiter API for route validation (primary - aggregates all DEXs including Raydium)
-const JUPITER_QUOTE_API = "https://quote-api.jup.ag/v6/quote";
+// Jupiter API for route validation - using free lite-api (no key required)
+const JUPITER_QUOTE_API = "https://lite-api.jup.ag/swap/v1/quote";
 // Raydium API for route validation (fallback)
 const RAYDIUM_QUOTE_API = "https://transaction-v1.raydium.io/compute/swap-base-in";
 const SOL_MINT = "So11111111111111111111111111111111111111112";
@@ -64,6 +65,10 @@ interface SnipeDecision {
     amount: number;
     slippage: number;
     priority: string;
+    profitTakePercent?: number;
+    stopLossPercent?: number;
+    minLiquidity?: number;
+    maxConcurrentTrades?: number;
   } | null;
 }
 
@@ -333,26 +338,27 @@ async function checkTradeRoute(token: TokenData): Promise<{ passed: boolean; rea
   
   // Check both in parallel
   const routeChecks = await Promise.allSettled([
-    // Jupiter check
+    // Jupiter check with retry logic
     (async () => {
-      const jupiterParams = new URLSearchParams({
+      const quoteResult = await fetchJupiterQuoteWithRetry({
         inputMint: SOL_MINT,
         outputMint: token.address,
         amount: testAmount,
-        slippageBps: "500",
-        swapMode: "ExactIn",
+        slippageBps: 500,
+        timeoutMs: 8000,
       });
 
-      const response = await fetch(`${JUPITER_QUOTE_API}?${jupiterParams}`, {
-        signal: AbortSignal.timeout(8000),
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        if (!data.error && data.outAmount) {
-          return { source: 'jupiter', outputAmount: data.outAmount, networkError: false };
-        }
+      if (quoteResult.ok === true && quoteResult.quote.outAmount) {
+        return { source: 'jupiter', outputAmount: quoteResult.quote.outAmount, networkError: false };
       }
+      
+      // Handle rate limit as network error so it can fallback
+      if (quoteResult.ok === false && quoteResult.kind === 'RATE_LIMITED') {
+        const err = new Error('Jupiter rate limited');
+        (err as any).isNetworkError = true;
+        throw err;
+      }
+      
       throw new Error('No Jupiter route');
     })(),
     
@@ -458,90 +464,86 @@ function checkBlacklistWhitelist(
   return { passed: true, reason: '✓ Token not blacklisted' };
 }
 
-// Execute trade via third-party API and create position
-async function executeTradeViaApi(
+// Create a trade signal for frontend execution (proper wallet signing)
+async function createTradeSignal(
   token: TokenData,
   settings: UserSettings,
-  tradeExecutionConfig: ApiConfig | null,
   supabase: any,
-  userId: string
-): Promise<{ success: boolean; txId?: string; error?: string; positionId?: string }> {
+  userId: string,
+  routeSource?: string
+): Promise<{ success: boolean; signalId?: string; error?: string }> {
   try {
-    console.log(`Executing trade for ${token.symbol}`);
+    console.log(`Creating trade signal for ${token.symbol}`);
     
-    // Get current price (use priceUsd if available, or estimate from liquidity)
-    const entryPrice = token.priceUsd || (token.liquidity / 1000);
-    const entryValue = settings.trade_amount * entryPrice;
+    // Calculate signal expiry (5 minutes from now)
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
     
-    // Create position in database
-    const { data: positionData, error: positionError } = await supabase
-      .from('positions')
+    // Create trade signal for frontend to execute
+    const { data: signalData, error: signalError } = await supabase
+      .from('trade_signals')
       .insert({
         user_id: userId,
         token_address: token.address,
         token_symbol: token.symbol,
         token_name: token.name,
         chain: token.chain || 'solana',
-        entry_price: entryPrice,
-        current_price: entryPrice,
-        amount: settings.trade_amount,
-        entry_value: entryValue,
-        current_value: entryValue,
-        profit_take_percent: settings.profit_take_percentage,
-        stop_loss_percent: settings.stop_loss_percentage,
-        status: 'open',
-        profit_loss_percent: 0,
-        profit_loss_value: 0,
+        liquidity: token.liquidity,
+        price_usd: token.priceUsd,
+        risk_score: token.riskScore,
+        trade_amount: settings.trade_amount,
+        slippage: settings.priority === 'turbo' ? 15 : settings.priority === 'fast' ? 10 : 5,
+        priority: settings.priority,
+        status: 'pending',
+        reasons: [],
+        source: routeSource || (token.isPumpFun ? 'pumpfun' : 'jupiter'),
+        is_pump_fun: token.isPumpFun || false,
+        expires_at: expiresAt,
+        metadata: {
+          buyer_position: token.buyerPosition,
+          liquidity_locked: token.liquidityLocked,
+          lock_percentage: token.lockPercentage,
+          profit_take_percent: settings.profit_take_percentage,
+          stop_loss_percent: settings.stop_loss_percentage,
+        },
       })
       .select()
       .single();
 
-    if (positionError) {
-      console.error('Error creating position:', positionError);
-      return { success: false, error: `Failed to create position: ${positionError.message}` };
+    if (signalError) {
+      console.error('Error creating trade signal:', signalError);
+      return { success: false, error: `Failed to create signal: ${signalError.message}` };
     }
 
-    console.log(`Position created for ${token.symbol}:`, positionData.id);
+    console.log(`Trade signal created for ${token.symbol}:`, signalData.id);
     
-    // Log the trade in system_logs
+    // Log the signal in system_logs
     await supabase.from('system_logs').insert({
       user_id: userId,
-      event_type: 'trade_executed',
+      event_type: 'trade_signal_created',
       event_category: 'trading',
-      message: `Auto-sniper bought ${token.symbol} - Amount: ${settings.trade_amount} SOL, Entry: $${entryPrice.toFixed(6)}`,
+      message: `Trade signal created for ${token.symbol} - Amount: ${settings.trade_amount} SOL`,
       metadata: {
+        signal_id: signalData.id,
         token_address: token.address,
         token_symbol: token.symbol,
         amount: settings.trade_amount,
-        entry_price: entryPrice,
-        position_id: positionData.id,
-        profit_take_percent: settings.profit_take_percentage,
-        stop_loss_percent: settings.stop_loss_percentage,
         liquidity: token.liquidity,
-        buyer_position: token.buyerPosition,
         risk_score: token.riskScore,
+        source: routeSource,
+        expires_at: expiresAt,
       },
       severity: 'info',
     });
 
-    // In production with trade execution API configured, call the API here
-    if (tradeExecutionConfig && tradeExecutionConfig.base_url) {
-      console.log(`Would execute via API: ${tradeExecutionConfig.api_name}`);
-      // Real API call would go here
-    }
-
-    const simulatedTxId = `tx_${Date.now()}_${token.symbol}`;
-
     return { 
       success: true, 
-      txId: simulatedTxId,
-      positionId: positionData.id,
+      signalId: signalData.id,
     };
   } catch (error) {
-    console.error('Trade execution error:', error);
+    console.error('Trade signal creation error:', error);
     return { 
       success: false, 
-      error: error instanceof Error ? error.message : 'Trade execution failed',
+      error: error instanceof Error ? error.message : 'Signal creation failed',
     };
   }
 }
@@ -553,7 +555,7 @@ serve(async (req) => {
 
   try {
     const authHeader = req.headers.get('Authorization');
-    if (!authHeader) {
+    if (!authHeader?.startsWith('Bearer ')) {
       return new Response(JSON.stringify({ error: 'Unauthorized' }), {
         status: 401,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -561,19 +563,28 @@ serve(async (req) => {
     }
 
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-    const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-    const supabase = createClient(supabaseUrl, supabaseKey);
+    const anonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
+    const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
-    // Verify user from token
-    const token = authHeader.replace('Bearer ', '');
-    const { data: { user }, error: userError } = await supabase.auth.getUser(token);
-    
-    if (userError || !user) {
-      return new Response(JSON.stringify({ error: 'Invalid token' }), {
+    // Auth client for JWT verification (works with signing-keys on custom domains)
+    const authClient = createClient(supabaseUrl, anonKey, {
+      global: { headers: { Authorization: authHeader } },
+    });
+
+    const token = authHeader.slice('Bearer '.length);
+    const { data: claimsData, error: claimsError } = await authClient.auth.getClaims(token);
+    const userId = claimsData?.claims?.sub;
+
+    if (claimsError || !userId) {
+      return new Response(JSON.stringify({ error: 'Invalid or expired token' }), {
         status: 401,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
+
+    // Service client for DB access
+    const supabase = createClient(supabaseUrl, serviceRoleKey);
+    const user = { id: userId };
 
     // Parse and validate request body
     const rawBody = await req.json().catch(() => ({}));
@@ -589,9 +600,10 @@ serve(async (req) => {
     const { tokens, executeOnApproval } = validationResult.data!;
 
     // Default settings to use if user hasn't configured any
+    // IMPORTANT: These MUST match the defaults in useSniperSettings.ts
     const defaultSettings: UserSettings = {
       user_id: user.id,
-      min_liquidity: 300,
+      min_liquidity: 5, // 5 SOL minimum (matches frontend default)
       profit_take_percentage: 100,
       stop_loss_percentage: 20,
       trade_amount: 0.1,
@@ -646,31 +658,50 @@ serve(async (req) => {
       const reasons: string[] = [];
       let allPassed = true;
 
-      // Rule 1: Liquidity check
-      const liquidityCheck = checkLiquidity(tokenData, settings);
-      reasons.push(liquidityCheck.reason);
-      if (!liquidityCheck.passed) allPassed = false;
+      // Rule 0: CRITICAL - Token must be sellable to avoid stuck positions
+      if (tokenData.canSell === false) {
+        reasons.push('✗ Token cannot be sold (would create stuck position)');
+        allPassed = false;
+        console.log(`[Sellability] Token ${tokenData.symbol} rejected - not sellable`);
+      }
+
+      // Rule 1: Liquidity check against user's min_liquidity setting
+      if (allPassed) {
+        const liquidityCheck = checkLiquidity(tokenData, settings);
+        reasons.push(liquidityCheck.reason);
+        if (!liquidityCheck.passed) {
+          allPassed = false;
+          console.log(`[Liquidity] Token ${tokenData.symbol} rejected - ${tokenData.liquidity} SOL < ${settings.min_liquidity} SOL minimum`);
+        }
+      }
 
       // Rule 2: Liquidity lock check (optional - can be bypassed if not required)
-      const lockCheck = checkLiquidityLock(tokenData);
-      reasons.push(lockCheck.reason);
-      // Don't fail on lock check alone - just add reason
-      // if (!lockCheck.passed) allPassed = false;
+      if (allPassed) {
+        const lockCheck = checkLiquidityLock(tokenData);
+        reasons.push(lockCheck.reason);
+        // Don't fail on lock check alone - just add reason
+      }
 
       // Rule 3: Category filter check
-      const categoryCheck = checkCategoryMatch(tokenData, settings);
-      reasons.push(categoryCheck.reason);
-      if (!categoryCheck.passed) allPassed = false;
+      if (allPassed) {
+        const categoryCheck = checkCategoryMatch(tokenData, settings);
+        reasons.push(categoryCheck.reason);
+        if (!categoryCheck.passed) allPassed = false;
+      }
 
       // Rule 4: Buyer position check
-      const positionCheck = checkBuyerPosition(tokenData);
-      reasons.push(positionCheck.reason);
-      if (!positionCheck.passed) allPassed = false;
+      if (allPassed) {
+        const positionCheck = checkBuyerPosition(tokenData);
+        reasons.push(positionCheck.reason);
+        if (!positionCheck.passed) allPassed = false;
+      }
 
       // Check blacklist/whitelist
-      const listCheck = checkBlacklistWhitelist(tokenData, settings);
-      reasons.push(listCheck.reason);
-      if (!listCheck.passed) allPassed = false;
+      if (allPassed) {
+        const listCheck = checkBlacklistWhitelist(tokenData, settings);
+        reasons.push(listCheck.reason);
+        if (!listCheck.passed) allPassed = false;
+      }
 
       // Rule 5: Risk API check (only if other rules pass AND API is configured)
       // Skip risk check if no API configured - don't block trades due to missing config
@@ -702,8 +733,8 @@ serve(async (req) => {
         }
       }
       
-      // Log the decision for debugging
-      console.log(`Token ${tokenData.symbol}: approved=${allPassed}, reasons=${reasons.join(' | ')}`);
+      // Log the decision for debugging with settings context
+      console.log(`Token ${tokenData.symbol}: approved=${allPassed} | Settings: ${settings.trade_amount} SOL, TP ${settings.profit_take_percentage}%, SL ${settings.stop_loss_percentage}%, Min Liq ${settings.min_liquidity} SOL`);
 
 
       const decision: SnipeDecision = {
@@ -712,32 +743,39 @@ serve(async (req) => {
         reasons,
         tradeParams: allPassed ? {
           amount: settings.trade_amount,
-          slippage: settings.priority === 'turbo' ? 15 : settings.priority === 'fast' ? 10 : 5,
+          // Use user's configured slippage from settings, fallback to priority-based
+          slippage: (userSettings as any)?.slippage_tolerance ?? (settings.priority === 'turbo' ? 15 : settings.priority === 'fast' ? 10 : 5),
           priority: settings.priority,
+          // Include TP/SL for reference
+          profitTakePercent: settings.profit_take_percentage,
+          stopLossPercent: settings.stop_loss_percentage,
+          minLiquidity: settings.min_liquidity,
+          maxConcurrentTrades: settings.max_concurrent_trades,
         } : null,
       };
 
       decisions.push(decision);
 
-      // Execute trade if approved and execution is enabled and we have available slots
+      // Create trade signal if approved and execution is enabled and we have available slots
       if (allPassed && executeOnApproval && tradesExecuted < availableSlots) {
-        // Execute trade - works with or without trade execution API config
-        const tradeResult = await executeTradeViaApi(
+        // Create trade signal for frontend wallet signing (proper production flow)
+        const routeCheck = await checkTradeRoute(tokenData);
+        const signalResult = await createTradeSignal(
           tokenData, 
           settings, 
-          tradeExecutionConfig || null, 
           supabase, 
-          user.id
+          user.id,
+          routeCheck.source
         );
         executedTrades.push({
           token: tokenData.symbol,
-          txId: tradeResult.txId,
-          error: tradeResult.error,
-          positionId: tradeResult.positionId,
+          txId: signalResult.signalId,
+          error: signalResult.error,
+          positionId: undefined,
         });
-        if (tradeResult.success) {
+        if (signalResult.success) {
           tradesExecuted++;
-          console.log(`Trade executed for ${tokenData.symbol}, position: ${tradeResult.positionId}`);
+          console.log(`Trade signal created for ${tokenData.symbol}, signal: ${signalResult.signalId}`);
         }
       }
     }

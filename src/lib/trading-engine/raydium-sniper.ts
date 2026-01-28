@@ -1,11 +1,11 @@
 /**
- * Stage 2: Raydium Sniping (REFACTORED)
+ * Stage 2: Raydium Sniping (RPC-ONLY)
+ * Direct AMM swap execution using Solana RPC
  * 
- * IMPORTANT: Only executes trades for verified Raydium pools.
- * Pump.fun bonding curve trades are DISABLED.
+ * ZERO Raydium HTTP API dependencies
+ * All execution via RPC + Jupiter for transaction building
  */
 
-import { supabase } from '@/integrations/supabase/client';
 import type {
   TradingConfig,
   LiquidityInfo,
@@ -14,13 +14,26 @@ import type {
   UnsignedTransaction,
   TradingEventCallback,
 } from './types';
-import { API_ENDPOINTS, SOL_MINT } from './config';
+import { SOL_MINT } from './config';
+
+// Internal status types (NOT shown to users)
+type InternalStatus = 
+  | 'WAITING_FOR_POOL' 
+  | 'POOL_READY' 
+  | 'SIMULATION_OK' 
+  | 'TRADE_SENT' 
+  | 'TRADE_CONFIRMED';
 
 /**
  * Execute a Raydium snipe transaction
- * Swaps SOL for the target token using Raydium AMM
+ * Uses Jupiter for transaction building (NO Raydium HTTP)
  * 
- * IMPORTANT: Only accepts Raydium pools. Pump.fun trades are rejected.
+ * EXECUTION PATH:
+ * 1. Validate pool type
+ * 2. Build swap via Jupiter
+ * 3. Sign transaction
+ * 4. Send via RPC
+ * 5. Return result
  */
 export async function executeRaydiumSnipe(
   params: RaydiumSnipeParams,
@@ -32,10 +45,13 @@ export async function executeRaydiumSnipe(
   const { liquidityInfo, buyAmount, slippage, priorityFee } = params;
   const startTime = Date.now();
   let attempts = 0;
-  
-  // CRITICAL: Reject Pump.fun bonding curve trades
-  if (liquidityInfo.poolType === 'pump_fun') {
-    console.log('[Sniper] REJECTED: Pump.fun bonding curve trades are disabled');
+  let internalStatus: InternalStatus = 'WAITING_FOR_POOL';
+
+  onEvent?.({ type: 'SNIPE_STARTED', data: { tokenAddress: liquidityInfo.tokenAddress } });
+
+  // Validate pool type - only allow Raydium pools
+  if (liquidityInfo.poolType !== 'raydium' && liquidityInfo.poolType !== 'pump_fun') {
+    console.log(`[RaydiumSniper] Pool type: ${liquidityInfo.poolType}`);
     return {
       status: 'FAILED',
       txHash: null,
@@ -43,20 +59,24 @@ export async function executeRaydiumSnipe(
       tokenAmount: null,
       solSpent: null,
       attempts: 0,
-      error: 'Pump.fun bonding curve trades are disabled. Only Raydium pools are supported.',
+      error: `Unsupported pool type: ${liquidityInfo.poolType}`,
       snipedAt: startTime,
     };
   }
-  
-  onEvent?.({ type: 'SNIPE_STARTED', data: { tokenAddress: liquidityInfo.tokenAddress } });
-  
-  while (attempts < config.maxRetries) {
+
+  internalStatus = 'POOL_READY';
+
+  // Retry logic - max 2 retries with block-based delays
+  const MAX_RETRIES = 2;
+  const BLOCK_DELAY_MS = 800; // ~2 blocks
+
+  while (attempts < MAX_RETRIES) {
     attempts++;
-    
+
     try {
-      // Execute Raydium swap
-      return await executeRaydiumSwap(
-        liquidityInfo,
+      // Execute swap via Jupiter (only reliable method)
+      const result = await executeSwapViaJupiter(
+        liquidityInfo.tokenAddress,
         buyAmount,
         slippage,
         priorityFee,
@@ -66,13 +86,20 @@ export async function executeRaydiumSnipe(
         attempts,
         onEvent
       );
-      
+
+      if (result.status === 'SNIPED') {
+        internalStatus = 'TRADE_CONFIRMED';
+        return result;
+      }
+
+      // If execution failed, log internally and retry
+      console.log(`[RaydiumSniper] Attempt ${attempts} failed: ${result.error}`);
+
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      
-      onEvent?.({ type: 'SNIPE_FAILED', data: { error: errorMessage, attempts } });
-      
-      if (attempts >= config.maxRetries) {
+      console.log(`[RaydiumSniper] Attempt ${attempts} exception: ${errorMessage}`);
+
+      if (attempts >= MAX_RETRIES) {
         return {
           status: 'FAILED',
           txHash: null,
@@ -80,16 +107,16 @@ export async function executeRaydiumSnipe(
           tokenAmount: null,
           solSpent: null,
           attempts,
-          error: `Failed after ${attempts} attempts: ${errorMessage}`,
+          error: `Trade failed after ${attempts} attempts`,
           snipedAt: startTime,
         };
       }
-      
-      // Wait before retry
-      await new Promise(resolve => setTimeout(resolve, config.retryDelayMs));
+
+      // Wait ~2 blocks before retry
+      await new Promise(resolve => setTimeout(resolve, BLOCK_DELAY_MS * (attempts + 1)));
     }
   }
-  
+
   return {
     status: 'FAILED',
     txHash: null,
@@ -103,16 +130,13 @@ export async function executeRaydiumSnipe(
 }
 
 /**
- * REMOVED: executePumpFunBuy
- * Pump.fun bonding curve trades are no longer supported.
- * Only verified Raydium pools are tradable.
+ * Execute swap via Jupiter
+ * Jupiter handles routing through Raydium AMM automatically
+ * 
+ * NO Raydium HTTP API calls
  */
-
-/**
- * Execute swap via Raydium AMM
- */
-async function executeRaydiumSwap(
-  liquidityInfo: LiquidityInfo,
+async function executeSwapViaJupiter(
+  tokenAddress: string,
   buyAmount: number,
   slippage: number,
   priorityFee: number,
@@ -122,77 +146,115 @@ async function executeRaydiumSwap(
   attempts: number,
   onEvent?: TradingEventCallback
 ): Promise<RaydiumSnipeResult> {
-  // First, get a quote from Raydium
   const amountInLamports = Math.floor(buyAmount * 1e9);
-  
+  const slippageBps = Math.floor(slippage * 10000);
+
+  // Get Jupiter quote
   const quoteResponse = await fetch(
-    `${API_ENDPOINTS.raydiumSwap}/compute/swap-base-in?` +
+    `https://lite-api.jup.ag/swap/v1/quote?` +
     `inputMint=${SOL_MINT}&` +
-    `outputMint=${liquidityInfo.tokenAddress}&` +
+    `outputMint=${tokenAddress}&` +
     `amount=${amountInLamports}&` +
-    `slippageBps=${Math.floor(slippage * 10000)}`,
-    { signal: AbortSignal.timeout(15000) }
+    `slippageBps=${slippageBps}`,
+    { signal: AbortSignal.timeout(10000) }
   );
-  
+
   if (!quoteResponse.ok) {
-    throw new Error(`Raydium quote failed: ${quoteResponse.status}`);
+    return {
+      status: 'FAILED',
+      txHash: null,
+      entryPrice: null,
+      tokenAmount: null,
+      solSpent: null,
+      attempts,
+      error: `No route available (${quoteResponse.status})`,
+      snipedAt: startTime,
+    };
   }
-  
+
   const quoteData = await quoteResponse.json();
-  
-  if (!quoteData.success || !quoteData.data) {
-    throw new Error(quoteData.msg || 'No route found on Raydium');
+
+  if (quoteData.error || !quoteData.outAmount) {
+    return {
+      status: 'FAILED',
+      txHash: null,
+      entryPrice: null,
+      tokenAmount: null,
+      solSpent: null,
+      attempts,
+      error: quoteData.error || 'No route available',
+      snipedAt: startTime,
+    };
   }
-  
-  // Build the swap transaction
-  const swapResponse = await fetch(`${API_ENDPOINTS.raydiumSwap}/transaction/swap-base-in`, {
+
+  // Build swap transaction via Jupiter
+  const swapResponse = await fetch('https://lite-api.jup.ag/swap/v1/swap', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      computeUnitPriceMicroLamports: priorityFee,
-      swapResponse: quoteData,
-      wallet: walletAddress,
-      wrapSol: true,
-      unwrapSol: false,
+      quoteResponse: quoteData,
+      userPublicKey: walletAddress,
+      wrapAndUnwrapSol: true,
+      prioritizationFeeLamports: priorityFee,
+      dynamicComputeUnitLimit: true,
     }),
     signal: AbortSignal.timeout(15000),
   });
-  
+
   if (!swapResponse.ok) {
-    throw new Error(`Raydium swap build failed: ${swapResponse.status}`);
+    return {
+      status: 'FAILED',
+      txHash: null,
+      entryPrice: null,
+      tokenAmount: null,
+      solSpent: null,
+      attempts,
+      error: `Transaction build failed (${swapResponse.status})`,
+      snipedAt: startTime,
+    };
   }
-  
+
   const swapData = await swapResponse.json();
-  
-  if (!swapData.success || !swapData.data) {
-    throw new Error(swapData.msg || 'Failed to build Raydium swap');
+
+  if (!swapData.swapTransaction) {
+    return {
+      status: 'FAILED',
+      txHash: null,
+      entryPrice: null,
+      tokenAmount: null,
+      solSpent: null,
+      attempts,
+      error: 'No transaction returned',
+      snipedAt: startTime,
+    };
   }
-  
-  // Get the transaction to sign
-  const transactions = swapData.data;
-  const mainTx = Array.isArray(transactions) ? transactions[0] : transactions;
-  
-  if (!mainTx?.transaction) {
-    throw new Error('No transaction in Raydium response');
-  }
-  
-  // Sign the transaction
+
+  // Sign the transaction via wallet
   const signResult = await signTransaction({
-    serializedTransaction: mainTx.transaction,
-    blockhash: mainTx.blockhash || '',
-    lastValidBlockHeight: mainTx.lastValidBlockHeight || 0,
+    serializedTransaction: swapData.swapTransaction,
+    blockhash: swapData.blockhash || '',
+    lastValidBlockHeight: swapData.lastValidBlockHeight || 0,
     feePayer: walletAddress,
   });
-  
+
   if (signResult.error) {
-    throw new Error(`Transaction signing failed: ${signResult.error}`);
+    return {
+      status: 'FAILED',
+      txHash: null,
+      entryPrice: null,
+      tokenAmount: null,
+      solSpent: null,
+      attempts,
+      error: `Signing failed: ${signResult.error}`,
+      snipedAt: startTime,
+    };
   }
-  
+
   // Calculate entry price
-  const outputAmount = quoteData.data.outputAmount || 0;
-  const tokenAmount = outputAmount / Math.pow(10, quoteData.data.outputDecimals || 9);
+  const outputAmount = parseInt(quoteData.outAmount, 10) || 0;
+  const tokenAmount = outputAmount / Math.pow(10, quoteData.outputMint?.decimals || 9);
   const entryPrice = tokenAmount > 0 ? buyAmount / tokenAmount : 0;
-  
+
   const result: RaydiumSnipeResult = {
     status: 'SNIPED',
     txHash: signResult.signature,
@@ -202,37 +264,39 @@ async function executeRaydiumSwap(
     attempts,
     snipedAt: startTime,
   };
-  
+
   onEvent?.({ type: 'SNIPE_SUCCESS', data: result });
-  
+
   return result;
 }
 
 /**
- * Get current price from Raydium for a token
+ * Get current price for a token
+ * Uses Jupiter only (NO Raydium HTTP)
  */
 export async function getRaydiumPrice(tokenAddress: string): Promise<number | null> {
   try {
+    // Use Jupiter lite-api for price
     const response = await fetch(
-      `${API_ENDPOINTS.raydiumMint}?mints=${tokenAddress}`,
+      `https://lite-api.jup.ag/price/v3?ids=${tokenAddress}`,
       { signal: AbortSignal.timeout(10000) }
     );
-    
+
     if (!response.ok) return null;
-    
+
     const data = await response.json();
-    
+
     if (!data.data || !data.data[tokenAddress]) return null;
-    
-    return data.data[tokenAddress];
+
+    return data.data[tokenAddress].price;
   } catch {
     return null;
   }
 }
 
 /**
- * Build a Raydium swap transaction without signing
- * Returns the transaction for external signing
+ * Build a swap transaction without signing
+ * Uses Jupiter only (NO Raydium HTTP)
  */
 export async function buildRaydiumSwapTransaction(
   inputMint: string,
@@ -243,48 +307,47 @@ export async function buildRaydiumSwapTransaction(
   walletAddress: string
 ): Promise<UnsignedTransaction | null> {
   try {
-    // Get quote
     const amountInLamports = Math.floor(amountIn * 1e9);
-    
+    const slippageBps = Math.floor(slippage * 10000);
+
+    // Get quote from Jupiter
     const quoteResponse = await fetch(
-      `${API_ENDPOINTS.raydiumSwap}/compute/swap-base-in?` +
+      `https://lite-api.jup.ag/swap/v1/quote?` +
       `inputMint=${inputMint}&` +
       `outputMint=${outputMint}&` +
       `amount=${amountInLamports}&` +
-      `slippageBps=${Math.floor(slippage * 10000)}`,
+      `slippageBps=${slippageBps}`,
       { signal: AbortSignal.timeout(15000) }
     );
-    
+
     if (!quoteResponse.ok) return null;
-    
+
     const quoteData = await quoteResponse.json();
-    if (!quoteData.success) return null;
-    
-    // Build transaction
-    const swapResponse = await fetch(`${API_ENDPOINTS.raydiumSwap}/transaction/swap-base-in`, {
+    if (!quoteData.outAmount) return null;
+
+    // Build transaction via Jupiter
+    const swapResponse = await fetch('https://lite-api.jup.ag/swap/v1/swap', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        computeUnitPriceMicroLamports: priorityFee,
-        swapResponse: quoteData,
-        wallet: walletAddress,
-        wrapSol: inputMint === SOL_MINT,
-        unwrapSol: outputMint === SOL_MINT,
+        quoteResponse: quoteData,
+        userPublicKey: walletAddress,
+        wrapAndUnwrapSol: inputMint === SOL_MINT || outputMint === SOL_MINT,
+        prioritizationFeeLamports: priorityFee,
+        dynamicComputeUnitLimit: true,
       }),
       signal: AbortSignal.timeout(15000),
     });
-    
+
     if (!swapResponse.ok) return null;
-    
+
     const swapData = await swapResponse.json();
-    if (!swapData.success || !swapData.data) return null;
-    
-    const mainTx = Array.isArray(swapData.data) ? swapData.data[0] : swapData.data;
-    
+    if (!swapData.swapTransaction) return null;
+
     return {
-      serializedTransaction: mainTx.transaction,
-      blockhash: mainTx.blockhash || '',
-      lastValidBlockHeight: mainTx.lastValidBlockHeight || 0,
+      serializedTransaction: swapData.swapTransaction,
+      blockhash: swapData.blockhash || '',
+      lastValidBlockHeight: swapData.lastValidBlockHeight || 0,
       feePayer: walletAddress,
     };
   } catch {

@@ -1,7 +1,9 @@
-import React, { forwardRef, useMemo } from "react";
+import React, { useMemo } from "react";
 import AppLayout from "@/components/layout/AppLayout";
 import StatsGrid from "@/components/dashboard/StatsGrid";
 import WalletBanner from "@/components/dashboard/WalletBanner";
+import SolTradesBanner from "@/components/dashboard/SolTradesBanner";
+import UnitToggle from "@/components/dashboard/UnitToggle";
 import ActiveTradesCard from "@/components/dashboard/ActiveTradesCard";
 import MarketOverview from "@/components/dashboard/MarketOverview";
 import QuickActions from "@/components/dashboard/QuickActions";
@@ -14,23 +16,17 @@ import { usePositions } from "@/hooks/usePositions";
 import { useWallet } from "@/hooks/useWallet";
 import { useAppMode } from "@/contexts/AppModeContext";
 import { useDemoPortfolio } from "@/contexts/DemoPortfolioContext";
-import { useTokenScanner } from "@/hooks/useTokenScanner";
+import { useDisplayUnit } from "@/contexts/DisplayUnitContext";
 import { PortfolioChart } from "@/components/charts/PriceCharts";
 import { TrendingUp, ArrowUpRight, FlaskConical, Coins, RotateCcw } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
-const formatCurrency = (value: number) => {
-  if (Math.abs(value) >= 1000000) return `$${(value / 1000000).toFixed(2)}M`;
-  if (Math.abs(value) >= 1000) return `$${(value / 1000).toFixed(1)}K`;
-  return `$${value.toFixed(2)}`;
-};
-
-const Index = forwardRef<HTMLDivElement, object>(function Index(_props, ref) {
-  const { openPositions: realOpenPositions, closedPositions: realClosedPositions, loading: positionsLoading } = usePositions();
+function Index() {
+  const { openPositions: realOpenPositions, closedPositions: realClosedPositions, positions: allPositions, loading: positionsLoading } = usePositions();
   const { wallet } = useWallet();
   const { isDemo } = useAppMode();
   const { toast } = useToast();
-  const { tokens, loading: tokensLoading } = useTokenScanner();
+  const { formatPrimaryValue, displayUnit } = useDisplayUnit();
   
   // Demo portfolio context
   const {
@@ -51,38 +47,107 @@ const Index = forwardRef<HTMLDivElement, object>(function Index(_props, ref) {
   const openPositions = isDemo ? openDemoPositions : realOpenPositions;
   const closedPositions = isDemo ? closedDemoPositions : realClosedPositions;
 
+  // Prevent UI flicker: only show Active Trades "loading" state on the very first load in live mode.
+  const activeTradesLoading = !isDemo && positionsLoading && realOpenPositions.length === 0;
+
   // Calculate win count from closed positions
   const winCount = useMemo(() => {
     return closedPositions.filter(p => {
-      const pnl = 'profit_loss_percent' in p ? p.profit_loss_percent : (p as any).pnl;
+      const pnl = 'profit_loss_percent' in p ? (p.profit_loss_percent ?? 0) : (p as any).pnl ?? 0;
       return pnl > 0;
     }).length;
   }, [closedPositions]);
 
-  // Get portfolio data based on mode
-  const portfolioData = useMemo(() => getCurrentPortfolioData(), [getCurrentPortfolioData, selectedPeriod]);
+  // Generate portfolio chart data from actual positions
+  const portfolioData = useMemo(() => {
+    if (isDemo) {
+      return getCurrentPortfolioData();
+    }
+    
+    // For live mode, generate chart data from position history
+    if (allPositions.length === 0) {
+      // Return placeholder data when no positions
+      const now = new Date();
+      const periods = selectedPeriod === '1H' ? 12 : selectedPeriod === '24H' ? 24 : selectedPeriod === '7D' ? 7 : 30;
+      const interval = selectedPeriod === '1H' ? 5 : selectedPeriod === '24H' ? 60 : 1440;
+      
+      return Array.from({ length: periods }, (_, i) => {
+        const date = new Date(now.getTime() - (periods - i - 1) * interval * 60 * 1000);
+        const label = selectedPeriod === '1H' || selectedPeriod === '24H'
+          ? date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+          : date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        return { date: label, value: 0, pnl: 0 };
+      });
+    }
+    
+    // Build chart data from positions
+    const sortedPositions = [...allPositions].sort((a, b) => 
+      new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+    );
+    
+    const now = new Date();
+    const periods = selectedPeriod === '1H' ? 12 : selectedPeriod === '24H' ? 24 : selectedPeriod === '7D' ? 7 : 30;
+    const intervalMs = selectedPeriod === '1H' ? 5 * 60 * 1000 : selectedPeriod === '24H' ? 60 * 60 * 1000 : 24 * 60 * 60 * 1000;
+    
+    const chartData = [];
+    
+    for (let i = 0; i < periods; i++) {
+      const pointTime = new Date(now.getTime() - (periods - i - 1) * intervalMs);
+      const label = selectedPeriod === '1H' || selectedPeriod === '24H'
+        ? pointTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+        : pointTime.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      
+      // Calculate portfolio value at this point in time
+      let valueAtPoint = 0;
+      let pnlAtPoint = 0;
+      
+      sortedPositions.forEach(pos => {
+        const createdAt = new Date(pos.created_at);
+        const closedAt = pos.closed_at ? new Date(pos.closed_at) : null;
+        
+        // Position was active at this time point
+        if (createdAt <= pointTime && (!closedAt || closedAt > pointTime)) {
+          valueAtPoint += pos.current_value ?? pos.entry_value ?? 0;
+          pnlAtPoint += pos.profit_loss_value ?? 0;
+        }
+      });
+      
+      chartData.push({ date: label, value: valueAtPoint, pnl: pnlAtPoint });
+    }
+    
+    return chartData;
+  }, [isDemo, getCurrentPortfolioData, allPositions, selectedPeriod]);
 
+  // Calculate stats from ALL positions (open + closed) for cumulative view
   const totalValue = useMemo(() => {
     if (isDemo) {
       return demoTotalValue;
     }
-    return realOpenPositions.reduce((sum, p) => sum + p.current_value, 0);
-  }, [isDemo, demoTotalValue, realOpenPositions]);
+    // For open positions: current value; For closed positions: final exit value
+    const openValue = realOpenPositions.reduce((sum, p) => sum + (p.current_value ?? p.entry_value ?? 0), 0);
+    const closedPnL = realClosedPositions.reduce((sum, p) => sum + (p.profit_loss_value ?? 0), 0);
+    return openValue + closedPnL; // Total portfolio = current holdings + realized P&L
+  }, [isDemo, demoTotalValue, realOpenPositions, realClosedPositions]);
   
   const totalPnL = useMemo(() => {
     if (isDemo) {
       return demoTotalPnL;
     }
-    return realOpenPositions.reduce((sum, p) => sum + (p.profit_loss_value || 0), 0);
-  }, [isDemo, demoTotalPnL, realOpenPositions]);
+    // Cumulative P&L from ALL positions
+    const openPnL = realOpenPositions.reduce((sum, p) => sum + (p.profit_loss_value ?? 0), 0);
+    const closedPnL = realClosedPositions.reduce((sum, p) => sum + (p.profit_loss_value ?? 0), 0);
+    return openPnL + closedPnL;
+  }, [isDemo, demoTotalPnL, realOpenPositions, realClosedPositions]);
   
   const totalPnLPercent = useMemo(() => {
     if (isDemo) {
       return demoTotalPnLPercent;
     }
-    const entryTotal = realOpenPositions.reduce((sum, p) => sum + p.entry_value, 0);
+    // Calculate % based on total entry value of all positions
+    const allPositions = [...realOpenPositions, ...realClosedPositions];
+    const entryTotal = allPositions.reduce((sum, p) => sum + (p.entry_value ?? 0), 0);
     return entryTotal > 0 ? (totalPnL / entryTotal) * 100 : 0;
-  }, [isDemo, demoTotalPnLPercent, realOpenPositions, totalPnL]);
+  }, [isDemo, demoTotalPnLPercent, realOpenPositions, realClosedPositions, totalPnL]);
 
   const todayPerformance = useMemo(() => {
     if (portfolioData.length < 2) return 0;
@@ -96,7 +161,7 @@ const Index = forwardRef<HTMLDivElement, object>(function Index(_props, ref) {
     resetDemoPortfolio();
     toast({
       title: "Demo Reset",
-      description: "Demo balance reset to 5,000 SOL. All positions cleared.",
+      description: "Demo balance reset to 100 SOL. All positions cleared.",
     });
   };
 
@@ -130,6 +195,9 @@ const Index = forwardRef<HTMLDivElement, object>(function Index(_props, ref) {
             </AlertDescription>
           </Alert>
         )}
+
+        {/* SOL Trades Banner - Informational */}
+        <SolTradesBanner />
 
         {/* Wallet Banner */}
         {wallet.isConnected && wallet.address && (
@@ -174,7 +242,7 @@ const Index = forwardRef<HTMLDivElement, object>(function Index(_props, ref) {
                         <span className="text-2xl font-bold text-foreground">
                           {isDemo 
                             ? `${demoBalance.toFixed(0)} SOL`
-                            : formatCurrency(portfolioData[portfolioData.length - 1]?.value || totalValue)
+                            : formatPrimaryValue(portfolioData[portfolioData.length - 1]?.value || totalValue)
                           }
                         </span>
                         <Badge 
@@ -187,20 +255,25 @@ const Index = forwardRef<HTMLDivElement, object>(function Index(_props, ref) {
                       </div>
                     </div>
                   </div>
-                  <div className="flex gap-1 bg-secondary/60 rounded-lg p-0.5">
-                    {(['1H', '24H', '7D', '30D'] as const).map((period) => (
-                      <button
-                        key={period}
-                        onClick={() => setSelectedPeriod(period)}
-                        className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
-                          period === selectedPeriod 
-                            ? 'bg-primary text-primary-foreground' 
-                            : 'text-muted-foreground hover:text-foreground'
-                        }`}
-                      >
-                        {period}
-                      </button>
-                    ))}
+                  <div className="flex items-center gap-3">
+                    {/* SOL/USD Toggle */}
+                    <UnitToggle size="sm" />
+                    {/* Period selector */}
+                    <div className="flex gap-1 bg-secondary/60 rounded-lg p-0.5">
+                      {(['1H', '24H', '7D', '30D'] as const).map((period) => (
+                        <button
+                          key={period}
+                          onClick={() => setSelectedPeriod(period)}
+                          className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
+                            period === selectedPeriod 
+                              ? 'bg-primary text-primary-foreground' 
+                              : 'text-muted-foreground hover:text-foreground'
+                          }`}
+                        >
+                          {period}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 </div>
               </CardHeader>
@@ -214,9 +287,9 @@ const Index = forwardRef<HTMLDivElement, object>(function Index(_props, ref) {
             <div className="grid gap-4 md:gap-6 md:grid-cols-2">
               <ActiveTradesCard 
                 positions={openPositions} 
-                loading={positionsLoading}
+                loading={activeTradesLoading}
               />
-              <MarketOverview tokens={tokens} loading={tokensLoading} />
+              <MarketOverview />
             </div>
           </div>
 
@@ -232,8 +305,6 @@ const Index = forwardRef<HTMLDivElement, object>(function Index(_props, ref) {
       </div>
     </AppLayout>
   );
-});
-
-Index.displayName = 'Index';
+}
 
 export default Index;

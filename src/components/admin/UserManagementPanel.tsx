@@ -182,7 +182,7 @@ export function UserManagementPanel() {
 
       // Fetch recent activity logs from user_activity_logs
       const { data: activityLogs } = await supabase
-        .from("user_activity_logs")
+        .from("user_activity_logs" as never)
         .select("*")
         .eq("user_id", userId)
         .order("created_at", { ascending: false })
@@ -190,7 +190,7 @@ export function UserManagementPanel() {
 
       // Also fetch trading activity from system_logs
       const { data: systemLogs } = await supabase
-        .from("system_logs")
+        .from("system_logs" as never)
         .select("*")
         .eq("user_id", userId)
         .order("created_at", { ascending: false })
@@ -272,11 +272,13 @@ export function UserManagementPanel() {
       if (error) throw error;
 
       // Log the activity
-      await supabase.from("user_activity_logs").insert({
+      await supabase.from("user_activity_logs" as never).insert({
         user_id: selectedUser.user_id,
-        action: "account_suspended",
-        details: { reason: suspendReason || "No reason provided", suspended_by: "admin" },
-      });
+        activity_type: "account_suspended",
+        activity_category: "admin_action",
+        description: `Account suspended: ${suspendReason || "No reason provided"}`,
+        metadata: { suspended_by: "admin" },
+      } as never);
 
       setUsers((prev) =>
         prev.map((u) =>
@@ -312,11 +314,13 @@ export function UserManagementPanel() {
       if (error) throw error;
 
       // Log the activity
-      await supabase.from("user_activity_logs").insert({
+      await supabase.from("user_activity_logs" as never).insert({
         user_id: userId,
-        action: "account_unsuspended",
-        details: { unsuspended_by: "admin" },
-      });
+        activity_type: "account_unsuspended",
+        activity_category: "admin_action",
+        description: "Account reactivated by admin",
+        metadata: { unsuspended_by: "admin" },
+      } as never);
 
       setUsers((prev) =>
         prev.map((u) =>
@@ -756,10 +760,19 @@ export function UserManagementPanel() {
               </label>
               <textarea
                 value={suspendReason}
-                onChange={(e) => setSuspendReason(e.target.value)}
+                onChange={(e) => {
+                  // Limit suspension reason to 500 characters
+                  if (e.target.value.length <= 500) {
+                    setSuspendReason(e.target.value);
+                  }
+                }}
+                maxLength={500}
                 placeholder="Enter the reason for suspending this user..."
                 className="w-full h-24 px-4 py-3 bg-secondary/50 border border-border rounded-lg text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 resize-none"
               />
+              <p className="text-xs text-muted-foreground mt-1">
+                {suspendReason.length}/500 characters
+              </p>
             </div>
           </div>
           <DialogFooter>

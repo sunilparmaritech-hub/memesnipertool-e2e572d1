@@ -24,6 +24,13 @@ export interface TradingConfig {
   
   // Risk filters
   riskFilters: RiskFilters;
+  
+  // Skip risk check (for pre-verified tokens from scanner)
+  skipRiskCheck?: boolean;
+  
+  // Position management settings (for persistence)
+  profitTakePercent?: number;
+  stopLossPercent?: number;
 }
 
 export interface RiskFilters {
@@ -136,6 +143,7 @@ export interface TradingFlowResult {
 export interface PositionInfo {
   tokenAddress: string;
   tokenSymbol: string;
+  tokenName: string;
   entryPrice: number;
   tokenAmount: number;
   solSpent: number;

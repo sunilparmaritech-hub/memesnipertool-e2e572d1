@@ -1,12 +1,16 @@
-import { useState, useMemo, memo, useCallback } from "react";
+import { useState, useMemo, memo, useCallback, useEffect, useRef, forwardRef } from "react";
+import { useNavigate } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { ScannedToken } from "@/hooks/useTokenScanner";
-import { Zap, TrendingUp, TrendingDown, ExternalLink, ShieldCheck, ShieldX, Lock, Loader2, Search, LogOut, ChevronDown, ChevronUp, DollarSign } from "lucide-react";
+import { Zap, TrendingUp, TrendingDown, ExternalLink, ShieldCheck, ShieldX, Lock, Search, LogOut, ChevronDown, ChevronUp, DollarSign, Eye, Clock } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import WaitingLiquidityTab, { type CombinedWaitingItem } from "./WaitingLiquidityTab";
+import type { WaitingPosition } from "@/hooks/useLiquidityRetryWorker";
+import type { WalletToken } from "@/hooks/useWalletTokens";
 
 interface ActiveTradePosition {
   id: string;
@@ -23,16 +27,24 @@ interface ActiveTradePosition {
   profit_loss_value: number | null;
   profit_take_percent: number;
   stop_loss_percent: number;
-  status: 'open' | 'closed' | 'pending';
+  status: 'open' | 'closed' | 'pending' | 'waiting_for_liquidity';
   created_at: string;
 }
 
 interface LiquidityMonitorProps {
   pools: ScannedToken[];
   activeTrades: ActiveTradePosition[];
+  waitingPositions?: WaitingPosition[];
+  walletTokens?: WalletToken[];
+  loadingWalletTokens?: boolean;
   loading: boolean;
   apiStatus: 'waiting' | 'active' | 'error' | 'rate_limited';
   onExitTrade?: (positionId: string, currentPrice: number) => void;
+  onRetryLiquidityCheck?: () => void;
+  onMoveBackFromWaiting?: (positionId: string) => void;
+  onManualSellWaiting?: (position: WaitingPosition | CombinedWaitingItem) => void;
+  onRefreshWalletTokens?: () => void;
+  checkingLiquidity?: boolean;
 }
 
 const formatLiquidity = (value: number) => {
@@ -58,10 +70,19 @@ const avatarColors = [
 ];
 
 // Memoized Pool Row with improved visibility and criteria details
-const PoolRow = memo(({ pool, colorIndex, isNew }: { pool: ScannedToken; colorIndex: number; isNew?: boolean }) => {
+const PoolRow = memo(({ pool, colorIndex, isNew, onViewDetails }: { pool: ScannedToken; colorIndex: number; isNew?: boolean; onViewDetails: (pool: ScannedToken) => void }) => {
   const [expanded, setExpanded] = useState(false);
   const isPositive = pool.priceChange24h >= 0;
-  const initials = pool.symbol.slice(0, 2).toUpperCase();
+  
+  // Use short address as fallback for placeholder names/symbols
+  const displaySymbol = isPlaceholder(pool.symbol) 
+    ? shortAddress(pool.address) 
+    : pool.symbol;
+  const displayName = isPlaceholder(pool.name) 
+    ? `Token ${shortAddress(pool.address)}` 
+    : pool.name;
+    
+  const initials = displaySymbol.slice(0, 2).toUpperCase();
   const avatarClass = avatarColors[colorIndex % avatarColors.length];
   const honeypotSafe = pool.riskScore < 50;
   const liquidityLocked = pool.liquidityLocked;
@@ -71,6 +92,11 @@ const PoolRow = memo(({ pool, colorIndex, isNew }: { pool: ScannedToken; colorIn
   const isTradeable = pool.isTradeable !== false;
   const canBuy = pool.canBuy !== false;
   const canSell = pool.canSell !== false;
+
+  const handleViewDetails = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onViewDetails(pool);
+  };
 
   return (
     <div className="border-b border-border/20">
@@ -92,8 +118,8 @@ const PoolRow = memo(({ pool, colorIndex, isNew }: { pool: ScannedToken; colorIn
         {/* Token Info - More visible */}
         <div className="min-w-0 space-y-0.5">
           <div className="flex items-center gap-1.5 md:gap-2">
-            <span className="font-semibold text-foreground text-xs md:text-sm truncate">{pool.name}</span>
-            <span className="text-muted-foreground text-[10px] md:text-xs font-medium hidden sm:inline">{pool.symbol}</span>
+            <span className="font-semibold text-foreground text-xs md:text-sm truncate">{displayName}</span>
+            <span className="text-muted-foreground text-[10px] md:text-xs font-medium hidden sm:inline">{displaySymbol}</span>
             {isNew && (
               <Badge className="bg-primary/20 text-primary text-[8px] md:text-[9px] px-1 py-0 h-3.5 md:h-4">NEW</Badge>
             )}
@@ -241,14 +267,54 @@ const PoolRow = memo(({ pool, colorIndex, isNew }: { pool: ScannedToken; colorIn
             <div className="mt-2 p-2 bg-background/30 rounded text-xs">
               <span className="text-muted-foreground block mb-1">Safety Checks:</span>
               <div className="flex flex-wrap gap-1">
-                {pool.safetyReasons.map((reason, idx) => (
-                  <Badge key={idx} variant="outline" className="text-[10px] px-1.5 py-0 h-5">
-                    {reason}
-                  </Badge>
-                ))}
+                {/* Deduplicate and sort safety reasons */}
+                {[...new Set(pool.safetyReasons)]
+                  .sort((a, b) => {
+                    // Priority: ✅ first, then ⚠️, then ❌, then others
+                    const priority = (s: string) => s.startsWith('✅') ? 0 : s.startsWith('⚠️') ? 1 : s.startsWith('❌') ? 2 : 3;
+                    return priority(a) - priority(b);
+                  })
+                  .slice(0, 5) // Limit to 5 most important
+                  .map((reason, idx) => (
+                    <Badge 
+                      key={idx} 
+                      variant="outline" 
+                      className={cn(
+                        "text-[10px] px-1.5 py-0 h-5",
+                        reason.startsWith('✅') && "border-success/40 text-success bg-success/5",
+                        reason.startsWith('⚠️') && "border-warning/40 text-warning bg-warning/5",
+                        reason.startsWith('❌') && "border-destructive/40 text-destructive bg-destructive/5"
+                      )}
+                    >
+                      {reason}
+                    </Badge>
+                  ))}
               </div>
             </div>
           )}
+          
+          {/* Action Buttons */}
+          <div className="flex items-center gap-2 mt-3">
+            <Button
+              size="sm"
+              variant="outline"
+              className="flex-1 h-8 text-xs gap-1.5"
+              onClick={handleViewDetails}
+            >
+              <Eye className="w-3.5 h-3.5" />
+              View Details
+            </Button>
+            <a 
+              href={`https://solscan.io/token/${pool.address}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <Button size="sm" variant="ghost" className="h-8 w-8 p-0">
+                <ExternalLink className="w-3.5 h-3.5" />
+              </Button>
+            </a>
+          </div>
         </div>
       )}
     </div>
@@ -267,21 +333,56 @@ const PoolRow = memo(({ pool, colorIndex, isNew }: { pool: ScannedToken; colorIn
 
 PoolRow.displayName = 'PoolRow';
 
-// Memoized Trade Row with improved visibility
+// Import formatters
+import { 
+  formatPercentage, 
+  formatCurrency as formatCurrencyValue, 
+  calculatePnLValue, 
+  getTokenDisplayName, 
+  getTokenDisplaySymbol,
+  isPlaceholderText,
+  shortAddress as formatShortAddress 
+} from '@/lib/formatters';
+
+// Legacy helpers (kept for pools display)
+const shortAddress = (address: string) => formatShortAddress(address);
+const isPlaceholder = (val: string | null | undefined) => isPlaceholderText(val);
+
+// Memoized Trade Row with improved visibility - shows accurate USD values like Phantom
 const TradeRow = memo(({ trade, colorIndex, onExit }: { 
   trade: ActiveTradePosition; 
   colorIndex: number; 
   onExit?: (id: string, price: number) => void 
 }) => {
   const pnlPercent = trade.profit_loss_percent || 0;
-  const pnlValue = trade.profit_loss_value || 0;
   const isPositive = pnlPercent >= 0;
-  const initials = trade.token_symbol.slice(0, 2).toUpperCase();
+  
+  // CRITICAL: Use current_value from DB directly (it's already correct)
+  // Calculate actual token amount from current_value / current_price
+  const currentUsdValue = trade.current_value || (trade.amount * trade.current_price);
+  const actualTokenAmount = trade.current_price > 0 
+    ? currentUsdValue / trade.current_price 
+    : trade.amount;
+  
+  // Use actual token name/symbol, fallback to formatted address
+  const displaySymbol = getTokenDisplaySymbol(trade.token_symbol, trade.token_address);
+  const displayName = getTokenDisplayName(trade.token_name, trade.token_address);
+    
+  const initials = displaySymbol.slice(0, 2).toUpperCase();
   const avatarClass = avatarColors[colorIndex % avatarColors.length];
 
   const handleExit = useCallback(() => {
     onExit?.(trade.id, trade.current_price);
   }, [onExit, trade.id, trade.current_price]);
+  
+  // Format token amount with appropriate precision
+  const formatTokenAmount = (amount: number) => {
+    if (amount >= 1000000) return `${(amount / 1000000).toFixed(2)}M`;
+    if (amount >= 1000) return `${(amount / 1000).toFixed(2)}K`;
+    if (amount >= 1) return amount.toFixed(5);
+    if (amount >= 0.001) return amount.toFixed(6);
+    return amount.toFixed(8);
+  };
 
   return (
     <div className="grid grid-cols-[40px_1fr_auto_auto] items-center gap-3 px-3 py-2.5 border-b border-border/20 hover:bg-secondary/30 transition-colors">
@@ -293,37 +394,34 @@ const TradeRow = memo(({ trade, colorIndex, onExit }: {
         {initials}
       </div>
       
-      {/* Token Info */}
+      {/* Token Info - Show amount prominently like Phantom */}
       <div className="min-w-0 space-y-0.5">
         <div className="flex items-center gap-2">
-          <span className="font-semibold text-foreground text-sm truncate">{trade.token_name}</span>
-          <span className="text-muted-foreground text-xs">{trade.token_symbol}</span>
+          <span className="font-semibold text-foreground text-sm truncate">{displayName}</span>
+          <span className="text-muted-foreground text-xs">{displaySymbol}</span>
         </div>
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <span className="tabular-nums">Entry: {formatPrice(trade.entry_price)}</span>
-          <span className="text-muted-foreground/40">→</span>
-          <span className={cn(
-            "tabular-nums font-medium transition-colors duration-300",
-            isPositive ? 'text-success' : 'text-destructive'
-          )}>
-            {formatPrice(trade.current_price)}
+          {/* Token quantity like Phantom shows */}
+          <span className="tabular-nums font-medium text-foreground/80">
+            {formatTokenAmount(actualTokenAmount)} {displaySymbol}
           </span>
+          <span className="text-muted-foreground/40">•</span>
+          <span className="tabular-nums">Now: {formatPrice(trade.current_price)}</span>
         </div>
       </div>
       
-      {/* PnL - More visible */}
-      <div className="text-right min-w-[70px]">
-        <div className={cn(
-          "font-bold text-sm tabular-nums transition-all duration-300",
-          isPositive ? 'text-success' : 'text-destructive'
-        )}>
-          {isPositive ? '+' : ''}{pnlPercent.toFixed(1)}%
+      {/* Current Value + P&L like Phantom wallet */}
+      <div className="text-right min-w-[80px]">
+        {/* Current USD value prominently */}
+        <div className="font-bold text-sm tabular-nums text-foreground">
+          ${currentUsdValue >= 1000 ? currentUsdValue.toFixed(0) : currentUsdValue >= 1 ? currentUsdValue.toFixed(2) : currentUsdValue.toFixed(4)}
         </div>
+        {/* Simple P&L percentage only */}
         <div className={cn(
           "text-xs tabular-nums font-medium transition-all duration-300",
-          isPositive ? 'text-success/80' : 'text-destructive/80'
+          isPositive ? 'text-success' : 'text-destructive'
         )}>
-          {isPositive ? '+' : ''}${Math.abs(pnlValue).toFixed(2)}
+          {isPositive ? '+' : ''}{pnlPercent.toFixed(2)}%
         </div>
       </div>
       
@@ -343,8 +441,11 @@ const TradeRow = memo(({ trade, colorIndex, onExit }: {
   return (
     prevProps.trade.id === nextProps.trade.id &&
     prevProps.trade.current_price === nextProps.trade.current_price &&
+    prevProps.trade.current_value === nextProps.trade.current_value &&
     prevProps.trade.profit_loss_percent === nextProps.trade.profit_loss_percent &&
     prevProps.trade.profit_loss_value === nextProps.trade.profit_loss_value &&
+    prevProps.trade.token_name === nextProps.trade.token_name &&
+    prevProps.trade.token_symbol === nextProps.trade.token_symbol &&
     prevProps.colorIndex === nextProps.colorIndex
   );
 });
@@ -372,23 +473,47 @@ const PoolSkeleton = memo(() => (
 
 PoolSkeleton.displayName = 'PoolSkeleton';
 
-export default function LiquidityMonitor({ 
+const LiquidityMonitor = forwardRef<HTMLDivElement, LiquidityMonitorProps>(function LiquidityMonitor({ 
   pools, 
   activeTrades, 
+  waitingPositions = [],
+  walletTokens = [],
+  loadingWalletTokens = false,
   loading,
   apiStatus = 'waiting',
-  onExitTrade
-}: LiquidityMonitorProps) {
+  onExitTrade,
+  onRetryLiquidityCheck,
+  onMoveBackFromWaiting,
+  onManualSellWaiting,
+  onRefreshWalletTokens,
+  checkingLiquidity = false,
+}, ref) {
+  const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState("pools");
   const [searchTerm, setSearchTerm] = useState("");
   const [isExpanded, setIsExpanded] = useState(true);
   const [displayCount, setDisplayCount] = useState(10);
   
-  // Track new tokens (added in last 5 seconds)
-  const [newTokenIds, setNewTokenIds] = useState<Set<string>>(new Set());
+  // Handle navigation to token detail page
+  const handleViewDetails = useCallback((pool: ScannedToken) => {
+    const tokenDataParam = encodeURIComponent(JSON.stringify(pool));
+    navigate(`/token/${pool.address}?data=${tokenDataParam}`);
+  }, [navigate]);
   
-  // Update new token tracking
-  useMemo(() => {
+  // Track new tokens (added in last 5 seconds) - using refs to avoid re-renders
+  const [newTokenIds, setNewTokenIds] = useState<Set<string>>(new Set());
+  const prevPoolsLengthRef = useRef(pools.length);
+  const clearTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  
+  // Update new token tracking with useEffect (proper side effect handling)
+  useEffect(() => {
+    // Only process when pools length increases (new tokens added)
+    if (pools.length <= prevPoolsLengthRef.current) {
+      prevPoolsLengthRef.current = pools.length;
+      return;
+    }
+    prevPoolsLengthRef.current = pools.length;
+    
     const now = Date.now();
     const fiveSecondsAgo = now - 5000;
     const newIds = new Set<string>();
@@ -402,10 +527,20 @@ export default function LiquidityMonitor({
     
     if (newIds.size > 0) {
       setNewTokenIds(newIds);
+      // Clear previous timeout
+      if (clearTimeoutRef.current) {
+        clearTimeout(clearTimeoutRef.current);
+      }
       // Clear after 5 seconds
-      setTimeout(() => setNewTokenIds(new Set()), 5000);
+      clearTimeoutRef.current = setTimeout(() => setNewTokenIds(new Set()), 5000);
     }
-  }, [pools.length]);
+    
+    return () => {
+      if (clearTimeoutRef.current) {
+        clearTimeout(clearTimeoutRef.current);
+      }
+    };
+  }, [pools]);
   
   // Memoize filtered pools
   const filteredPools = useMemo(() => 
@@ -423,15 +558,55 @@ export default function LiquidityMonitor({
 
   const hasMore = filteredPools.length > displayCount;
 
-  // Memoize open trades
+  // Memoize open trades - CRITICAL: Include both 'open' and 'pending', exclude 'closed'
+  // This ensures the Active Trades list never shows closed positions
   const openTrades = useMemo(() => 
-    activeTrades.filter(t => t.status === 'open'), 
+    activeTrades.filter(t => t.status === 'open' || t.status === 'pending'), 
     [activeTrades]
   );
 
-  // Memoize total P&L
+  // Create set of active token addresses for exclusion in Waiting tab
+  const activeTokenAddresses = useMemo(() => {
+    const addresses = new Set<string>();
+    for (const trade of openTrades) {
+      addresses.add(trade.token_address.toLowerCase());
+    }
+    return addresses;
+  }, [openTrades]);
+
+  // Calculate combined waiting items count (positions + wallet tokens, excluding active and duplicates)
+  const waitingItemsCount = useMemo(() => {
+    const seenAddresses = new Set<string>();
+    let count = 0;
+    
+    // Count waiting positions not in active trades
+    for (const pos of waitingPositions) {
+      const addr = pos.token_address.toLowerCase();
+      if (!activeTokenAddresses.has(addr)) {
+        seenAddresses.add(addr);
+        count++;
+      }
+    }
+    
+    // Count wallet tokens not already counted or in active trades
+    for (const token of (walletTokens || [])) {
+      const addr = token.mint.toLowerCase();
+      if (!seenAddresses.has(addr) && !activeTokenAddresses.has(addr)) {
+        seenAddresses.add(addr);
+        count++;
+      }
+    }
+    
+    return count;
+  }, [waitingPositions, walletTokens, activeTokenAddresses]);
+
+  // Memoize total P&L in actual USD (amount × current_price - amount × entry_price)
   const totalPnL = useMemo(() => 
-    openTrades.reduce((sum, t) => sum + (t.profit_loss_value || 0), 0),
+    openTrades.reduce((sum, t) => {
+      const currentVal = t.amount * t.current_price;
+      const entryVal = t.amount * t.entry_price;
+      return sum + (currentVal - entryVal);
+    }, 0),
     [openTrades]
   );
 
@@ -463,7 +638,7 @@ export default function LiquidityMonitor({
   };
 
   return (
-    <Card className="bg-card/80 backdrop-blur-sm border-border/50">
+    <Card ref={ref} className="bg-card/80 backdrop-blur-sm border-border/50">
       <CardHeader className="pb-2 px-4 pt-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -493,7 +668,13 @@ export default function LiquidityMonitor({
       
       {isExpanded && (
         <CardContent className="p-0">
-          <Tabs value={activeTab} onValueChange={setActiveTab}>
+          <Tabs value={activeTab} onValueChange={(val) => {
+            setActiveTab(val);
+            // Trigger wallet refresh when switching to waiting tab
+            if (val === 'waiting' && onRefreshWalletTokens) {
+              onRefreshWalletTokens();
+            }
+          }}>
             <div className="px-4 pb-2">
               <TabsList className="w-full bg-secondary/60 h-9">
                 <TabsTrigger 
@@ -506,7 +687,19 @@ export default function LiquidityMonitor({
                   value="trades" 
                   className="flex-1 text-xs h-8 data-[state=active]:bg-success data-[state=active]:text-success-foreground"
                 >
-                  Active Trades ({openTrades.length})
+                  Active ({openTrades.length})
+                </TabsTrigger>
+                <TabsTrigger 
+                  value="waiting" 
+                  className={cn(
+                    "flex-1 text-xs h-8 gap-1",
+                    waitingItemsCount > 0 
+                      ? "data-[state=active]:bg-warning data-[state=active]:text-warning-foreground"
+                      : "data-[state=active]:bg-muted data-[state=active]:text-muted-foreground"
+                  )}
+                >
+                  <Clock className="w-3 h-3" />
+                  Waiting ({waitingItemsCount})
                 </TabsTrigger>
               </TabsList>
             </div>
@@ -559,6 +752,7 @@ export default function LiquidityMonitor({
                       pool={pool} 
                       colorIndex={idx}
                       isNew={newTokenIds.has(pool.id)}
+                      onViewDetails={handleViewDetails}
                     />
                   ))
                 )}
@@ -609,15 +803,35 @@ export default function LiquidityMonitor({
                       "font-bold text-sm tabular-nums",
                       totalPnL >= 0 ? 'text-success' : 'text-destructive'
                     )}>
-                      {totalPnL >= 0 ? '+' : ''}${totalPnL.toFixed(2)}
+                      {totalPnL >= 0 ? '+' : ''}{Math.abs(totalPnL) < 0.01 ? '<$0.01' : `$${totalPnL.toFixed(2)}`}
                     </span>
                   </div>
                 </div>
               )}
+            </TabsContent>
+            
+            {/* Waiting for Liquidity Tab */}
+            <TabsContent value="waiting" className="mt-0">
+              <WaitingLiquidityTab
+                positions={waitingPositions}
+                walletTokens={walletTokens}
+                activeTokenAddresses={activeTokenAddresses}
+                checking={checkingLiquidity}
+                loadingWalletTokens={loadingWalletTokens}
+                onRetryCheck={onRetryLiquidityCheck || (() => {})}
+                onMoveBack={onMoveBackFromWaiting || (() => {})}
+                onManualSell={onManualSellWaiting || (() => {})}
+                onRefreshWalletTokens={onRefreshWalletTokens}
+                isTabActive={activeTab === 'waiting'}
+              />
             </TabsContent>
           </Tabs>
         </CardContent>
       )}
     </Card>
   );
-}
+});
+
+LiquidityMonitor.displayName = 'LiquidityMonitor';
+
+export default LiquidityMonitor;

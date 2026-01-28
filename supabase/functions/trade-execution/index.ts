@@ -1,19 +1,38 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { getApiKey, getApiConfig } from "../_shared/api-keys.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-// Jupiter API configuration
-// Uses authenticated endpoint if JUPITER_API_KEY is set for higher rate limits
-const JUPITER_API_KEY = Deno.env.get("JUPITER_API_KEY");
-const JUPITER_BASE_URL = JUPITER_API_KEY 
-  ? "https://public.jupiterapi.com" // Paid API with higher limits
-  : "https://quote-api.jup.ag/v6";  // Free public API (rate limited)
+// API configuration - dynamically fetched from database
+let JUPITER_API_KEY: string | null = null;
+// Default to free lite-api (no API key required, bypasses DNS issues in some regions)
+let JUPITER_BASE_URL = "https://lite-api.jup.ag/swap/v1";
+let JUPITER_QUOTE_API = `${JUPITER_BASE_URL}/quote`;
+let JUPITER_SWAP_API = `${JUPITER_BASE_URL}/swap`;
 
-const JUPITER_QUOTE_API = `${JUPITER_BASE_URL}/quote`;
-const JUPITER_SWAP_API = `${JUPITER_BASE_URL}/swap`;
+// Initialize API keys from database
+async function initializeApiKeys() {
+  try {
+    // Get Jupiter API key from database/env
+    JUPITER_API_KEY = await getApiKey('jupiter');
+    
+    if (JUPITER_API_KEY) {
+      // Paid API with higher limits
+      JUPITER_BASE_URL = "https://public.jupiterapi.com";
+      JUPITER_QUOTE_API = `${JUPITER_BASE_URL}/quote`;
+      JUPITER_SWAP_API = `${JUPITER_BASE_URL}/swap`;
+      console.log('[Trade] Jupiter API: AUTHENTICATED (paid) - using jupiterapi.com');
+    } else {
+      // Free lite-api - no key needed
+      console.log('[Trade] Jupiter API: PUBLIC (lite-api) - free tier');
+    }
+  } catch (error) {
+    console.error('[Trade] Failed to initialize API keys:', error);
+  }
+}
 
 // Raydium API endpoints (Fallback)
 const RAYDIUM_QUOTE_API = "https://transaction-v1.raydium.io/compute/swap-base-in";
@@ -29,8 +48,42 @@ const PUMPFUN_TRADE_API = "https://pumpportal.fun/api/trade-local";
 const SOL_MINT = "So11111111111111111111111111111111111111112";
 const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
-// Log which Jupiter endpoint is being used
-console.log(`[Trade] Jupiter API: ${JUPITER_API_KEY ? 'AUTHENTICATED (paid)' : 'PUBLIC (rate limited)'} - ${JUPITER_BASE_URL}`);
+// SPL Token Mint layout: decimals at offset 44
+function base64ToBytes(base64: string): Uint8Array {
+  const bin = atob(base64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+
+async function rpcRequest(rpcUrl: string, method: string, params: unknown[]): Promise<any> {
+  const res = await fetch(rpcUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`RPC error ${res.status}: ${text.slice(0, 160)}`);
+  }
+  const data = await res.json();
+  if (data?.error) throw new Error(data.error?.message || "RPC returned an error");
+  return data?.result;
+}
+
+async function getMintDecimals(rpcUrl: string, mint: string): Promise<number> {
+  if (mint === SOL_MINT) return 9;
+  const result = await rpcRequest(rpcUrl, "getAccountInfo", [mint, { encoding: "base64" }]);
+  const value = result?.value;
+  const data = value?.data;
+  const base64 = Array.isArray(data) ? data[0] : null;
+  if (!base64 || typeof base64 !== "string") throw new Error("Mint account not found");
+  const bytes = base64ToBytes(base64);
+  if (bytes.length < 45) throw new Error(`Invalid mint data length: ${bytes.length}`);
+  const decimals = bytes[44];
+  if (typeof decimals !== "number" || decimals > 18) throw new Error(`Invalid decimals: ${decimals}`);
+  return decimals;
+}
 
 interface QuoteRequest {
   inputMint: string;
@@ -124,52 +177,59 @@ async function withRetry<T>(
 }
 
 // Check if token is from Pump.fun (bonding curve)
-async function isPumpFunToken(tokenMint: string): Promise<{ isPumpFun: boolean; bondingCurve?: any }> {
-  // Try primary API first
-  try {
-    const response = await fetch(`${PUMPFUN_API}/coins/${tokenMint}`, {
-      signal: AbortSignal.timeout(5000),
-      headers: {
-        'Accept': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (compatible; MemeSniper/1.0)',
-      },
-    });
-    
-    if (response.ok) {
-      const data = await response.json();
-      // If the token exists on pump.fun and hasn't graduated
-      if (data && !data.complete) {
-        console.log(`[Pump.fun] Token ${tokenMint} is on bonding curve`);
-        return { isPumpFun: true, bondingCurve: data };
+async function isPumpFunToken(tokenMint: string): Promise<{ isPumpFun: boolean; bondingCurve?: any; apiError?: boolean; confirmedNotPumpFun?: boolean }> {
+  // Multiple API endpoints to try for resilience
+  const endpoints = [
+    { url: `${PUMPFUN_API}/coins/${tokenMint}`, name: 'primary' },
+    { url: `${PUMPFUN_COIN_API}/coins/${tokenMint}`, name: 'fallback' },
+    { url: `https://pump.fun/coin/${tokenMint}`, name: 'web-fallback', isHtml: true },
+  ];
+
+  for (const endpoint of endpoints) {
+    try {
+      const response = await fetch(endpoint.url, {
+        signal: AbortSignal.timeout(8000),
+        headers: {
+          'Accept': endpoint.isHtml ? 'text/html' : 'application/json',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Cache-Control': 'no-cache',
+        },
+      });
+      
+      if (response.ok) {
+        if (endpoint.isHtml) {
+          // If web page exists, token is likely on Pump.fun
+          const html = await response.text();
+          if (html.includes(tokenMint) && !html.includes('404') && !html.includes('not found')) {
+            console.log(`[Pump.fun] Token ${tokenMint} found via web fallback (may be on bonding curve)`);
+            return { isPumpFun: true, bondingCurve: { complete: false }, apiError: true };
+          }
+        } else {
+          const data = await response.json();
+          // If the token exists on pump.fun and hasn't graduated
+          if (data && data.mint === tokenMint) {
+            if (!data.complete) {
+              console.log(`[Pump.fun] Token ${tokenMint} is on bonding curve (${endpoint.name})`);
+              return { isPumpFun: true, bondingCurve: data };
+            } else {
+              console.log(`[Pump.fun] Token ${tokenMint} has graduated to Raydium`);
+              return { isPumpFun: false, confirmedNotPumpFun: true }; // Graduated = confirmed not on bonding curve
+            }
+          }
+        }
+      } else if (response.status === 404) {
+        // Token definitely not on Pump.fun - confirmed
+        console.log(`[Pump.fun] Token ${tokenMint} confirmed NOT on Pump.fun (${endpoint.name})`);
+        return { isPumpFun: false, confirmedNotPumpFun: true };
       }
-      return { isPumpFun: false };
+    } catch (error: any) {
+      console.log(`[Pump.fun] ${endpoint.name} API failed for ${tokenMint}: ${error.message}`);
     }
-  } catch (error) {
-    console.log(`[Pump.fun] Primary API failed for ${tokenMint}, trying fallback...`);
   }
 
-  // Try fallback API
-  try {
-    const fallbackResponse = await fetch(`${PUMPFUN_COIN_API}/coins/${tokenMint}`, {
-      signal: AbortSignal.timeout(5000),
-      headers: {
-        'Accept': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (compatible; MemeSniper/1.0)',
-      },
-    });
-    
-    if (fallbackResponse.ok) {
-      const data = await fallbackResponse.json();
-      if (data && !data.complete) {
-        console.log(`[Pump.fun Fallback] Token ${tokenMint} is on bonding curve`);
-        return { isPumpFun: true, bondingCurve: data };
-      }
-    }
-  } catch (fallbackError) {
-    console.log(`[Pump.fun] Fallback also failed for ${tokenMint}:`, fallbackError);
-  }
-
-  return { isPumpFun: false };
+  // If all endpoints failed but we couldn't confirm token doesn't exist
+  console.log(`[Pump.fun] All endpoints failed for ${tokenMint}, assuming not on Pump.fun`);
+  return { isPumpFun: false, apiError: true };
 }
 
 // Validate token for safety (honeypot, freeze authority, etc.)
@@ -484,27 +544,39 @@ Deno.serve(async (req) => {
   }
 
   try {
+    // Initialize API keys from database on each request
+    await initializeApiKeys();
+    
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, supabaseKey);
 
     const authHeader = req.headers.get("Authorization");
-    if (!authHeader) {
+    if (!authHeader?.startsWith("Bearer ")) {
       return new Response(
         JSON.stringify({ error: "Authorization required" }),
         { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    const token = authHeader.replace("Bearer ", "");
-    const { data: { user }, error: authError } = await supabase.auth.getUser(token);
-    
-    if (authError || !user) {
+    // Auth client for JWT verification (works with signing-keys on custom domains)
+    const anonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
+    const authClient = createClient(supabaseUrl, anonKey, {
+      global: { headers: { Authorization: authHeader } },
+    });
+
+    const token = authHeader.slice("Bearer ".length);
+    const { data: claimsData, error: claimsError } = await authClient.auth.getClaims(token);
+    const userId = claimsData?.claims?.sub;
+
+    if (claimsError || !userId) {
       return new Response(
-        JSON.stringify({ error: "Invalid authentication" }),
+        JSON.stringify({ error: "Invalid or expired token" }),
         { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
+
+    const user = { id: userId };
 
     const body: TradeRequest = await req.json();
     console.log(`[Trade] Action: ${body.action}, User: ${user.id}`);
@@ -782,11 +854,36 @@ Deno.serve(async (req) => {
               const rayErrorMsg = raydiumError?.message || String(raydiumError);
               console.log(`[Trade] Raydium also failed: ${rayErrorMsg}`);
               
-              // If both failed, return a helpful error message
-              if (rayErrorMsg.includes('ROUTE_NOT_FOUND')) {
-                throw new Error(tradeablityError || `Token not tradable on DEXs yet. This token may be too new - check if it's still on Pump.fun bonding curve.`);
+              // Provide user-friendly error messages based on failure type
+              const isNotTradable = jupErrorMsg.includes('TOKEN_NOT_TRADABLE') || jupErrorMsg.includes('not tradable');
+              const isNoRoute = rayErrorMsg.includes('ROUTE_NOT_FOUND');
+              
+              if (isNotTradable || isNoRoute) {
+                // Only suggest Pump.fun if API check actually failed (not if it confirmed token isn't there)
+                // AND the token shows signs of being very new (no DEX routes)
+                if (pumpCheck.apiError && !pumpCheck.confirmedNotPumpFun) {
+                  throw new Error(
+                    `🔄 Token may still be on Pump.fun bonding curve but API verification failed. ` +
+                    `This is a very new token that hasn't graduated to DEXs yet. ` +
+                    `Try again in a few minutes or trade directly on pump.fun website.`
+                  );
+                }
+                
+                // Token is confirmed NOT on Pump.fun but still not tradeable on DEXs
+                throw new Error(
+                  `❌ Token not available for trading yet.\n\n` +
+                  `This token exists but has no active trading routes on Jupiter or Raydium.\n\n` +
+                  `Possible reasons:\n` +
+                  `• Token liquidity pool is not yet indexed by DEX aggregators\n` +
+                  `• Token may be on a different DEX (check DexScreener for exact pool)\n` +
+                  `• Liquidity may have been recently added or removed\n\n` +
+                  `💡 Try: Check DexScreener.com for the token's actual trading venue.`
+                );
               }
-              throw new Error(`No trading route found. Token may not have sufficient liquidity. Jupiter: ${jupErrorMsg}. Raydium: ${rayErrorMsg}`);
+              throw new Error(
+                `⚠️ No trading route found. Token may have insufficient liquidity.\n` +
+                `Jupiter: ${jupErrorMsg}\nRaydium: ${rayErrorMsg}`
+              );
             }
           }
         }
@@ -828,23 +925,108 @@ Deno.serve(async (req) => {
         const inputAmountLamports = parseInt(body.amount);
         const outputAmountLamports = parseInt(quoteData.outAmount || quoteData.outputAmount);
         const inputAmountDecimal = inputAmountLamports / 1e9;
-        const outputAmountDecimal = outputAmountLamports / (pumpCheck.isPumpFun ? 1e6 : 1e6);
+
+        const rpcUrl = Deno.env.get("SOLANA_RPC_URL") || "https://api.mainnet-beta.solana.com";
+        const outputDecimals = pumpCheck.isPumpFun
+          ? 6
+          : await getMintDecimals(rpcUrl, body.outputMint);
+        const outputAmountDecimal = outputAmountLamports / Math.pow(10, outputDecimals);
         const entryPrice = inputAmountDecimal / outputAmountDecimal;
+
+        // CRITICAL: Fetch token metadata from DexScreener if not provided
+        // This ensures proper token names are stored in the database for all tabs
+        let finalTokenSymbol = body.tokenSymbol;
+        let finalTokenName = body.tokenName;
+        
+        // Check if provided values are placeholders or missing
+        const isPlaceholderSymbol = !finalTokenSymbol || 
+          /^(unknown|token|\?\?\?|n\/a)$/i.test(finalTokenSymbol.trim()) ||
+          /^[a-z0-9]{4}[….\-_][a-z0-9]{4}$/i.test(finalTokenSymbol.trim());
+        const isPlaceholderName = !finalTokenName ||
+          /^(unknown|token|\?\?\?|n\/a)/i.test(finalTokenName.trim()) ||
+          /^token\s+[a-z0-9]{4}/i.test(finalTokenName.trim());
+        
+        if ((isPlaceholderSymbol || isPlaceholderName) && body.outputMint) {
+          try {
+            console.log(`[Trade] Fetching metadata for token ${body.outputMint.slice(0, 8)}...`);
+            
+            // Try DexScreener first (most comprehensive)
+            const dexRes = await fetch(
+              `https://api.dexscreener.com/latest/dex/tokens/${body.outputMint}`,
+              { signal: AbortSignal.timeout(4000) }
+            );
+            
+            if (dexRes.ok) {
+              const dexData = await dexRes.json();
+              const pairs = dexData?.pairs || [];
+              // Find highest liquidity Solana pair
+              const bestPair = pairs
+                .filter((p: any) => p?.chainId === 'solana')
+                .sort((a: any, b: any) => (b?.liquidity?.usd || 0) - (a?.liquidity?.usd || 0))[0];
+              
+              if (bestPair?.baseToken) {
+                const symbol = String(bestPair.baseToken.symbol || '').trim();
+                const name = String(bestPair.baseToken.name || '').trim();
+                if (symbol && isPlaceholderSymbol) {
+                  finalTokenSymbol = symbol;
+                  console.log(`[Trade] Enriched symbol: ${symbol}`);
+                }
+                if (name && isPlaceholderName) {
+                  finalTokenName = name;
+                  console.log(`[Trade] Enriched name: ${name}`);
+                }
+              }
+            }
+            
+            // Fallback: Try Jupiter token list
+            if (isPlaceholderSymbol || isPlaceholderName) {
+              const jupRes = await fetch(
+                `https://lite-api.jup.ag/tokens/v1/${body.outputMint}`,
+                { signal: AbortSignal.timeout(3000) }
+              );
+              if (jupRes.ok) {
+                const jupData = await jupRes.json();
+                const symbol = String(jupData?.symbol || '').trim();
+                const name = String(jupData?.name || '').trim();
+                if (symbol && isPlaceholderSymbol && !finalTokenSymbol) {
+                  finalTokenSymbol = symbol;
+                  console.log(`[Trade] Jupiter enriched symbol: ${symbol}`);
+                }
+                if (name && isPlaceholderName && !finalTokenName) {
+                  finalTokenName = name;
+                  console.log(`[Trade] Jupiter enriched name: ${name}`);
+                }
+              }
+            }
+          } catch (metaError) {
+            console.log(`[Trade] Metadata enrichment failed (non-blocking): ${metaError}`);
+          }
+        }
+        
+        // Final fallback to short address format
+        if (!finalTokenSymbol || isPlaceholderSymbol) {
+          finalTokenSymbol = body.outputMint ? `${body.outputMint.slice(0, 4)}…${body.outputMint.slice(-4)}` : "TOKEN";
+        }
+        if (!finalTokenName || isPlaceholderName) {
+          finalTokenName = finalTokenSymbol !== body.outputMint?.slice(0, 4) 
+            ? finalTokenSymbol  // Use symbol as name if we have a real symbol
+            : (body.outputMint ? `Token ${body.outputMint.slice(0, 4)}…${body.outputMint.slice(-4)}` : "New Token");
+        }
 
         const { data: position, error: posError } = await supabase
           .from("positions")
           .insert({
             user_id: user.id,
             token_address: body.outputMint,
-            token_symbol: body.tokenSymbol || "TOKEN",
-            token_name: body.tokenName || "Unknown Token",
+            token_symbol: finalTokenSymbol,
+            token_name: finalTokenName,
             chain: "solana",
             entry_price: entryPrice,
             current_price: entryPrice,
             amount: outputAmountDecimal,
             entry_value: inputAmountDecimal,
             current_value: inputAmountDecimal,
-            profit_take_percent: body.profitTakePercent || 50,
+            profit_take_percent: body.profitTakePercent || 100,
             stop_loss_percent: body.stopLossPercent || 20,
             status: "pending",
           })

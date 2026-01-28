@@ -1,22 +1,10 @@
+import { useNavigate } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { TrendingUp, TrendingDown, Flame, Sparkles, Loader2 } from "lucide-react";
+import { TrendingUp, TrendingDown, Flame, Sparkles, Loader2, Eye, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { ScannedToken } from "@/hooks/useTokenScanner";
-
-interface MarketOverviewProps {
-  tokens?: ScannedToken[];
-  loading?: boolean;
-}
-
-// Fallback static data when no tokens available
-const fallbackTokens = [
-  { symbol: "BONK", name: "Bonk", price: "$0.00003241", change24h: 15.4, volume: "$125M", hot: true },
-  { symbol: "WIF", name: "dogwifhat", price: "$2.45", change24h: 8.2, volume: "$89M", hot: true },
-  { symbol: "MYRO", name: "Myro", price: "$0.156", change24h: -3.5, volume: "$42M" },
-  { symbol: "POPCAT", name: "Popcat", price: "$0.892", change24h: 22.1, volume: "$67M", hot: true },
-  { symbol: "BOME", name: "Book of Meme", price: "$0.0123", change24h: -1.2, volume: "$35M" },
-];
+import { useTrendingTokens } from "@/hooks/useTrendingTokens";
+import { Button } from "@/components/ui/button";
 
 const formatPrice = (price: number) => {
   if (price < 0.00001) return `$${price.toFixed(8)}`;
@@ -31,18 +19,25 @@ const formatVolume = (volume: number) => {
   return `$${volume.toFixed(0)}`;
 };
 
-export default function MarketOverview({ tokens = [], loading = false }: MarketOverviewProps) {
-  // Use scanned tokens if available, otherwise use fallback
-  const displayTokens = tokens.length > 0 
-    ? tokens.slice(0, 5).map(t => ({
-        symbol: t.symbol,
-        name: t.name,
-        price: formatPrice(t.priceUsd),
-        change24h: t.priceChange24h,
-        volume: formatVolume(t.volume24h),
-        hot: t.priceChange24h > 10 || t.riskScore < 40,
-      }))
-    : fallbackTokens;
+export default function MarketOverview() {
+  const navigate = useNavigate();
+  const { tokens, loading, refetch } = useTrendingTokens();
+  
+  const handleTokenClick = (token: typeof tokens[0]) => {
+    if (token.address) {
+      const tokenData = {
+        address: token.address,
+        name: token.name,
+        symbol: token.symbol,
+        priceUsd: token.priceUsd,
+        priceChange24h: token.priceChange24h,
+        volume24h: token.volume24h,
+        liquidity: token.liquidity,
+      };
+      const tokenDataParam = encodeURIComponent(JSON.stringify(tokenData));
+      navigate(`/token/${token.address}?data=${tokenDataParam}`);
+    }
+  };
 
   return (
     <Card className="relative overflow-hidden border-0 bg-gradient-to-br from-card/90 to-card/60 backdrop-blur-xl">
@@ -59,13 +54,24 @@ export default function MarketOverview({ tokens = [], loading = false }: MarketO
             <div>
               <CardTitle className="text-base font-semibold">Trending Now</CardTitle>
               <p className="text-xs text-muted-foreground">
-                {tokens.length > 0 ? 'Recently scanned tokens' : 'Hot tokens on Solana'}
+                Live Solana token prices
               </p>
             </div>
           </div>
-          <Badge variant="outline" className="text-[10px] px-2 py-0.5 bg-orange-500/10 text-orange-400 border-orange-500/30">
-            {loading ? 'Scanning...' : 'Live'}
-          </Badge>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7"
+              onClick={() => refetch()}
+              disabled={loading}
+            >
+              <RefreshCw className={cn("w-3.5 h-3.5", loading && "animate-spin")} />
+            </Button>
+            <Badge variant="outline" className="text-[10px] px-2 py-0.5 bg-orange-500/10 text-orange-400 border-orange-500/30">
+              {loading ? 'Updating...' : 'Live'}
+            </Badge>
+          </div>
         </div>
       </CardHeader>
       
@@ -74,13 +80,27 @@ export default function MarketOverview({ tokens = [], loading = false }: MarketO
           <div className="flex items-center justify-center py-8">
             <Loader2 className="w-6 h-6 animate-spin text-primary" />
           </div>
+        ) : tokens.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-8 text-center">
+            <p className="text-sm text-muted-foreground">No tokens available</p>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => refetch()}
+              className="mt-2"
+            >
+              <RefreshCw className="w-4 h-4 mr-2" />
+              Refresh
+            </Button>
+          </div>
         ) : (
           <div className="space-y-2">
-            {displayTokens.map((token, index) => (
+            {tokens.map((token, index) => (
               <div
-                key={token.symbol + index}
+                key={token.address + index}
                 className="group flex items-center justify-between p-3 bg-secondary/30 hover:bg-secondary/50 rounded-xl transition-all duration-200 cursor-pointer animate-fade-in"
                 style={{ animationDelay: `${index * 50}ms` }}
+                onClick={() => handleTokenClick(token)}
               >
                 <div className="flex items-center gap-3">
                   <div className="relative">
@@ -109,19 +129,24 @@ export default function MarketOverview({ tokens = [], loading = false }: MarketO
                   </div>
                 </div>
                 
-                <div className="text-right">
-                  <p className="font-medium text-sm">{token.price}</p>
-                  <div className={cn(
-                    "flex items-center justify-end gap-1 text-xs font-medium",
-                    token.change24h >= 0 ? "text-success" : "text-destructive"
-                  )}>
-                    {token.change24h >= 0 ? (
-                      <TrendingUp className="w-3 h-3" />
-                    ) : (
-                      <TrendingDown className="w-3 h-3" />
-                    )}
-                    {token.change24h >= 0 ? "+" : ""}{token.change24h.toFixed(1)}%
+                <div className="flex items-center gap-3">
+                  <div className="text-right">
+                    <p className="font-medium text-sm">{formatPrice(token.priceUsd)}</p>
+                    <div className={cn(
+                      "flex items-center justify-end gap-1 text-xs font-medium",
+                      token.priceChange24h >= 0 ? "text-success" : "text-destructive"
+                    )}>
+                      {token.priceChange24h >= 0 ? (
+                        <TrendingUp className="w-3 h-3" />
+                      ) : (
+                        <TrendingDown className="w-3 h-3" />
+                      )}
+                      {token.priceChange24h >= 0 ? "+" : ""}{token.priceChange24h.toFixed(1)}%
+                    </div>
                   </div>
+                  {token.address && (
+                    <Eye className="w-4 h-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
+                  )}
                 </div>
               </div>
             ))}

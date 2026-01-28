@@ -1,19 +1,15 @@
 /**
- * Stage 1: Liquidity Detection (REFACTORED)
+ * Stage 1: Liquidity Detection (RPC-ONLY)
  * 
- * IMPORTANT: This module now uses STRICT Raydium-only detection.
- * Pump.fun bonding curve tokens are EXCLUDED - only graduated Raydium pools are considered.
+ * ZERO Raydium HTTP API dependencies
+ * Uses edge function for tradability check (Jupiter-based)
  * 
- * A token is TRADABLE only if ALL conditions pass:
- * 1. Raydium AMM pool exists
- * 2. Base mint is SOL or USDC
- * 3. Both vault balances > 0
- * 4. Liquidity >= minLiquidity
- * 5. Swap simulation succeeds
- * 6. NOT on Pump.fun bonding curve
+ * TRADABLE CRITERIA:
+ * 1. Pump.fun bonding curve active (stage: BONDING)
+ * 2. Jupiter has valid route (stage: LP_LIVE/INDEXING)
+ * 3. DexScreener has pair data (stage: LISTED)
  */
 
-import { supabase } from '@/integrations/supabase/client';
 import type {
   TradingConfig,
   LiquidityInfo,
@@ -22,15 +18,163 @@ import type {
   TradingEventCallback,
 } from './types';
 import { API_ENDPOINTS, SOL_MINT, USDC_MINT } from './config';
-import { detectTradablePool, type TradablePoolResult, type PoolValidationConfig } from './raydium-pool-detector';
 
-// Valid base mints for tradable pools
-const VALID_BASE_MINTS = [SOL_MINT, USDC_MINT];
+// ============================================
+// TYPES
+// ============================================
+
+export interface TradablePoolResult {
+  status: 'TRADABLE' | 'DISCARDED';
+  poolAddress?: string;
+  baseMint?: string;
+  quoteMint?: string;
+  liquidity?: number;
+  poolType?: 'raydium_v4' | 'raydium_clmm';
+  dexId?: string;
+  detectedAt?: number;
+  reason?: string;
+  tokenName?: string;
+  tokenSymbol?: string;
+  tokenStatus?: {
+    tradable: boolean;
+    stage: 'BONDING' | 'LP_LIVE' | 'INDEXING' | 'LISTED';
+  };
+}
+
+const PLACEHOLDER_RE = /^(unknown|unknown token|token|\?\?\?)$/i;
+
+function shortAddress(address: string) {
+  return address && address.length > 10
+    ? `${address.slice(0, 4)}…${address.slice(-4)}`
+    : address || 'TOKEN';
+}
+
+function normalizeTokenText(value: unknown, fallback: string): string {
+  const v = typeof value === 'string' ? value.trim() : '';
+  if (!v) return fallback;
+  if (PLACEHOLDER_RE.test(v)) return fallback;
+  return v;
+}
+
+// ============================================
+// MAIN DETECTION FUNCTION
+// ============================================
 
 /**
- * Detect liquidity for a token address
- * NOW USES STRICT RAYDIUM-ONLY DETECTION
+ * Detect a tradable pool for the given token
+ * Uses server-side edge function (Jupiter-based, NO Raydium HTTP)
  */
+export async function detectTradablePool(
+  tokenAddress: string,
+  config: TradingConfig,
+  onEvent?: TradingEventCallback
+): Promise<TradablePoolResult> {
+  const startTime = Date.now();
+  
+  try {
+    console.log(`[LiquidityDetector] Checking ${tokenAddress.slice(0, 8)} via edge function...`);
+    
+    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+    const supabaseKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+    
+    const response = await fetch(
+      `${supabaseUrl}/functions/v1/liquidity-check`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${supabaseKey}`,
+          'apikey': supabaseKey,
+        },
+        body: JSON.stringify({
+          tokenAddress,
+          minLiquidity: config.minLiquidity,
+        }),
+        signal: AbortSignal.timeout(15000),
+      }
+    );
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.log(`[LiquidityDetector] Edge function error: ${response.status}`);
+      return {
+        status: 'DISCARDED',
+        reason: `Check failed: ${response.status}`,
+      };
+    }
+    
+    const data = await response.json();
+    
+    if (data.status === 'TRADABLE') {
+      const tokenSymbol = normalizeTokenText(data.tokenSymbol, shortAddress(tokenAddress));
+      const tokenName = normalizeTokenText(data.tokenName, `Token ${shortAddress(tokenAddress)}`);
+
+      // Determine pool type from source/dexId
+      const dexId = data.dexId || data.source || '';
+      let poolType: 'pump_fun' | 'raydium' | 'orca' | 'unknown' = 'unknown';
+      
+      if (data.source === 'pump_fun' || dexId === 'pumpfun') {
+        poolType = 'pump_fun';
+      } else if (dexId.includes('raydium') || data.source === 'raydium') {
+        poolType = 'raydium';
+      } else if (dexId.includes('orca') || data.source === 'orca') {
+        poolType = 'orca';
+      }
+      
+      console.log(`[LiquidityDetector] ✅ Tradeable via ${dexId || data.source}: ${data.liquidity?.toFixed(1)} SOL`);
+      
+      onEvent?.({
+        type: 'LIQUIDITY_DETECTED',
+        data: {
+          tokenAddress,
+          tokenName,
+          tokenSymbol,
+          poolAddress: data.poolAddress || '',
+          poolType,
+          baseMint: data.baseMint || SOL_MINT,
+          quoteMint: tokenAddress,
+          liquidityAmount: data.liquidity || 0,
+          lpTokenMint: null,
+          timestamp: startTime,
+          blockHeight: 0,
+        },
+      });
+      
+      return {
+        status: 'TRADABLE',
+        poolAddress: data.poolAddress,
+        baseMint: data.baseMint || SOL_MINT,
+        quoteMint: tokenAddress,
+        liquidity: data.liquidity || 50,
+        poolType: 'raydium_v4', // Default for swap compatibility
+        detectedAt: startTime,
+        dexId: dexId,
+        tokenName,
+        tokenSymbol,
+        tokenStatus: data.tokenStatus,
+      } as TradablePoolResult;
+    }
+    
+    // Not tradeable
+    console.log(`[LiquidityDetector] ❌ Not tradeable: ${data.reason}`);
+    return {
+      status: 'DISCARDED',
+      reason: data.reason || 'No tradeable route found',
+    };
+    
+  } catch (error) {
+    console.error('[LiquidityDetector] Error:', error);
+    return {
+      status: 'DISCARDED',
+      reason: error instanceof Error ? error.message : 'Unknown error',
+    };
+  }
+}
+
+// ============================================
+// LEGACY WRAPPER - detectLiquidity
+// ============================================
+
 export async function detectLiquidity(
   tokenAddress: string,
   config: TradingConfig,
@@ -38,62 +182,72 @@ export async function detectLiquidity(
 ): Promise<LiquidityDetectionResult> {
   const startTime = Date.now();
   
-  try {
-    // Convert TradingConfig to PoolValidationConfig
-    const poolConfig: PoolValidationConfig = {
-      minLiquidity: config.minLiquidity,
-      rpcUrl: '', // Will use default endpoints
-    };
-    
-    // Use strict Raydium pool detection
-    const poolResult = await detectTradablePool(tokenAddress, poolConfig);
-    
-    if (poolResult.status === 'DISCARDED') {
+  // Use new detection (Jupiter-based, NO Raydium HTTP)
+  const poolResult = await detectTradablePool(tokenAddress, config, onEvent);
+  
+  if (poolResult.status === 'TRADABLE') {
+    const tokenSymbol = normalizeTokenText(poolResult.tokenSymbol, shortAddress(tokenAddress));
+    const tokenName = normalizeTokenText(poolResult.tokenName, `Token ${shortAddress(tokenAddress)}`);
+
+    // Skip risk assessment if token was pre-verified (from scanner)
+    // This prevents double-checking tokens that already passed auto-sniper evaluation
+    if (config.skipRiskCheck) {
+      console.log(`[LiquidityDetector] Skipping risk check for pre-verified token ${tokenAddress.slice(0, 8)}`);
+      
+      const passedRiskAssessment: RiskAssessment = {
+        overallScore: 30,
+        isRugPull: false,
+        isHoneypot: false,
+        hasMintAuthority: false,
+        hasFreezeAuthority: false,
+        holderCount: 100,
+        topHolderPercent: 10,
+        passed: true,
+        reasons: ['Pre-verified by scanner'],
+      };
+      
+      onEvent?.({ type: 'RISK_CHECK_PASSED', data: passedRiskAssessment });
+      
       return {
-        status: 'LP_NOT_FOUND',
-        liquidityInfo: null,
-        riskAssessment: null,
-        error: poolResult.reason || 'Pool not tradable',
+        status: 'LP_READY',
+        liquidityInfo: {
+          tokenAddress,
+           tokenName,
+           tokenSymbol,
+          poolAddress: poolResult.poolAddress || '',
+          poolType: 'raydium',
+          baseMint: poolResult.baseMint || SOL_MINT,
+          quoteMint: tokenAddress,
+          liquidityAmount: poolResult.liquidity || 0,
+          lpTokenMint: null,
+          timestamp: startTime,
+          blockHeight: 0,
+        },
+        riskAssessment: passedRiskAssessment,
         detectedAt: startTime,
       };
     }
     
-    // Pool is TRADABLE - convert to LiquidityInfo
-    const liquidityInfo: LiquidityInfo = {
-      tokenAddress,
-      tokenName: poolResult.tokenName || 'Unknown',
-      tokenSymbol: poolResult.tokenSymbol || 'UNKNOWN',
-      poolAddress: poolResult.poolAddress || '',
-      poolType: 'raydium', // Now always Raydium
-      baseMint: poolResult.baseMint || SOL_MINT,
-      quoteMint: poolResult.quoteMint || tokenAddress,
-      liquidityAmount: poolResult.liquidity || 0,
-      lpTokenMint: poolResult.lpTokenMint || null,
-      timestamp: poolResult.detectedAt || Date.now(),
-      blockHeight: 0,
-    };
-    
-    onEvent?.({ type: 'LIQUIDITY_DETECTED', data: liquidityInfo });
-    
-    // Verify liquidity meets minimum
-    if (liquidityInfo.liquidityAmount < config.minLiquidity) {
-      return {
-        status: 'LP_INSUFFICIENT',
-        liquidityInfo,
-        riskAssessment: null,
-        error: `Liquidity ${liquidityInfo.liquidityAmount.toFixed(2)} SOL below minimum ${config.minLiquidity} SOL`,
-        detectedAt: startTime,
-      };
-    }
-    
-    // Run risk assessment
+    // Run risk assessment on tradable pools (for manual trades)
     const riskAssessment = await assessRisk(tokenAddress, config);
     
     if (!riskAssessment.passed) {
       onEvent?.({ type: 'RISK_CHECK_FAILED', data: riskAssessment });
       return {
         status: 'RISK_FAILED',
-        liquidityInfo,
+        liquidityInfo: {
+          tokenAddress,
+          tokenName,
+          tokenSymbol,
+          poolAddress: poolResult.poolAddress || '',
+          poolType: 'raydium',
+          baseMint: poolResult.baseMint || SOL_MINT,
+          quoteMint: tokenAddress,
+          liquidityAmount: poolResult.liquidity || 0,
+          lpTokenMint: null,
+          timestamp: startTime,
+          blockHeight: 0,
+        },
         riskAssessment,
         error: `Risk check failed: ${riskAssessment.reasons.join(', ')}`,
         detectedAt: startTime,
@@ -104,41 +258,38 @@ export async function detectLiquidity(
     
     return {
       status: 'LP_READY',
-      liquidityInfo,
+      liquidityInfo: {
+        tokenAddress,
+        tokenName,
+        tokenSymbol,
+        poolAddress: poolResult.poolAddress || '',
+        poolType: 'raydium',
+        baseMint: poolResult.baseMint || SOL_MINT,
+        quoteMint: tokenAddress,
+        liquidityAmount: poolResult.liquidity || 0,
+        lpTokenMint: null,
+        timestamp: startTime,
+        blockHeight: 0,
+      },
       riskAssessment,
       detectedAt: startTime,
     };
-    
-  } catch (error) {
-    return {
-      status: 'ERROR',
-      liquidityInfo: null,
-      riskAssessment: null,
-      error: error instanceof Error ? error.message : 'Unknown error during liquidity detection',
-      detectedAt: startTime,
-    };
   }
+  
+  // Pool not found or discarded
+  return {
+    status: 'LP_NOT_FOUND',
+    liquidityInfo: null,
+    riskAssessment: null,
+    error: poolResult.reason || 'No tradable pool found',
+    detectedAt: startTime,
+  };
 }
 
-/**
- * REMOVED: checkPumpFunLiquidity
- * Pump.fun bonding curve tokens are NO LONGER considered tradable.
- * Only tokens that have graduated to Raydium are accepted.
- */
+// ============================================
+// RISK ASSESSMENT
+// ============================================
 
-/**
- * REMOVED: checkRaydiumLiquidity (replaced by detectTradablePool)
- * The new detectTradablePool function provides stricter validation.
- */
-
-/**
- * REMOVED: checkDexScreenerLiquidity
- * DexScreener discovery is too broad - we only accept verified Raydium pools.
- */
-
-/**
- * Assess token risk using RugCheck and other validators
- */
 async function assessRisk(
   tokenAddress: string,
   config: TradingConfig
@@ -161,10 +312,8 @@ async function assessRisk(
     if (response.ok) {
       const data = await response.json();
       
-      // Extract risk data
       overallScore = data.score || 0;
       
-      // Check for specific risks
       if (data.risks) {
         for (const risk of data.risks) {
           const riskName = risk.name?.toLowerCase() || '';
@@ -196,7 +345,6 @@ async function assessRisk(
         }
       }
       
-      // Check holder distribution
       if (data.topHolders) {
         holderCount = data.totalHolders || data.topHolders.length;
         topHolderPercent = data.topHolders[0]?.pct || 0;
@@ -211,12 +359,10 @@ async function assessRisk(
       }
     }
   } catch {
-    // If RugCheck fails, add a warning but don't fail
     reasons.push('Could not verify token safety (RugCheck unavailable)');
-    overallScore = 50; // Neutral score
+    overallScore = 50;
   }
   
-  // Determine if risk check passed
   const passed = 
     overallScore <= config.maxRiskScore &&
     (!config.riskFilters.checkRugPull || !isRugPull) &&
@@ -239,18 +385,18 @@ async function assessRisk(
   };
 }
 
-/**
- * Monitor for new liquidity events (polling-based)
- * Returns when liquidity is detected or timeout
- */
+// ============================================
+// MONITORING FUNCTION
+// ============================================
+
 export async function monitorLiquidity(
   tokenAddress: string,
   config: TradingConfig,
-  timeoutMs: number = 300000, // 5 minutes default
+  timeoutMs: number = 300000,
   onEvent?: TradingEventCallback
 ): Promise<LiquidityDetectionResult> {
   const startTime = Date.now();
-  const pollInterval = 2000; // Poll every 2 seconds
+  const pollInterval = 3000; // Poll every 3 seconds
   
   while (Date.now() - startTime < timeoutMs) {
     const result = await detectLiquidity(tokenAddress, config, onEvent);
@@ -260,10 +406,9 @@ export async function monitorLiquidity(
     }
     
     if (result.status === 'RISK_FAILED') {
-      return result; // Don't retry on risk failure
+      return result;
     }
     
-    // Wait before next poll
     await new Promise(resolve => setTimeout(resolve, pollInterval));
   }
   

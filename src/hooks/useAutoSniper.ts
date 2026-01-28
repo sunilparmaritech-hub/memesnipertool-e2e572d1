@@ -101,12 +101,12 @@ export function useAutoSniper() {
       return null;
     }
 
-    // Throttle: 5 seconds for live mode (wallet signing takes time anyway)
-    // 20 seconds for demo mode (fast simulation)
-    const throttleMs = isDemo ? 20000 : 5000;
+    // Throttle: 3 seconds for live mode, 5 seconds for demo mode
+    // Reduced from previous values to allow faster continuous operation
+    const throttleMs = isDemo ? 5000 : 3000;
     const now = Date.now();
     if (now - lastEvalRef.current < throttleMs) {
-      console.log(`[Auto-sniper] Throttled, wait ${Math.ceil((throttleMs - (now - lastEvalRef.current)) / 1000)}s`);
+      // Silent throttle - don't log this as it's normal behavior
       return null;
     }
 
@@ -124,15 +124,39 @@ export function useAutoSniper() {
         return null;
       }
 
+      // Filter out demo/invalid tokens before sending to API
+      // Demo tokens have truncated addresses like "Demo0...f9xjij" which fail validation
+      const validTokens = tokens.filter(t => {
+        const addr = t.address || '';
+        // Reject demo addresses (contain '...' or start with 'Demo')
+        if (addr.includes('...') || addr.startsWith('Demo')) {
+          console.log(`[Auto-sniper] Filtering out demo token: ${t.symbol} (${addr})`);
+          return false;
+        }
+        // Reject invalid length addresses
+        if (addr.length < 26 || addr.length > 66) {
+          console.log(`[Auto-sniper] Filtering out invalid address: ${t.symbol} (${addr.length} chars)`);
+          return false;
+        }
+        return true;
+      });
+
+      if (validTokens.length === 0) {
+        console.log('[Auto-sniper] No valid tokens after filtering, skipping API call');
+        evaluatingRef.current = false;
+        setLoading(false);
+        return null;
+      }
+
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) {
         throw new Error('Please sign in to use the auto-sniper');
       }
 
-      console.log(`[Auto-sniper] Evaluating ${tokens.length} tokens:`, tokens.map(t => `${t.symbol}(${t.source || 'unknown'})`).join(', '));
+      console.log(`[Auto-sniper] Evaluating ${validTokens.length} tokens (filtered from ${tokens.length}):`, validTokens.map(t => `${t.symbol}(${t.source || 'unknown'})`).join(', '));
 
       const { data, error: fnError } = await supabase.functions.invoke('auto-sniper', {
-        body: { tokens, executeOnApproval },
+        body: { tokens: validTokens, executeOnApproval },
       });
 
       if (fnError) throw fnError;

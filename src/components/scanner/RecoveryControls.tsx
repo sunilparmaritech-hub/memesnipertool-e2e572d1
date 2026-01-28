@@ -9,6 +9,8 @@ import {
   Play, 
   Loader2,
   AlertTriangle,
+  XCircle,
+  Wallet,
 } from "lucide-react";
 
 interface RecoveryControlsProps {
@@ -16,9 +18,15 @@ interface RecoveryControlsProps {
   onForceEvaluate: () => void;
   onClearProcessed: () => void;
   onResetBot: () => void;
+  onCleanupStuck?: () => void;
+  onSyncPositions?: () => Promise<void>;
   scanning: boolean;
   evaluating: boolean;
+  cleaningUp?: boolean;
+  syncingPositions?: boolean;
   processedCount: number;
+  stuckPositionsCount?: number;
+  openPositionsCount?: number;
   botActive: boolean;
 }
 
@@ -27,9 +35,15 @@ export default function RecoveryControls({
   onForceEvaluate,
   onClearProcessed,
   onResetBot,
+  onCleanupStuck,
+  onSyncPositions,
   scanning,
   evaluating,
+  cleaningUp = false,
+  syncingPositions = false,
   processedCount,
+  stuckPositionsCount = 0,
+  openPositionsCount = 0,
   botActive,
 }: RecoveryControlsProps) {
   const [scanCooldown, setScanCooldown] = useState(false);
@@ -114,6 +128,42 @@ export default function RecoveryControls({
             Reset Bot
           </Button>
         </div>
+        
+        {/* Sync Positions with On-Chain Balances */}
+        {onSyncPositions && openPositionsCount > 0 && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="w-full h-9 text-xs mt-2 border-primary/50 text-primary hover:bg-primary/10 hover:text-primary"
+            onClick={onSyncPositions}
+            disabled={syncingPositions}
+          >
+            {syncingPositions ? (
+              <Loader2 className="w-3 h-3 mr-1.5 animate-spin" />
+            ) : (
+              <Wallet className="w-3 h-3 mr-1.5" />
+            )}
+            {syncingPositions ? 'Syncing...' : `Sync ${openPositionsCount} Position${openPositionsCount > 1 ? 's' : ''} with Wallet`}
+          </Button>
+        )}
+        
+        {/* Cleanup Stuck Positions - Full width button */}
+        {onCleanupStuck && stuckPositionsCount > 0 && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="w-full h-9 text-xs mt-2 border-destructive/50 text-destructive hover:bg-destructive/10 hover:text-destructive"
+            onClick={onCleanupStuck}
+            disabled={cleaningUp}
+          >
+            {cleaningUp ? (
+              <Loader2 className="w-3 h-3 mr-1.5 animate-spin" />
+            ) : (
+              <XCircle className="w-3 h-3 mr-1.5" />
+            )}
+            {cleaningUp ? 'Cleaning...' : `Cleanup ${stuckPositionsCount} Stuck Position${stuckPositionsCount > 1 ? 's' : ''}`}
+          </Button>
+        )}
         
         <p className="text-[10px] text-muted-foreground mt-2 text-center">
           Use if bot appears stuck or not trading.

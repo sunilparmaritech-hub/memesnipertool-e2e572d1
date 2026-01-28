@@ -4,6 +4,7 @@
  */
 
 import { supabase } from '@/integrations/supabase/client';
+import { fetchJupiterQuote } from '@/lib/jupiterQuote';
 import type {
   TradingConfig,
   TradeMode,
@@ -14,6 +15,66 @@ import type {
   TradingEventCallback,
 } from './types';
 import { API_ENDPOINTS, SOL_MINT } from './config';
+
+/**
+ * Fetch token decimals from Jupiter API or fallback to common defaults
+ */
+async function getTokenDecimals(tokenMint: string): Promise<number> {
+  // Known token decimals
+  if (tokenMint === SOL_MINT) return 9;
+  
+  try {
+    // Try Jupiter token list first (most reliable for tradable tokens)
+    const response = await fetch(
+      `https://lite-api.jup.ag/tokens/v1/${tokenMint}`,
+      { signal: AbortSignal.timeout(5000) }
+    );
+    
+    if (response.ok) {
+      const data = await response.json();
+      if (typeof data.decimals === 'number') {
+        console.log(`[Jupiter] Token ${tokenMint.slice(0, 8)}... has ${data.decimals} decimals`);
+        return data.decimals;
+      }
+    }
+  } catch (e) {
+    console.log('[Jupiter] Failed to fetch token decimals from Jupiter API');
+  }
+  
+  // Robust fallback: ask backend (RPC) for the mint's decimals.
+  // Avoids the dangerous 6-decimal assumption which can make swaps 1000x too small.
+  try {
+    const { data, error } = await supabase.functions.invoke('token-metadata', {
+      body: { mint: tokenMint },
+    });
+    const decimals = (data as any)?.decimals;
+    if (!error && typeof decimals === 'number' && Number.isFinite(decimals)) {
+      console.log(`[Jupiter] RPC fallback decimals for ${tokenMint.slice(0, 8)}...: ${decimals}`);
+      return decimals;
+    }
+  } catch {
+    // ignore
+  }
+
+  // Last resort default (prefer under-selling to over-selling)
+  console.log('[Jupiter] Defaulting to 6 decimals (RPC fallback unavailable)');
+  return 6;
+}
+
+/**
+ * Convert amount to smallest unit based on decimals
+ */
+function toSmallestUnit(amount: number, decimals: number): number {
+  return Math.floor(amount * Math.pow(10, decimals));
+}
+
+/**
+ * Convert from smallest unit to decimal based on decimals
+ */
+function fromSmallestUnit(amount: number | string, decimals: number): number {
+  const numAmount = typeof amount === 'string' ? parseInt(amount) : amount;
+  return numAmount / Math.pow(10, decimals);
+}
 
 /**
  * Execute a Jupiter trade (buy or sell)
@@ -33,8 +94,18 @@ export async function executeJupiterTrade(
     const inputMint = mode === 'BUY' ? SOL_MINT : tokenAddress;
     const outputMint = mode === 'BUY' ? tokenAddress : SOL_MINT;
     
-    // Convert amount to lamports/smallest unit
-    const amountInSmallestUnit = Math.floor(amount * 1e9);
+    // CRITICAL FIX: Get correct decimals for the input token
+    // For BUY: input is SOL (9 decimals)
+    // For SELL: input is the token (variable decimals - fetch from API)
+    const inputDecimals = mode === 'BUY' ? 9 : await getTokenDecimals(tokenAddress);
+    const outputDecimals = mode === 'BUY' ? await getTokenDecimals(tokenAddress) : 9;
+    
+    console.log(`[Jupiter] ${mode} ${amount} tokens with ${inputDecimals} input decimals`);
+    
+    // Convert amount to smallest unit using correct decimals
+    const amountInSmallestUnit = toSmallestUnit(amount, inputDecimals);
+    
+    console.log(`[Jupiter] Amount in smallest unit: ${amountInSmallestUnit}`);
     
     // Get quote from Jupiter
     const quote = await getJupiterQuote(
@@ -97,9 +168,9 @@ export async function executeJupiterTrade(
       };
     }
     
-    // Calculate price
-    const inAmount = parseInt(quote.inAmount) / 1e9;
-    const outAmount = parseInt(quote.outAmount) / 1e9;
+    // Calculate amounts using correct decimals
+    const inAmount = fromSmallestUnit(quote.inAmount, inputDecimals);
+    const outAmount = fromSmallestUnit(quote.outAmount, outputDecimals);
     const price = mode === 'BUY' ? inAmount / outAmount : outAmount / inAmount;
     
     const result: JupiterTradeResult = {
@@ -249,38 +320,24 @@ async function getJupiterQuote(
   amount: number,
   slippage: number
 ): Promise<any | null> {
-  try {
-    const slippageBps = Math.floor(slippage * 10000);
-    
-    const quoteUrl = new URL(API_ENDPOINTS.jupiterQuote);
-    quoteUrl.searchParams.set('inputMint', inputMint);
-    quoteUrl.searchParams.set('outputMint', outputMint);
-    quoteUrl.searchParams.set('amount', amount.toString());
-    quoteUrl.searchParams.set('slippageBps', slippageBps.toString());
-    quoteUrl.searchParams.set('onlyDirectRoutes', 'false');
-    quoteUrl.searchParams.set('asLegacyTransaction', 'false');
-    
-    const response = await fetch(quoteUrl.toString(), {
-      signal: AbortSignal.timeout(15000),
-    });
-    
-    if (!response.ok) {
-      console.error('Jupiter quote failed:', response.status);
-      return null;
-    }
-    
-    const quote = await response.json();
-    
-    if (quote.error) {
-      console.error('Jupiter quote error:', quote.error);
-      return null;
-    }
-    
-    return quote;
-  } catch (error) {
-    console.error('Jupiter quote exception:', error);
-    return null;
+  const slippageBps = Math.floor(slippage * 10000);
+
+  const quoteResult = await fetchJupiterQuote({
+    inputMint,
+    outputMint,
+    amount: amount.toString(),
+    slippageBps,
+    timeoutMs: 15000,
+  });
+
+  if (quoteResult.ok === false) {
+    // Only treat real no-route as "no route".
+    // Anything else should bubble up so callers can show a retryable error.
+    if (quoteResult.kind === 'NO_ROUTE') return null;
+    throw new Error(`${quoteResult.kind}: ${quoteResult.message}`);
   }
+
+  return quoteResult.quote;
 }
 
 /**

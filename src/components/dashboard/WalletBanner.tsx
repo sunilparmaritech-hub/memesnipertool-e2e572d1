@@ -1,8 +1,9 @@
+import React, { forwardRef, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Wallet, ExternalLink, Copy, Check } from "lucide-react";
-import { useState } from "react";
 import { Button } from "@/components/ui/button";
+import { useDisplayUnit } from "@/contexts/DisplayUnitContext";
 
 interface WalletBannerProps {
   address: string;
@@ -10,8 +11,12 @@ interface WalletBannerProps {
   network: string;
 }
 
-export default function WalletBanner({ address, balance, network }: WalletBannerProps) {
+const WalletBanner = forwardRef<HTMLDivElement, WalletBannerProps>(function WalletBanner({ address, balance, network }, ref) {
   const [copied, setCopied] = useState(false);
+  const { solPrice, solToUsd } = useDisplayUnit();
+  
+  const balanceNum = parseFloat(balance) || 0;
+  const balanceUsd = solToUsd(balanceNum);
 
   const handleCopy = async () => {
     await navigator.clipboard.writeText(address);
@@ -20,7 +25,7 @@ export default function WalletBanner({ address, balance, network }: WalletBanner
   };
 
   return (
-    <Card className="relative overflow-hidden border-0 bg-gradient-to-r from-primary/10 via-primary/5 to-accent/5 backdrop-blur-xl animate-fade-in">
+    <Card ref={ref} className="relative overflow-hidden border-0 bg-gradient-to-r from-primary/10 via-primary/5 to-accent/5 backdrop-blur-xl animate-fade-in">
       {/* Animated gradient background */}
       <div className="absolute inset-0 bg-gradient-to-r from-primary/5 via-transparent to-accent/5 animate-shimmer" />
       
@@ -73,13 +78,16 @@ export default function WalletBanner({ address, balance, network }: WalletBanner
           </div>
           
           <div className="flex items-center gap-6 sm:gap-8">
-            {/* Balance */}
+            {/* Balance - SOL Primary, USD Secondary */}
             <div className="space-y-1">
               <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Balance</p>
               <div className="flex items-baseline gap-1.5">
-                <span className="text-xl font-bold text-foreground">{balance || '0'}</span>
-                <span className="text-sm font-medium text-muted-foreground">SOL</span>
+                <span className="text-2xl font-bold text-foreground">{balanceNum.toFixed(4)}</span>
+                <span className="text-sm font-medium text-primary">SOL</span>
               </div>
+              <p className="text-xs text-muted-foreground font-mono">
+                ≈ ${balanceUsd.toFixed(2)} USD
+              </p>
             </div>
             
             {/* Network */}
@@ -98,4 +106,6 @@ export default function WalletBanner({ address, balance, network }: WalletBanner
       </CardContent>
     </Card>
   );
-}
+});
+
+export default WalletBanner;

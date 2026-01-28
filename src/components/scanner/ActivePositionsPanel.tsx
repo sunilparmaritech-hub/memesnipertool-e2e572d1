@@ -11,6 +11,11 @@ import {
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
+import { 
+  formatPrice as formatPriceUtil,
+  getTokenDisplayName,
+  getTokenDisplaySymbol 
+} from "@/lib/formatters";
 
 interface Position {
   id: string;
@@ -19,7 +24,9 @@ interface Position {
   token_address?: string;
   amount: number;
   entry_price: number;
+  entry_value?: number;
   current_price: number;
+  current_value?: number;
   profit_loss_percent: number | null;
   profit_loss_value: number | null;
   profit_take_percent?: number;
@@ -43,14 +50,18 @@ const avatarColors = [
   'bg-gradient-to-br from-cyan-500/30 to-cyan-500/10 text-cyan-400',
 ];
 
-const formatPrice = (value: number) => {
-  if (value < 0.00001) return `$${value.toExponential(2)}`;
-  if (value < 0.01) return `$${value.toFixed(6)}`;
-  if (value < 1) return `$${value.toFixed(4)}`;
-  return `$${value.toFixed(2)}`;
+const formatPrice = (value: number) => formatPriceUtil(value);
+
+// Format token amount with appropriate precision
+const formatTokenAmount = (amount: number) => {
+  if (amount >= 1000000) return `${(amount / 1000000).toFixed(2)}M`;
+  if (amount >= 1000) return `${(amount / 1000).toFixed(2)}K`;
+  if (amount >= 1) return amount.toFixed(2);
+  if (amount >= 0.001) return amount.toFixed(5);
+  return amount.toFixed(8);
 };
 
-// Memoized position row
+// Memoized position row - shows accurate USD values like Phantom wallet
 const PositionRow = memo(({ 
   position, 
   colorIndex, 
@@ -63,9 +74,25 @@ const PositionRow = memo(({
   onForceClose?: (positionId: string) => void;
 }) => {
   const pnlPercent = position.profit_loss_percent || 0;
-  const pnlValue = position.profit_loss_value || 0;
   const isPositive = pnlPercent >= 0;
   const progressWidth = Math.min(Math.abs(pnlPercent), 100);
+
+  // CRITICAL: Use current_value from DB directly (it's already correct)
+  // Fall back to entry_value based calculation if current_value not available
+  const currentUsdValue = position.current_value || (
+    position.entry_value && position.entry_value > 0 && position.current_price > 0
+      ? (position.entry_value / position.entry_price) * position.current_price
+      : position.amount * position.current_price
+  );
+  
+  // Calculate actual token amount from current_value or entry_value
+  const actualTokenAmount = position.current_price > 0 
+    ? currentUsdValue / position.current_price 
+    : position.amount;
+
+  // Use actual token name/symbol, fallback to formatted address
+  const displaySymbol = getTokenDisplaySymbol(position.token_symbol, position.token_address || '');
+  const displayName = getTokenDisplayName(position.token_name, position.token_address || '');
 
   const handleClose = useCallback(() => {
     onClosePosition?.(position.id, position.current_price);
@@ -86,42 +113,44 @@ const PositionRow = memo(({
               avatarColors[colorIndex % avatarColors.length]
             )}
           >
-            {position.token_symbol.slice(0, 2).toUpperCase()}
+            {displaySymbol.slice(0, 2).toUpperCase()}
           </div>
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <span className="font-semibold text-sm text-foreground truncate">{position.token_name}</span>
-              <span className="text-xs text-muted-foreground">{position.token_symbol}</span>
+              <span className="font-semibold text-sm text-foreground truncate">{displayName}</span>
+              <span className="text-xs text-muted-foreground">{displaySymbol}</span>
             </div>
+            {/* Token quantity + current market price */}
             <p className="text-xs text-muted-foreground tabular-nums">
-              {position.amount.toLocaleString(undefined, { maximumFractionDigits: 2 })} tokens
+              {formatTokenAmount(actualTokenAmount)} {displaySymbol} • Now: {formatPrice(position.current_price)}
             </p>
           </div>
         </div>
         
-        {/* Right: PnL + Actions */}
+        {/* Right: Current Value + P&L like Phantom wallet */}
         <div className="flex items-center gap-3">
           <Tooltip>
             <TooltipTrigger asChild>
               <div className="text-right cursor-help">
-                <div className={cn(
-                  "font-bold text-sm tabular-nums transition-all duration-300",
-                  isPositive ? 'text-success' : 'text-destructive'
-                )}>
-                  {isPositive ? '+' : ''}{pnlPercent.toFixed(1)}%
+                {/* Current USD value prominently */}
+                <div className="font-bold text-sm tabular-nums text-foreground">
+                  ${currentUsdValue >= 1000 ? currentUsdValue.toFixed(0) : currentUsdValue >= 1 ? currentUsdValue.toFixed(2) : currentUsdValue.toFixed(4)}
                 </div>
+                {/* Simple P&L percentage */}
                 <p className={cn(
                   "text-xs tabular-nums font-medium transition-all duration-300",
-                  isPositive ? 'text-success/80' : 'text-destructive/80'
+                  isPositive ? 'text-success' : 'text-destructive'
                 )}>
-                  {isPositive ? '+' : ''}${Math.abs(pnlValue).toFixed(2)}
+                  {isPositive ? '+' : ''}{pnlPercent.toFixed(2)}%
                 </p>
               </div>
             </TooltipTrigger>
             <TooltipContent side="left" className="bg-popover border-border text-xs">
               <div className="space-y-1">
+                <p className="tabular-nums">Tokens: {formatTokenAmount(actualTokenAmount)} {displaySymbol}</p>
                 <p className="tabular-nums">Entry: {formatPrice(position.entry_price)}</p>
                 <p className="tabular-nums">Current: {formatPrice(position.current_price)}</p>
+                <p className="tabular-nums">Value: ${currentUsdValue.toFixed(2)}</p>
                 {position.profit_take_percent && (
                   <p className="text-success">TP: +{position.profit_take_percent}%</p>
                 )}
@@ -211,8 +240,11 @@ const PositionRow = memo(({
   return (
     prevProps.position.id === nextProps.position.id &&
     prevProps.position.current_price === nextProps.position.current_price &&
+    prevProps.position.current_value === nextProps.position.current_value &&
     prevProps.position.profit_loss_percent === nextProps.position.profit_loss_percent &&
     prevProps.position.profit_loss_value === nextProps.position.profit_loss_value &&
+    prevProps.position.token_name === nextProps.position.token_name &&
+    prevProps.position.token_symbol === nextProps.position.token_symbol &&
     prevProps.colorIndex === nextProps.colorIndex
   );
 });
@@ -259,11 +291,22 @@ export default function ActivePositionsPanel({
   
   const remainingCount = positions.length - 5;
 
-  // Total P&L
+  // Total P&L in actual USD (amount × current_price - amount × entry_price)
   const totalPnL = useMemo(() => 
-    positions.reduce((sum, p) => sum + (p.profit_loss_value || 0), 0),
+    positions.reduce((sum, p) => {
+      const currentVal = p.amount * p.current_price;
+      const entryVal = p.amount * p.entry_price;
+      return sum + (currentVal - entryVal);
+    }, 0),
     [positions]
   );
+  
+  // Format total P&L
+  const formatTotalPnL = (value: number) => {
+    const sign = value >= 0 ? '+' : '';
+    if (Math.abs(value) < 0.01) return `${sign}<$0.01`;
+    return `${sign}$${value.toFixed(2)}`;
+  };
 
   if (loading) {
     return (
@@ -301,7 +344,7 @@ export default function ActivePositionsPanel({
                     "ml-2 font-medium",
                     totalPnL >= 0 ? 'text-success' : 'text-destructive'
                   )}>
-                    ({totalPnL >= 0 ? '+' : ''}${totalPnL.toFixed(2)})
+                    ({formatTotalPnL(totalPnL)})
                   </span>
                 )}
               </p>

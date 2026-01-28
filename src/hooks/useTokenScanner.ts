@@ -2,6 +2,22 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 import { useAppMode } from '@/contexts/AppModeContext';
+import { fetchDexScreenerPrices, isLikelyRealSolanaMint } from '@/lib/dexscreener';
+import { getFunctionErrorMessage } from '@/lib/functionErrors';
+
+// Token lifecycle stages (Raydium-only - no bonding curve tokens)
+export type TokenStage = 'LP_LIVE' | 'INDEXING' | 'LISTED';
+
+export interface TokenStatus {
+  tradable: boolean;
+  stage: TokenStage;
+  poolAddress?: string;
+  detectedAtSlot?: number;
+  dexScreener: {
+    pairFound: boolean;
+    retryAt?: number;
+  };
+}
 
 export interface ScannedToken {
   id: string;
@@ -31,6 +47,8 @@ export interface ScannedToken {
   freezeAuthority?: string | null;
   mintAuthority?: string | null;
   safetyReasons?: string[];  // Array of safety check results
+  // NEW: Token lifecycle status
+  tokenStatus?: TokenStatus;
 }
 
 export interface ApiError {
@@ -43,10 +61,22 @@ export interface ApiError {
 
 interface ScanResult {
   tokens: ScannedToken[];
+  allTokens?: ScannedToken[];
   errors: string[];
   apiErrors: ApiError[];
   timestamp: string;
   apiCount: number;
+  stats?: {
+    total: number;
+    tradeable: number;
+    pumpFun: number;
+    filtered: number;
+    stages?: {
+      lpLive: number;
+      indexing: number;
+      listed: number;
+    };
+  };
 }
 
 export interface RateLimitState {
@@ -56,33 +86,38 @@ export interface RateLimitState {
   countdown: number;
 }
 
-// Demo tokens for testing without real API calls
-const demoTokenNames = [
-  { name: 'DogeMoon', symbol: 'DOGEM' },
-  { name: 'ShibaRocket', symbol: 'SHIBR' },
-  { name: 'PepeGold', symbol: 'PEPEG' },
-  { name: 'FlokiMax', symbol: 'FLOKM' },
-  { name: 'BabyWhale', symbol: 'BBYWH' },
-  { name: 'SafeApe', symbol: 'SAPE' },
-  { name: 'MoonShot', symbol: 'MSHOT' },
-  { name: 'RocketFuel', symbol: 'RFUEL' },
-  { name: 'DiamondHands', symbol: 'DHAND' },
-  { name: 'GigaChad', symbol: 'GIGA' },
+// Demo tokens for testing without real API calls - uses REAL token addresses for realistic testing
+const demoTokenConfigs = [
+  { name: 'DogeMoon', symbol: 'DOGEM', address: 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263' },
+  { name: 'ShibaRocket', symbol: 'SHIBR', address: 'So11111111111111111111111111111111111111112' },
+  { name: 'PepeGold', symbol: 'PEPEG', address: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v' },
+  { name: 'FlokiMax', symbol: 'FLOKM', address: 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB' },
+  { name: 'BabyWhale', symbol: 'BBYWH', address: '7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr' },
+  { name: 'SafeApe', symbol: 'SAPE', address: 'mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So' },
+  { name: 'MoonShot', symbol: 'MSHOT', address: 'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN' },
+  { name: 'RocketFuel', symbol: 'RFUEL', address: 'orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE' },
+  { name: 'DiamondHands', symbol: 'DHAND', address: 'HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3' },
+  { name: 'GigaChad', symbol: 'GIGA', address: 'A3eME5CetyZPBoWbRUwY3tSe25S6tb18ba9ZPbWk9eFJ' },
 ];
 
 const MAX_SCANS_PER_MINUTE = 10;
 const RATE_LIMIT_WINDOW_MS = 60000;
 
+// Generate a realistic demo token with valid Solana-like address
 const generateSingleDemoToken = (idx: number): ScannedToken => {
-  const token = demoTokenNames[idx % demoTokenNames.length];
-  const isPumpFun = Math.random() > 0.4; // 60% are Pump.fun tokens
+  const config = demoTokenConfigs[idx % demoTokenConfigs.length];
+  const liquidity = Math.floor(Math.random() * 50) + 5; // 5-55 SOL liquidity
+  const stage: TokenStage = Math.random() > 0.5 ? 'LISTED' : 'LP_LIVE';
+  const uniqueId = `demo-${idx}-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+  
   return {
-    id: `demo-${idx}-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-    address: `Demo${idx}...${Math.random().toString(36).substring(2, 8)}`,
-    name: token.name,
-    symbol: token.symbol,
+    id: uniqueId,
+    // Use a generated realistic address format for demo tokens
+    address: generateDemoAddress(idx),
+    name: config.name,
+    symbol: config.symbol,
     chain: 'solana',
-    liquidity: Math.floor(Math.random() * 50000) + 5000,
+    liquidity,
     liquidityLocked: Math.random() > 0.3,
     lockPercentage: Math.random() > 0.5 ? Math.floor(Math.random() * 50) + 50 : null,
     priceUsd: Math.random() * 0.001,
@@ -94,18 +129,46 @@ const generateSingleDemoToken = (idx: number): ScannedToken => {
     earlyBuyers: Math.floor(Math.random() * 8) + 1,
     buyerPosition: Math.floor(Math.random() * 5) + 1,
     riskScore: Math.floor(Math.random() * 60) + 20,
-    source: isPumpFun ? 'Pump.fun' : 'DexScreener',
+    source: 'Raydium AMM',
     pairAddress: `DemoPair${idx}`,
-    // Safety validation fields - mark demo tokens as tradeable
-    isPumpFun: isPumpFun,
+    // All demo tokens are Raydium-verified tradeable
+    isPumpFun: false,
     isTradeable: true,
     canBuy: true,
     canSell: true,
     freezeAuthority: null,
     mintAuthority: null,
-    safetyReasons: isPumpFun ? ['✅ Pump.fun bonding curve'] : ['✅ Demo token - always tradeable'],
+    safetyReasons: [`✅ Raydium V4 (${liquidity.toFixed(1)} SOL) - ${stage === 'LISTED' ? 'Listed' : 'Live LP'}`],
+    tokenStatus: {
+      tradable: true,
+      stage,
+      poolAddress: `DemoPool${idx}`,
+      dexScreener: { pairFound: stage === 'LISTED' },
+    },
   };
 };
+
+// Generate a valid-looking Solana address for demo tokens
+function generateDemoAddress(seed: number): string {
+  const chars = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+  let address = '';
+  // Generate a 44-character base58-like address
+  const random = new Array(44).fill(0).map((_, i) => chars[(seed * 31 + i * 17 + Date.now()) % chars.length]);
+  address = random.join('');
+  return address;
+}
+
+export interface ScanStats {
+  total: number;
+  tradeable: number;
+  pumpFun: number;
+  filtered: number;
+  stages: {
+    lpLive: number;
+    indexing: number;
+    listed: number;
+  };
+}
 
 export function useTokenScanner() {
   const [tokens, setTokens] = useState<ScannedToken[]>([]);
@@ -115,6 +178,7 @@ export function useTokenScanner() {
   const [apiCount, setApiCount] = useState(0);
   const [errors, setErrors] = useState<string[]>([]);
   const [apiErrors, setApiErrors] = useState<ApiError[]>([]);
+  const [lastScanStats, setLastScanStats] = useState<ScanStats | null>(null);
   const [rateLimit, setRateLimit] = useState<RateLimitState>({
     isLimited: false,
     remainingScans: MAX_SCANS_PER_MINUTE,
@@ -126,11 +190,15 @@ export function useTokenScanner() {
   
   // Ref to track if a scan is in progress
   const scanInProgress = useRef(false);
+  // Ref to track if a background price update is in progress
+  const priceUpdateInProgress = useRef(false);
   // Ref to store interval for tick-by-tick loading
-  const tickIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const tickIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Ref for background price update interval
+  const priceUpdateIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // Rate limiting
   const scanTimestampsRef = useRef<number[]>([]);
-  const countdownIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const countdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Update countdown every second when rate limited
   useEffect(() => {
@@ -164,16 +232,41 @@ export function useTokenScanner() {
     };
   }, [rateLimit.isLimited, rateLimit.resetTime]);
 
-  // Merge new tokens seamlessly - no delay, instant update
+  // Track seen token addresses to prevent duplicates across scans
+  const seenAddressesRef = useRef<Set<string>>(new Set());
+  
+  // Clear seen addresses periodically to allow re-discovery
+  useEffect(() => {
+    const interval = setInterval(() => {
+      // Only keep addresses from current tokens list
+      const currentAddresses = new Set(tokens.map(t => t.address));
+      seenAddressesRef.current = currentAddresses;
+    }, 120000); // Clear every 2 minutes
+    
+    return () => clearInterval(interval);
+  }, [tokens]);
+
+  // Merge new tokens seamlessly - with strict deduplication
   const mergeTokens = useCallback((newTokens: ScannedToken[], onComplete?: () => void) => {
     setTokens(prev => {
       const tokenMap = new Map<string, ScannedToken>();
+      const processedAddresses = new Set<string>();
       
-      // Add existing tokens to map
-      prev.forEach(t => tokenMap.set(t.address, t));
+      // Add existing tokens to map (dedupe by address)
+      prev.forEach(t => {
+        if (!processedAddresses.has(t.address)) {
+          tokenMap.set(t.address, t);
+          processedAddresses.add(t.address);
+        }
+      });
       
-      // Merge new tokens - update existing or add new
+      // Merge new tokens - update existing or add new (dedupe by address)
       newTokens.forEach(newToken => {
+        // Skip if we've already processed this address in THIS batch
+        if (processedAddresses.has(newToken.address) && !tokenMap.has(newToken.address)) {
+          return;
+        }
+        
         const existing = tokenMap.get(newToken.address);
         if (existing) {
           // Update existing token's price data only (keep position stable)
@@ -190,27 +283,37 @@ export function useTokenScanner() {
         } else {
           // New token - add to map (will be placed at top)
           tokenMap.set(newToken.address, newToken);
+          processedAddresses.add(newToken.address);
         }
       });
       
       // Convert back to array, new tokens first
-      const newAddresses = new Set(newTokens.map(t => t.address));
       const existingAddresses = prev.map(t => t.address);
       
       // Build ordered array: new tokens first, then existing in their order
       const orderedTokens: ScannedToken[] = [];
+      const addedAddresses = new Set<string>();
       
       // Add genuinely new tokens at top
       newTokens.forEach(t => {
-        if (!existingAddresses.includes(t.address)) {
-          orderedTokens.push(tokenMap.get(t.address)!);
+        if (!existingAddresses.includes(t.address) && !addedAddresses.has(t.address)) {
+          const token = tokenMap.get(t.address);
+          if (token) {
+            orderedTokens.push(token);
+            addedAddresses.add(t.address);
+          }
         }
       });
       
       // Add existing tokens (updated) in their original order
       existingAddresses.forEach(addr => {
-        const token = tokenMap.get(addr);
-        if (token) orderedTokens.push(token);
+        if (!addedAddresses.has(addr)) {
+          const token = tokenMap.get(addr);
+          if (token) {
+            orderedTokens.push(token);
+            addedAddresses.add(addr);
+          }
+        }
       });
       
       return orderedTokens.slice(0, 100); // Keep max 100 tokens
@@ -327,7 +430,10 @@ export function useTokenScanner() {
         body: { minLiquidity, chains },
       });
 
-      if (error) throw error;
+      if (error) {
+        const message = await getFunctionErrorMessage(error);
+        throw new Error(message);
+      }
 
       const result = data as ScanResult;
       
@@ -347,6 +453,21 @@ export function useTokenScanner() {
       setLastScan(result.timestamp);
       setApiCount(result.apiCount);
       setApiErrors(result.apiErrors || []);
+      
+      // Save scan stats for display
+      if (result.stats) {
+        setLastScanStats({
+          total: result.stats.total,
+          tradeable: result.stats.tradeable,
+          pumpFun: 0, // No Pump.fun tokens in Raydium-only pipeline
+          filtered: result.stats.filtered,
+          stages: result.stats.stages || {
+            lpLive: 0,
+            indexing: 0,
+            listed: 0,
+          },
+        });
+      }
       
       if (result.errors && result.errors.length > 0) {
         setErrors(result.errors);
@@ -400,6 +521,90 @@ export function useTokenScanner() {
     return tokens.filter(t => t.riskScore <= maxRisk);
   }, [tokens]);
 
+  /**
+   * Silent background price update for all tokens.
+   * Uses deep comparison to only update tokens whose prices actually changed.
+   * This prevents UI flickering by avoiding unnecessary state updates.
+   */
+  const updateTokenPrices = useCallback(async () => {
+    // Skip if already updating or no tokens
+    if (priceUpdateInProgress.current || tokens.length === 0) return;
+    
+    const addresses = tokens
+      .map(t => t.address)
+      .filter(addr => isLikelyRealSolanaMint(addr));
+    
+    if (addresses.length === 0) return;
+    
+    priceUpdateInProgress.current = true;
+    
+    try {
+      const priceMap = await fetchDexScreenerPrices(addresses, {
+        timeoutMs: 5000,
+        chunkSize: 30,
+      });
+      
+      if (priceMap.size === 0) {
+        priceUpdateInProgress.current = false;
+        return;
+      }
+      
+      // Use functional update with deep comparison
+      setTokens(prev => {
+        let hasChanges = false;
+        
+        const updated = prev.map(token => {
+          const priceData = priceMap.get(token.address);
+          if (!priceData || priceData.priceUsd <= 0) return token;
+          
+          // DEEP COMPARISON: Only update if price changed by more than 0.05%
+          const oldPrice = token.priceUsd || 0;
+          const priceChangePercent = oldPrice > 0 
+            ? Math.abs((priceData.priceUsd - oldPrice) / oldPrice) * 100 
+            : 100;
+          
+          if (priceChangePercent < 0.05) return token; // No meaningful change
+          
+          hasChanges = true;
+          
+          return {
+            ...token,
+            priceUsd: priceData.priceUsd,
+            priceChange24h: priceData.priceChange24h,
+            volume24h: priceData.volume24h,
+            liquidity: priceData.liquidity,
+          };
+        });
+        
+        // Return same reference if no changes to prevent re-render
+        return hasChanges ? updated : prev;
+      });
+    } catch (err) {
+      // Silent failure - don't log to avoid console spam
+    } finally {
+      priceUpdateInProgress.current = false;
+    }
+  }, [tokens]);
+
+  // Set up background price updates (every 10 seconds)
+  useEffect(() => {
+    // Only start background updates if we have tokens
+    if (tokens.length === 0) return;
+    
+    // Initial update after 2 seconds
+    const initialTimeout = setTimeout(updateTokenPrices, 2000);
+    
+    // Regular interval every 10 seconds
+    priceUpdateIntervalRef.current = setInterval(updateTokenPrices, 10000);
+    
+    return () => {
+      clearTimeout(initialTimeout);
+      if (priceUpdateIntervalRef.current) {
+        clearInterval(priceUpdateIntervalRef.current);
+      }
+    };
+  }, [tokens.length > 0, updateTokenPrices]);
+
   // Cleanup on unmount
   const cleanup = useCallback(() => {
     if (tickIntervalRef.current) {
@@ -407,6 +612,9 @@ export function useTokenScanner() {
     }
     if (countdownIntervalRef.current) {
       clearInterval(countdownIntervalRef.current);
+    }
+    if (priceUpdateIntervalRef.current) {
+      clearInterval(priceUpdateIntervalRef.current);
     }
   }, []);
 
@@ -418,6 +626,7 @@ export function useTokenScanner() {
     errors,
     apiErrors,
     rateLimit,
+    lastScanStats,
     scanTokens,
     getTopOpportunities,
     filterByChain,
@@ -425,5 +634,6 @@ export function useTokenScanner() {
     isDemo,
     isLive,
     cleanup,
+    updateTokenPrices,
   };
 }

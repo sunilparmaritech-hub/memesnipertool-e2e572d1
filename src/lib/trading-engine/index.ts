@@ -1,12 +1,29 @@
 /**
- * Trading Engine - Modular 3-Stage Solana Sniping
+ * Trading Engine Module
+ * Modular 3-stage Solana sniping engine
  * 
- * STAGE 1: Strict Raydium Pool Detection (raydium-pool-detector.ts)
- * STAGE 2: Raydium Sniping (raydium-sniper.ts)
- * STAGE 3: Jupiter Trading (jupiter-trader.ts)
+ * Usage:
+ * ```typescript
+ * import { 
+ *   runTradingFlow, 
+ *   quickSnipe, 
+ *   checkTokenStatus,
+ *   createTradingConfig 
+ * } from '@/lib/trading-engine';
+ * 
+ * // Quick snipe a token
+ * const result = await quickSnipe('TokenAddress...', {
+ *   walletAddress: 'YourWallet...',
+ *   signTransaction: async (tx) => wallet.signAndSend(tx),
+ *   config: { buyAmount: 0.5, slippage: 0.1 },
+ * });
+ * 
+ * // Check token status without trading
+ * const { liquidity, jupiterStatus } = await checkTokenStatus('TokenAddress...');
+ * ```
  */
 
-// Export all types
+// Types
 export type {
   // Configuration
   TradingConfig,
@@ -40,7 +57,7 @@ export type {
   SignedTransactionResult,
 } from './types';
 
-// Export configuration
+// Configuration
 export {
   DEFAULT_TRADING_CONFIG,
   DEFAULT_RISK_FILTERS,
@@ -52,22 +69,32 @@ export {
   PROGRAM_IDS,
 } from './config';
 
-// Export Stage 1: Raydium Pool Detection (STRICT)
-export { 
+// Stage 1: Liquidity Detection (Raydium-only)
+export {
+  detectLiquidity,
+  monitorLiquidity,
   detectTradablePool,
-  scanForNewRaydiumPools,
-  batchValidateTradability,
-  type TradablePoolResult,
-  type PoolValidationConfig,
-} from './raydium-pool-detector';
+} from './liquidity-detector';
+export type { TradablePoolResult } from './liquidity-detector';
 
-// Export Stage 1: Legacy Liquidity Detection (now uses strict Raydium detection)
-export { detectLiquidity, monitorLiquidity } from './liquidity-detector';
+// RPC-Based Pool Validation (NO Raydium HTTP dependency)
+export {
+  detectTradablePoolRPC,
+  waitForPoolReadiness,
+  simulateRaydiumSwapRPC,
+  simulateSwapWithRetry,
+  isPoolReadyForExecution,
+} from './rpc-pool-validator';
+export type { PoolReadinessResult, SwapSimulationResult as RpcSwapSimulationResult } from './rpc-pool-validator';
 
-// Export Stage 2: Raydium Sniping
-export { executeRaydiumSnipe, getRaydiumPrice, buildRaydiumSwapTransaction } from './raydium-sniper';
+// Stage 2: Raydium Sniping
+export {
+  executeRaydiumSnipe,
+  getRaydiumPrice,
+  buildRaydiumSwapTransaction,
+} from './raydium-sniper';
 
-// Export Stage 3: Jupiter Trading
+// Stage 3: Jupiter Trading
 export {
   executeJupiterTrade,
   checkJupiterIndex,
@@ -76,7 +103,7 @@ export {
   getJupiterRouteInfo,
 } from './jupiter-trader';
 
-// Export Controller (Main Entry Points)
+// Controller (Main Entry Points)
 export {
   runTradingFlow,
   quickSnipe,

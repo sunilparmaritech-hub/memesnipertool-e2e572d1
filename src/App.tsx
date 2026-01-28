@@ -7,6 +7,7 @@ import { AuthProvider } from "@/contexts/AuthContext";
 import { AppModeProvider } from "@/contexts/AppModeContext";
 import { DemoPortfolioProvider } from "@/contexts/DemoPortfolioContext";
 import { BotProvider } from "@/contexts/BotContext";
+import { DisplayUnitProvider } from "@/contexts/DisplayUnitContext";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { SessionExpiryWarning } from "@/components/session/SessionExpiryWarning";
 import { OfflineIndicator } from "@/components/OfflineIndicator";
@@ -22,14 +23,16 @@ import RiskCompliance from "./pages/RiskCompliance";
 import Auth from "./pages/Auth";
 import NotFound from "./pages/NotFound";
 import Notifications from "./pages/Notifications";
+import TokenDetail from "./pages/TokenDetail";
 const queryClient = new QueryClient();
 
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <TooltipProvider>
       <AppModeProvider>
-        <DemoPortfolioProvider>
-          <BotProvider>
+        <DisplayUnitProvider>
+          <DemoPortfolioProvider>
+            <BotProvider>
             <Toaster />
         <Sonner />
         <BrowserRouter>
@@ -111,13 +114,22 @@ const App = () => (
                 </ProtectedRoute>
               }
             />
+            <Route
+              path="/token/:address"
+              element={
+                <ProtectedRoute>
+                  <TokenDetail />
+                </ProtectedRoute>
+              }
+            />
             <Route path="*" element={<NotFound />} />
             </Routes>
             </ErrorBoundary>
           </AuthProvider>
         </BrowserRouter>
-          </BotProvider>
-        </DemoPortfolioProvider>
+            </BotProvider>
+          </DemoPortfolioProvider>
+        </DisplayUnitProvider>
       </AppModeProvider>
     </TooltipProvider>
   </QueryClientProvider>

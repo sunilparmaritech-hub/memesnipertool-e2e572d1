@@ -1,5 +1,4 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { TrendingUp, Eye, LogOut, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -24,9 +23,9 @@ const defaultSignals: MarketSignal[] = [
 ];
 
 const actionColors = {
-  buy: 'bg-success/20 text-success border-success/30 hover:bg-success/30',
-  monitor: 'bg-primary/20 text-primary border-primary/30 hover:bg-primary/30',
-  exit: 'bg-destructive/20 text-destructive border-destructive/30 hover:bg-destructive/30',
+  buy: 'bg-success/15 text-success border-success/30 hover:bg-success/25',
+  monitor: 'bg-primary/15 text-primary border-primary/30 hover:bg-primary/25',
+  exit: 'bg-destructive/15 text-destructive border-destructive/30 hover:bg-destructive/25',
 };
 
 const actionIcons = {
@@ -37,38 +36,36 @@ const actionIcons = {
 
 export default function IntelligencePanels({ signals = defaultSignals }: IntelligencePanelsProps) {
   return (
-    <Card className="border-0 bg-gradient-to-br from-card/90 to-card/60 backdrop-blur-xl h-full">
-      <CardHeader className="pb-3">
-        <div className="flex items-center justify-between">
-          <CardTitle className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-            Intelligence Panels
-          </CardTitle>
-        </div>
-        <div className="flex items-center justify-between mt-2">
-          <div className="flex items-center gap-2">
-            <Sparkles className="w-4 h-4 text-primary" />
-            <span className="text-sm font-semibold">Market Signals</span>
+    <Card className="border border-border/50 bg-card/80 backdrop-blur-sm h-full">
+      <CardHeader className="pb-2 pt-3 px-3">
+        <CardTitle className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          Intelligence Panels
+        </CardTitle>
+        <div className="flex items-center justify-between mt-1.5">
+          <div className="flex items-center gap-1.5">
+            <Sparkles className="w-3.5 h-3.5 text-primary" />
+            <span className="text-xs font-semibold">Market Signals</span>
           </div>
-          <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Confidence %</span>
+          <span className="text-[9px] text-muted-foreground uppercase tracking-wider">Confidence %</span>
         </div>
       </CardHeader>
-      <CardContent className="space-y-2 overflow-y-auto max-h-[300px]">
+      <CardContent className="px-3 pb-3 space-y-1.5 overflow-y-auto max-h-[260px]">
         {signals.map((signal, index) => {
           const ActionIcon = actionIcons[signal.action];
           
           return (
             <div
               key={signal.id}
-              className="p-3 rounded-xl bg-secondary/30 border border-border/30 hover:bg-secondary/50 transition-all duration-200 animate-fade-in"
+              className="p-2.5 rounded-lg bg-secondary/40 border border-border/30 hover:bg-secondary/60 transition-all duration-200 animate-fade-in"
               style={{ animationDelay: `${index * 50}ms` }}
             >
-              <div className="flex items-start justify-between gap-2">
+              <div className="flex items-center justify-between gap-2">
                 <div className="flex-1 min-w-0">
-                  <p className="text-xs font-semibold text-foreground">
+                  <p className="text-[11px] font-semibold text-foreground">
                     {signal.title} <span className="text-muted-foreground">on</span>{' '}
                     <span className="text-primary">{signal.token}</span>
                   </p>
-                  <p className="text-xs text-muted-foreground mt-0.5">
+                  <p className="text-[10px] text-muted-foreground">
                     ({signal.confidence}%)
                   </p>
                 </div>
@@ -76,7 +73,7 @@ export default function IntelligencePanels({ signals = defaultSignals }: Intelli
                   variant="outline"
                   size="sm"
                   className={cn(
-                    "h-7 text-xs font-medium capitalize gap-1.5 shrink-0",
+                    "h-6 text-[10px] font-medium capitalize gap-1 shrink-0 px-2",
                     actionColors[signal.action]
                   )}
                 >

@@ -79,23 +79,23 @@ const TradingHeader = forwardRef<HTMLElement, TradingHeaderProps>(function Tradi
   const navItems = getNavItems();
 
   return (
-    <header ref={ref} className="fixed top-0 left-0 right-0 z-50 bg-background/95 backdrop-blur-xl border-b border-border/50">
+    <header ref={ref} className="fixed top-0 left-0 right-0 z-50 bg-background/98 backdrop-blur-xl border-b border-border/40">
       <div className="container mx-auto px-4">
-        <div className="flex items-center justify-between h-16">
+        <div className="flex items-center justify-between h-14">
           {/* Logo */}
-          <Link to="/" className="flex items-center gap-2.5 shrink-0 group">
+          <Link to="/" className="flex items-center gap-2 shrink-0 group">
             <div className="relative p-1.5 rounded-lg bg-primary/10 group-hover:bg-primary/20 transition-colors">
-              <Zap className="w-6 h-6 text-primary" />
+              <Zap className="w-5 h-5 text-primary" />
             </div>
-            <span className="text-lg font-bold hidden sm:block">
+            <span className="text-base font-bold hidden sm:block">
               <span className="text-primary">Meme</span>
               <span className="text-foreground">Sniper</span>
-              <span className="text-xs text-muted-foreground ml-1.5 font-normal">AI</span>
+              <span className="text-[10px] text-muted-foreground ml-1 font-normal">AI</span>
             </span>
           </Link>
 
           {/* Desktop Navigation */}
-          <nav className="hidden lg:flex items-center gap-1 mx-6">
+          <nav className="hidden lg:flex items-center gap-0.5 mx-4">
             {navItems.map((item) => {
               const Icon = item.icon;
               const isActive = location.pathname === item.path;
@@ -103,13 +103,13 @@ const TradingHeader = forwardRef<HTMLElement, TradingHeaderProps>(function Tradi
                 <Link
                   key={item.path}
                   to={item.path}
-                  className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-sm font-medium transition-all ${
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
                     isActive
                       ? "bg-primary/15 text-primary"
                       : "text-muted-foreground hover:text-foreground hover:bg-secondary/60"
                   }`}
                 >
-                  <Icon className="w-4 h-4" />
+                  <Icon className="w-3.5 h-3.5" />
                   {item.label}
                 </Link>
               );

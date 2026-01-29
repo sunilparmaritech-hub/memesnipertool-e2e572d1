@@ -452,24 +452,29 @@ const TradeRow = memo(({ trade, colorIndex, onExit }: {
 
 TradeRow.displayName = 'TradeRow';
 
-// Initial loading skeleton
-const PoolSkeleton = memo(() => (
-  <div className="grid grid-cols-[40px_1fr_auto_auto] items-center gap-3 px-3 py-2.5 border-b border-border/20 animate-pulse">
-    <div className="w-9 h-9 rounded-lg bg-secondary/60" />
-    <div className="space-y-1.5">
-      <div className="h-4 w-28 bg-secondary/60 rounded" />
-      <div className="h-3 w-20 bg-secondary/40 rounded" />
+// Initial loading skeleton - using forwardRef to avoid React ref warnings
+const PoolSkeleton = forwardRef<HTMLDivElement>(function PoolSkeleton(_, ref) {
+  return (
+    <div 
+      ref={ref}
+      className="grid grid-cols-[40px_1fr_auto_auto] items-center gap-3 px-3 py-2.5 border-b border-border/20 animate-pulse"
+    >
+      <div className="w-9 h-9 rounded-lg bg-secondary/60" />
+      <div className="space-y-1.5">
+        <div className="h-4 w-28 bg-secondary/60 rounded" />
+        <div className="h-3 w-20 bg-secondary/40 rounded" />
+      </div>
+      <div className="flex gap-1.5">
+        <div className="w-7 h-7 rounded bg-secondary/40" />
+        <div className="w-10 h-5 rounded bg-secondary/40" />
+      </div>
+      <div className="text-right space-y-1">
+        <div className="h-4 w-14 bg-secondary/60 rounded ml-auto" />
+        <div className="h-3 w-12 bg-secondary/40 rounded ml-auto" />
+      </div>
     </div>
-    <div className="flex gap-1.5">
-      <div className="w-7 h-7 rounded bg-secondary/40" />
-      <div className="w-10 h-5 rounded bg-secondary/40" />
-    </div>
-    <div className="text-right space-y-1">
-      <div className="h-4 w-14 bg-secondary/60 rounded ml-auto" />
-      <div className="h-3 w-12 bg-secondary/40 rounded ml-auto" />
-    </div>
-  </div>
-));
+  );
+});
 
 PoolSkeleton.displayName = 'PoolSkeleton';
 

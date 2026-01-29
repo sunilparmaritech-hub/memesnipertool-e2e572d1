@@ -609,6 +609,7 @@ export type Database = {
         | "liquidity_lock"
         | "trade_execution"
         | "rpc_provider"
+        | "raydium"
       app_role: "admin" | "user"
       position_status: "open" | "closed" | "pending"
       sniping_priority: "normal" | "fast" | "turbo"
@@ -749,6 +750,7 @@ export const Constants = {
         "liquidity_lock",
         "trade_execution",
         "rpc_provider",
+        "raydium",
       ],
       app_role: ["admin", "user"],
       position_status: ["open", "closed", "pending"],

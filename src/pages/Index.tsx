@@ -95,15 +95,15 @@ function Index() {
 
   return (
     <AppLayout>
-      <div className="container mx-auto max-w-[1600px] px-3 md:px-4 space-y-4 md:space-y-5">
+      <div className="container mx-auto max-w-[1600px] px-3 md:px-4 space-y-3">
         {/* Demo Mode Banner */}
         {isDemo && (
-          <Alert className="bg-warning/10 border-warning/30">
+          <Alert className="bg-warning/10 border-warning/30 py-2">
             <FlaskConical className="h-4 w-4 text-warning" />
-            <AlertTitle className="text-warning flex items-center justify-between">
+            <AlertTitle className="text-warning flex items-center justify-between text-sm">
               <div className="flex items-center gap-2">
                 Demo Mode Active
-                <Badge className="bg-warning/20 text-warning border-warning/30 ml-2">
+                <Badge className="bg-warning/20 text-warning border-warning/30 text-xs">
                   <Coins className="w-3 h-3 mr-1" />
                   {demoBalance.toFixed(0)} SOL
                 </Badge>
@@ -111,15 +111,15 @@ function Index() {
               <Button 
                 variant="outline" 
                 size="sm" 
-                className="h-7 text-xs border-warning/30 text-warning hover:bg-warning/20"
+                className="h-6 text-xs border-warning/30 text-warning hover:bg-warning/20"
                 onClick={handleResetDemo}
               >
                 <RotateCcw className="w-3 h-3 mr-1" />
                 Reset
               </Button>
             </AlertTitle>
-            <AlertDescription className="text-warning/80">
-              You're trading with simulated {demoBalance.toFixed(0)} SOL. Switch to Live mode for real trading.
+            <AlertDescription className="text-warning/80 text-xs">
+              Trading with simulated {demoBalance.toFixed(0)} SOL. Switch to Live for real trading.
             </AlertDescription>
           </Alert>
         )}
@@ -137,7 +137,7 @@ function Index() {
         )}
 
         {/* Performance Stats Row + Bot Performance Panel */}
-        <div className="grid gap-4 lg:grid-cols-[1fr_280px]">
+        <div className="grid gap-3 lg:grid-cols-[1fr_260px]">
           <PerformanceStatsRow
             totalPnL={totalPnL}
             totalPnLPercent={totalPnLPercent}
@@ -157,13 +157,13 @@ function Index() {
         </div>
 
         {/* Token Performance Matrix + Intelligence Panels */}
-        <div className="grid gap-4 lg:grid-cols-[1fr_320px]">
+        <div className="grid gap-3 lg:grid-cols-[1fr_280px]">
           <TokenPerformanceMatrix positions={allPositions} />
           <IntelligencePanels />
         </div>
 
         {/* Bottom Section: Snipe History, Risk Chart, Alert Center */}
-        <div className="grid gap-4 lg:grid-cols-[1fr_300px_280px]">
+        <div className="grid gap-3 lg:grid-cols-[1fr_280px_240px]">
           <SnipeHistoryTable />
           <RiskExposureChart />
           <AlertCenter />

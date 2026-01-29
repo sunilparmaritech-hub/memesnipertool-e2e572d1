@@ -1,5 +1,4 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Activity, Zap, Signal, Clock } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -23,44 +22,44 @@ export default function BotPerformancePanel({
   };
 
   return (
-    <Card className="border-0 bg-gradient-to-br from-card/90 to-card/60 backdrop-blur-xl h-full">
-      <CardHeader className="pb-3">
-        <CardTitle className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+    <Card className="border border-border/50 bg-card/80 backdrop-blur-sm h-full">
+      <CardHeader className="pb-2 pt-3 px-3">
+        <CardTitle className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
           Bot Performance Stats
         </CardTitle>
       </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="grid grid-cols-2 gap-3">
-          <div className="flex flex-col gap-1">
-            <div className="flex items-center gap-1.5 text-muted-foreground">
+      <CardContent className="px-3 pb-3">
+        <div className="grid grid-cols-4 gap-2">
+          <div className="flex flex-col gap-0.5">
+            <div className="flex items-center gap-1 text-muted-foreground">
               <Clock className="w-3 h-3" />
-              <span className="text-[10px] uppercase tracking-wider">Uptime</span>
+              <span className="text-[9px] uppercase tracking-wider">Uptime</span>
             </div>
-            <span className="text-2xl font-bold text-foreground">{uptime.toFixed(1)}%</span>
+            <span className="text-lg font-bold text-foreground">{uptime.toFixed(1)}%</span>
           </div>
           
-          <div className="flex flex-col gap-1">
-            <div className="flex items-center gap-1.5 text-muted-foreground">
+          <div className="flex flex-col gap-0.5">
+            <div className="flex items-center gap-1 text-muted-foreground">
               <Zap className="w-3 h-3" />
-              <span className="text-[10px] uppercase tracking-wider">Trades Today</span>
+              <span className="text-[9px] uppercase tracking-wider">Trades Today</span>
             </div>
-            <span className="text-2xl font-bold text-foreground">{tradesToday}</span>
+            <span className="text-lg font-bold text-foreground">{tradesToday}</span>
           </div>
           
-          <div className="flex flex-col gap-1">
-            <div className="flex items-center gap-1.5 text-muted-foreground">
+          <div className="flex flex-col gap-0.5">
+            <div className="flex items-center gap-1 text-muted-foreground">
               <Signal className="w-3 h-3" />
-              <span className="text-[10px] uppercase tracking-wider">Pending Signals</span>
+              <span className="text-[9px] uppercase tracking-wider">Pending</span>
             </div>
-            <span className="text-2xl font-bold text-foreground">{pendingSignals}</span>
+            <span className="text-lg font-bold text-foreground">{pendingSignals}</span>
           </div>
           
-          <div className="flex flex-col gap-1">
-            <div className="flex items-center gap-1.5 text-muted-foreground">
+          <div className="flex flex-col gap-0.5">
+            <div className="flex items-center gap-1 text-muted-foreground">
               <Activity className="w-3 h-3" />
-              <span className="text-[10px] uppercase tracking-wider">Queue Status</span>
+              <span className="text-[9px] uppercase tracking-wider">Queue</span>
             </div>
-            <span className={cn("text-2xl font-bold capitalize", queueStatusColors[queueStatus])}>
+            <span className={cn("text-lg font-bold capitalize", queueStatusColors[queueStatus])}>
               {queueStatus === 'active' ? 'Active' : queueStatus === 'paused' ? 'Paused' : 'Idle'}
             </span>
           </div>

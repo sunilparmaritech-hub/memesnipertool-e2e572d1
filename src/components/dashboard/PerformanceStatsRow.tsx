@@ -20,7 +20,7 @@ const StatItem = ({ label, value, subValue, isPositive, isNegative, tooltip }: S
         <TooltipProvider>
           <Tooltip>
             <TooltipTrigger>
-              <Info className="w-3 h-3" />
+              <Info className="w-3 h-3 opacity-60" />
             </TooltipTrigger>
             <TooltipContent>
               <p className="text-xs">{tooltip}</p>
@@ -29,9 +29,9 @@ const StatItem = ({ label, value, subValue, isPositive, isNegative, tooltip }: S
         </TooltipProvider>
       )}
     </div>
-    <div className="flex items-center gap-1.5">
+    <div className="flex items-center gap-1">
       <span className={cn(
-        "text-xl font-bold",
+        "text-lg font-bold tracking-tight",
         isPositive && "text-success",
         isNegative && "text-destructive",
         !isPositive && !isNegative && "text-foreground"
@@ -40,17 +40,17 @@ const StatItem = ({ label, value, subValue, isPositive, isNegative, tooltip }: S
       </span>
       {(isPositive || isNegative) && (
         isPositive ? (
-          <TrendingUp className="w-4 h-4 text-success" />
+          <TrendingUp className="w-3.5 h-3.5 text-success" />
         ) : (
-          <TrendingDown className="w-4 h-4 text-destructive" />
+          <TrendingDown className="w-3.5 h-3.5 text-destructive" />
         )
       )}
     </div>
     {subValue && (
       <span className={cn(
-        "text-xs font-medium",
-        isPositive && "text-success",
-        isNegative && "text-destructive",
+        "text-[11px] font-medium",
+        isPositive && "text-success/80",
+        isNegative && "text-destructive/80",
         !isPositive && !isNegative && "text-muted-foreground"
       )}>
         {subValue}
@@ -81,9 +81,9 @@ export default function PerformanceStatsRow({
   worstTrade,
 }: PerformanceStatsRowProps) {
   return (
-    <Card className="border-0 bg-gradient-to-br from-card/90 to-card/60 backdrop-blur-xl">
-      <CardContent className="p-4">
-        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4 md:gap-6">
+    <Card className="border border-border/50 bg-card/80 backdrop-blur-sm">
+      <CardContent className="p-3">
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3 md:gap-4">
           <StatItem
             label="Total P&L"
             value={`${totalPnL >= 0 ? '+' : ''}${totalPnL.toFixed(4)} SOL`}

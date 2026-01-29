@@ -1,5 +1,5 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { PieChart, Pie, Cell, ResponsiveContainer, Legend, Tooltip } from "recharts";
+import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
 
 interface RiskExposureChartProps {
   data?: {
@@ -30,7 +30,7 @@ const renderCustomizedLabel = ({ cx, cy, midAngle, innerRadius, outerRadius, per
       fill="white"
       textAnchor={x > cx ? 'start' : 'end'}
       dominantBaseline="central"
-      fontSize={12}
+      fontSize={10}
       fontWeight="bold"
     >
       {`${(percent * 100).toFixed(0)}%`}
@@ -40,14 +40,14 @@ const renderCustomizedLabel = ({ cx, cy, midAngle, innerRadius, outerRadius, per
 
 export default function RiskExposureChart({ data = defaultData }: RiskExposureChartProps) {
   return (
-    <Card className="border-0 bg-gradient-to-br from-card/90 to-card/60 backdrop-blur-xl">
-      <CardHeader className="pb-3">
-        <CardTitle className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+    <Card className="border border-border/50 bg-card/80 backdrop-blur-sm">
+      <CardHeader className="pb-2 pt-3 px-3">
+        <CardTitle className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
           Risk Exposure Donut Chart
         </CardTitle>
       </CardHeader>
-      <CardContent>
-        <div className="h-[200px]">
+      <CardContent className="px-3 pb-3">
+        <div className="h-[160px]">
           <ResponsiveContainer width="100%" height="100%">
             <PieChart>
               <Pie
@@ -56,8 +56,8 @@ export default function RiskExposureChart({ data = defaultData }: RiskExposureCh
                 cy="50%"
                 labelLine={false}
                 label={renderCustomizedLabel}
-                innerRadius={50}
-                outerRadius={80}
+                innerRadius={40}
+                outerRadius={70}
                 paddingAngle={2}
                 dataKey="value"
               >
@@ -69,8 +69,8 @@ export default function RiskExposureChart({ data = defaultData }: RiskExposureCh
                 contentStyle={{
                   backgroundColor: 'hsl(var(--card))',
                   border: '1px solid hsl(var(--border))',
-                  borderRadius: '8px',
-                  fontSize: '12px',
+                  borderRadius: '6px',
+                  fontSize: '10px',
                 }}
               />
             </PieChart>
@@ -78,14 +78,14 @@ export default function RiskExposureChart({ data = defaultData }: RiskExposureCh
         </div>
         
         {/* Legend */}
-        <div className="flex flex-wrap gap-3 mt-2 justify-center">
+        <div className="grid grid-cols-2 gap-1.5 mt-2">
           {data.map((item) => (
             <div key={item.name} className="flex items-center gap-1.5">
               <div 
-                className="w-2.5 h-2.5 rounded-full" 
+                className="w-2 h-2 rounded-full" 
                 style={{ backgroundColor: item.color }}
               />
-              <span className="text-[10px] text-muted-foreground">{item.value}% {item.name}</span>
+              <span className="text-[9px] text-muted-foreground">{item.value}% {item.name}</span>
             </div>
           ))}
         </div>

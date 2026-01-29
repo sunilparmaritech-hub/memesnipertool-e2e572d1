@@ -26,8 +26,8 @@ export default function AppLayout({ children }: AppLayoutProps) {
         network={wallet.network}
         onConnectWallet={handleConnectWallet}
       />
-      {/* Main content: pt-16/20 for header, pb-20 on mobile for bottom nav */}
-      <main className="pt-16 lg:pt-20 pb-20 lg:pb-8 flex-1 overflow-y-auto overflow-x-hidden">
+      {/* Main content: pt-14 for header, pb-16 on mobile for bottom nav */}
+      <main className="pt-14 lg:pt-16 pb-16 lg:pb-6 flex-1 overflow-y-auto overflow-x-hidden">
         {children}
       </main>
       {/* Mobile bottom tab navigation */}

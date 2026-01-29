@@ -311,9 +311,9 @@ export function useTradingEngine() {
               console.log('[TradingEngine] Position saved to database:', savedPosition?.id);
             }
 
-            // Log to trade_history for Transaction History display
-            const { error: historyError } = await supabase
-              .from('trade_history')
+            // Log to trade_history for Transaction History display (use type assertion)
+            const { error: historyError } = await (supabase
+              .from('trade_history' as any)
               .insert({
                 user_id: user.id,
                 token_address: position.tokenAddress,
@@ -325,7 +325,7 @@ export function useTradingEngine() {
                 price_usd: entryPriceUsd,
                 status: 'confirmed',
                 tx_hash: position.entryTxHash,
-              });
+              }) as any);
 
             if (historyError) {
               console.error('[TradingEngine] Failed to log trade history:', historyError);

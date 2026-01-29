@@ -194,6 +194,7 @@ export type Database = {
           current_price: number
           current_value: number
           entry_price: number
+          entry_price_usd: number | null
           entry_value: number
           exit_price: number | null
           exit_reason: string | null
@@ -218,6 +219,7 @@ export type Database = {
           current_price: number
           current_value: number
           entry_price: number
+          entry_price_usd?: number | null
           entry_value: number
           exit_price?: number | null
           exit_reason?: string | null
@@ -242,6 +244,7 @@ export type Database = {
           current_price?: number
           current_value?: number
           entry_price?: number
+          entry_price_usd?: number | null
           entry_value?: number
           exit_price?: number | null
           exit_reason?: string | null
@@ -431,6 +434,51 @@ export type Database = {
           metadata?: Json | null
           severity?: string | null
           user_id?: string | null
+        }
+        Relationships: []
+      }
+      trade_history: {
+        Row: {
+          amount: number
+          created_at: string
+          id: string
+          price_sol: number | null
+          price_usd: number | null
+          status: string | null
+          token_address: string
+          token_name: string | null
+          token_symbol: string | null
+          trade_type: string
+          tx_hash: string | null
+          user_id: string
+        }
+        Insert: {
+          amount: number
+          created_at?: string
+          id?: string
+          price_sol?: number | null
+          price_usd?: number | null
+          status?: string | null
+          token_address: string
+          token_name?: string | null
+          token_symbol?: string | null
+          trade_type: string
+          tx_hash?: string | null
+          user_id: string
+        }
+        Update: {
+          amount?: number
+          created_at?: string
+          id?: string
+          price_sol?: number | null
+          price_usd?: number | null
+          status?: string | null
+          token_address?: string
+          token_name?: string | null
+          token_symbol?: string | null
+          trade_type?: string
+          tx_hash?: string | null
+          user_id?: string
         }
         Relationships: []
       }

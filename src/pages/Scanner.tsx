@@ -474,11 +474,11 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
             details: `Received ${result.solReceived?.toFixed(4)} SOL | TX: ${result.txHash?.slice(0, 12)}...`,
           });
           
-          // Log to trade_history for Transaction History display
+          // Log to trade_history for Transaction History display (use type assertion)
           try {
             const { data: { user } } = await supabase.auth.getUser();
             if (user) {
-              await supabase.from('trade_history').insert({
+              await (supabase.from('trade_history' as any).insert({
                 user_id: user.id,
                 token_address: position.token_address,
                 token_symbol: position.token_symbol,
@@ -489,7 +489,7 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
                 price_usd: safeExitPrice,
                 status: 'confirmed',
                 tx_hash: result.txHash,
-              });
+              }) as any);
             }
           } catch (historyErr) {
             console.error('Failed to log sell to trade_history:', historyErr);
@@ -561,11 +561,11 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
                 description: `${position.token_symbol} sold successfully using Raydium fallback`,
               });
 
-              // Log to trade_history
+              // Log to trade_history (use type assertion)
               try {
                 const { data: { user } } = await supabase.auth.getUser();
                 if (user) {
-                  await supabase.from('trade_history').insert({
+                  await (supabase.from('trade_history' as any).insert({
                     user_id: user.id,
                     token_address: position.token_address,
                     token_symbol: position.token_symbol,
@@ -576,7 +576,7 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
                     price_usd: safeExitPrice,
                     status: 'confirmed',
                     tx_hash: raydiumResult.signature,
-                  });
+                  }) as any);
                 }
               } catch (historyErr) {
                 console.error('Failed to log Raydium sell to trade_history:', historyErr);

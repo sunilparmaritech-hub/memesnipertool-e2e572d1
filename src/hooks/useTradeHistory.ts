@@ -59,19 +59,20 @@ export function useTradeHistory(limit: number = 1000) {
     if (!user) return 0;
 
     // First, get existing trade_history entries to avoid duplicates
-    const { data: existingTrades } = await supabase
-      .from('trade_history')
+    // Use type assertion since types may not be updated yet
+    const { data: existingTrades } = await (supabase
+      .from('trade_history' as any)
       .select('token_address, trade_type, created_at')
-      .eq('user_id', user.id);
+      .eq('user_id', user.id) as any);
 
     const existingSet = new Set(
-      (existingTrades || []).map(t => `${t.token_address}-${t.trade_type}-${t.created_at}`)
+      ((existingTrades || []) as any[]).map((t: any) => `${t.token_address}-${t.trade_type}-${t.created_at}`)
     );
 
     const { data: positionsData, error: positionsError } = await supabase
       .from('positions')
       .select(
-        'token_address, token_symbol, token_name, amount, entry_price, entry_price_usd, status, created_at, closed_at, exit_price, exit_tx_id'
+        'token_address, token_symbol, token_name, amount, entry_price, status, created_at, closed_at, exit_price, exit_tx_id'
       )
       .eq('user_id', user.id)
       .order('created_at', { ascending: false });
@@ -118,7 +119,8 @@ export function useTradeHistory(limit: number = 1000) {
     const rows = [...buyRows, ...sellRows];
     if (rows.length === 0) return 0;
 
-    const { error: insertError } = await supabase.from('trade_history').insert(rows);
+    // Use type assertion for insert
+    const { error: insertError } = await (supabase.from('trade_history' as any).insert(rows) as any);
     if (insertError) throw insertError;
 
     return rows.length;
@@ -134,12 +136,13 @@ export function useTradeHistory(limit: number = 1000) {
     try {
       setLoading(true);
       // Fetch up to the maximum allowed per request (default 1000)
-      let { data, error } = await supabase
-        .from('trade_history')
+      // Use type assertion since types may not be updated yet
+      let { data, error } = await (supabase
+        .from('trade_history' as any)
         .select('*')
         .eq('user_id', user.id)
         .order('created_at', { ascending: false })
-        .limit(limit);
+        .limit(limit) as any);
 
       if (error) throw error;
 
@@ -155,12 +158,12 @@ export function useTradeHistory(limit: number = 1000) {
               description: `Imported ${inserted} transactions from existing positions`,
             });
 
-            const refetchResult = await supabase
-              .from('trade_history')
+            const refetchResult = await (supabase
+              .from('trade_history' as any)
               .select('*')
               .eq('user_id', user.id)
               .order('created_at', { ascending: false })
-              .limit(limit);
+              .limit(limit) as any);
 
             if (refetchResult.error) throw refetchResult.error;
             data = refetchResult.data;
@@ -170,7 +173,7 @@ export function useTradeHistory(limit: number = 1000) {
         }
       }
 
-      const rawTrades = ((data || []) as TradeHistoryEntry[]).map((t) => ({ ...t }));
+      const rawTrades = ((data || []) as unknown as TradeHistoryEntry[]).map((t) => ({ ...t }));
       setTrades(rawTrades);
 
       // Enrich missing/placeholder token metadata
@@ -254,15 +257,15 @@ export function useTradeHistory(limit: number = 1000) {
       setLoading(true);
       const inserted = await backfillFromPositions();
       
-      // Refetch after sync
-      const { data } = await supabase
-        .from('trade_history')
+      // Refetch after sync - use type assertion
+      const { data } = await (supabase
+        .from('trade_history' as any)
         .select('*')
         .eq('user_id', user.id)
         .order('created_at', { ascending: false })
-        .limit(limit);
+        .limit(limit) as any);
       
-      setTrades((data || []) as TradeHistoryEntry[]);
+      setTrades((data || []) as unknown as TradeHistoryEntry[]);
       
       if (inserted > 0) {
         toast({

@@ -328,11 +328,11 @@ export function useAutoExit() {
         })
         .eq('id', result.positionId);
 
-      // Log sell to trade_history
+      // Log sell to trade_history (use type assertion since types may not be updated)
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
-        await supabase
-          .from('trade_history')
+        await (supabase
+          .from('trade_history' as any)
           .insert({
             user_id: user.id,
             token_address: position.token_address,
@@ -344,13 +344,13 @@ export function useAutoExit() {
             price_usd: null,
             status: 'confirmed',
             tx_hash: signResult.signature,
-          });
+          }) as any);
       }
 
       // Success notification & detailed log with position data
       const exitLabel = result.action === 'take_profit' ? '💰 TAKE PROFIT' : '🛑 STOP LOSS';
       const pnlText = result.profitLossPercent >= 0 ? `+${result.profitLossPercent.toFixed(2)}%` : `${result.profitLossPercent.toFixed(2)}%`;
-      const entryPrice = position.entry_price_usd || position.entry_price || 0;
+      const entryPrice = (position as any).entry_price_usd || position.entry_price || 0;
       const exitValue = result.currentPrice * tokenAmountToSell;
       const entryValue = position.entry_value || (entryPrice * tokenAmountToSell);
       const pnlValue = entryValue * (result.profitLossPercent / 100);

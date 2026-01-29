@@ -37,26 +37,44 @@ export function useLiquidityRetryWorker() {
   const { toast } = useToast();
   const { wallet, signAndSendTransaction, refreshBalance } = useWallet();
 
-  // Fetch positions waiting for liquidity
+  // Fetch positions waiting for liquidity (uses exit_reason field to track waiting status)
   const fetchWaitingPositions = useCallback(async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return [];
 
+      // Use 'pending' status with exit_reason='waiting_for_liquidity' to track waiting positions
       const { data, error } = await supabase
         .from('positions')
         .select('*')
         .eq('user_id', user.id)
-        .eq('status', 'waiting_for_liquidity')
-        .order('waiting_for_liquidity_since', { ascending: true });
+        .eq('status', 'pending')
+        .eq('exit_reason', 'waiting_for_liquidity')
+        .order('created_at', { ascending: true });
 
       if (error) {
         console.error('[LiquidityRetry] Fetch error:', error);
         return [];
       }
 
-      setWaitingPositions(data || []);
-      return data || [];
+      // Map DB positions to WaitingPosition interface
+      const mappedPositions: WaitingPosition[] = (data || []).map((p: any) => ({
+        id: p.id,
+        token_address: p.token_address,
+        token_symbol: p.token_symbol,
+        token_name: p.token_name,
+        amount: p.amount,
+        entry_price: p.entry_price,
+        current_price: p.current_price,
+        profit_loss_percent: p.profit_loss_percent,
+        liquidity_last_checked_at: null, // Not stored in DB
+        liquidity_check_count: 0, // Not stored in DB
+        waiting_for_liquidity_since: p.created_at, // Use created_at as proxy
+        status: p.status,
+      }));
+
+      setWaitingPositions(mappedPositions);
+      return mappedPositions;
     } catch (err) {
       console.error('[LiquidityRetry] Error:', err);
       return [];
@@ -270,11 +288,11 @@ export function useLiquidityRetryWorker() {
     // Only update DB for real positions (valid UUID IDs)
     // Wallet tokens have synthetic IDs like "wallet-<mint>" which would cause UUID parse errors
     if (!isWalletToken) {
+      // Just update the updated_at timestamp as a check tracker
       await supabase
         .from('positions')
         .update({
-          liquidity_last_checked_at: new Date().toISOString(),
-          liquidity_check_count: (position.liquidity_check_count || 0) + 1,
+          updated_at: new Date().toISOString(),
         })
         .eq('id', position.id);
     }
@@ -326,7 +344,7 @@ export function useLiquidityRetryWorker() {
       // Log to trade_history (always - uses user.id not position.id)
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
-        await supabase.from('trade_history').insert({
+        await (supabase.from('trade_history' as any).insert({
           user_id: user.id,
           token_address: position.token_address,
           token_symbol: position.token_symbol,
@@ -336,7 +354,7 @@ export function useLiquidityRetryWorker() {
           price_sol: position.current_price,
           status: 'confirmed',
           tx_hash: swapResult.signature,
-        });
+        }) as any);
       }
 
       addBotLog({
@@ -389,7 +407,7 @@ export function useLiquidityRetryWorker() {
       for (let i = 0; i < positions.length; i += CONCURRENCY_LIMIT) {
         const batch = positions.slice(i, i + CONCURRENCY_LIMIT);
         const batchResults = await Promise.all(
-          batch.map(position => checkAndExecutePosition(position))
+          batch.map((position: WaitingPosition) => checkAndExecutePosition(position))
         );
         results.push(...batchResults);
         
@@ -411,16 +429,14 @@ export function useLiquidityRetryWorker() {
     }
   }, [checking, wallet.isConnected, fetchWaitingPositions, checkAndExecutePosition]);
 
-  // Move a position to waiting for liquidity
+  // Move a position to waiting for liquidity (uses pending status + exit_reason)
   const moveToWaitingForLiquidity = useCallback(async (positionId: string): Promise<boolean> => {
     try {
       const { error } = await supabase
         .from('positions')
         .update({
-          status: 'waiting_for_liquidity',
-          waiting_for_liquidity_since: new Date().toISOString(),
-          liquidity_check_count: 0,
-          liquidity_last_checked_at: null,
+          status: 'pending',
+          exit_reason: 'waiting_for_liquidity',
         })
         .eq('id', positionId);
 
@@ -450,9 +466,7 @@ export function useLiquidityRetryWorker() {
         .from('positions')
         .update({
           status: 'open',
-          waiting_for_liquidity_since: null,
-          liquidity_check_count: 0,
-          liquidity_last_checked_at: null,
+          exit_reason: null,
         })
         .eq('id', positionId);
 

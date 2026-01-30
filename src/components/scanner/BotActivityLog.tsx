@@ -330,72 +330,66 @@ export default function BotActivityLog({ maxEntries = 100 }: BotActivityLogProps
 
   return (
     <Collapsible open={expanded} onOpenChange={setExpanded}>
-      <Card className="bg-gradient-to-br from-card/90 to-card/70 backdrop-blur-sm border-border/50 overflow-hidden">
-        {/* Decorative accent */}
-        <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-primary/30 to-transparent" />
-        
+      <Card className="bg-card/80 backdrop-blur-sm border-border/40 overflow-hidden">
         <CollapsibleTrigger asChild>
-          <CardHeader className="pb-3 cursor-pointer hover:bg-muted/20 transition-colors">
-            <CardTitle className="text-sm font-medium flex items-center justify-between">
-              <div className="flex items-center gap-2.5">
-                <div className="p-1.5 rounded-lg bg-primary/10 border border-primary/20">
-                  <Activity className="w-3.5 h-3.5 text-primary" />
-                </div>
-                <span className="font-semibold">Bot Activity</span>
+          <CardHeader className="pb-2 pt-3 px-3 cursor-pointer hover:bg-muted/10 transition-colors">
+            <CardTitle className="text-xs font-medium flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Activity className="w-3.5 h-3.5 text-primary" />
+                <span className="text-muted-foreground">BOT ACTIVITY</span>
                 <Badge 
                   variant="outline" 
-                  className="text-[10px] h-5 px-2 bg-muted/50 border-border/50"
+                  className="text-[9px] h-4 px-1.5 bg-muted/30 border-border/40"
                 >
                   {logs.length} logs
                 </Badge>
               </div>
-              <div className="flex items-center gap-3">
-                {/* Stats summary */}
-                <div className="flex items-center gap-2 text-[11px] font-medium">
-                  <span className="flex items-center gap-1 text-success">
-                    <CheckCircle className="w-3 h-3" />
+              <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1.5 text-[10px] font-medium">
+                  <span className="flex items-center gap-0.5 text-success">
+                    <CheckCircle className="w-2.5 h-2.5" />
                     {stats.success}
                   </span>
-                  <span className="flex items-center gap-1 text-muted-foreground">
-                    <Ban className="w-3 h-3" />
+                  <span className="flex items-center gap-0.5 text-muted-foreground">
+                    <Ban className="w-2.5 h-2.5" />
                     {stats.skip}
                   </span>
-                  <span className="flex items-center gap-1 text-destructive">
-                    <XCircle className="w-3 h-3" />
+                  <span className="flex items-center gap-0.5 text-destructive">
+                    <XCircle className="w-2.5 h-2.5" />
                     {stats.error}
                   </span>
                 </div>
                 <Button 
                   variant="ghost" 
                   size="icon" 
-                  className="h-7 w-7 hover:bg-destructive/10 hover:text-destructive"
+                  className="h-5 w-5 hover:bg-destructive/10 hover:text-destructive"
                   onClick={(e) => {
                     e.stopPropagation();
                     clearBotLogs();
                   }}
                   title="Clear all logs"
                 >
-                  <Trash2 className="w-3.5 h-3.5" />
+                  <Trash2 className="w-3 h-3" />
                 </Button>
-                <ChevronDown className={`w-4 h-4 text-muted-foreground transition-transform duration-200 ${expanded ? 'rotate-180' : ''}`} />
+                <ChevronDown className={`w-3.5 h-3.5 text-muted-foreground transition-transform duration-200 ${expanded ? 'rotate-180' : ''}`} />
               </div>
             </CardTitle>
           </CardHeader>
         </CollapsibleTrigger>
         
         <CollapsibleContent>
-          <CardContent className="pt-0 pb-3">
-            <ScrollArea className="h-[280px] pr-2">
+          <CardContent className="pt-0 pb-3 px-3">
+            <ScrollArea className="h-[240px] pr-2">
               {displayLogs.length === 0 ? (
-                <div className="flex flex-col items-center justify-center h-full text-center py-10">
-                  <div className="p-3 rounded-full bg-muted/30 mb-3">
-                    <Activity className="w-6 h-6 text-muted-foreground/50" />
+                <div className="flex flex-col items-center justify-center h-full text-center py-8">
+                  <div className="p-2.5 rounded-full bg-muted/20 mb-2">
+                    <Activity className="w-5 h-5 text-muted-foreground/40" />
                   </div>
-                  <p className="text-sm font-medium text-muted-foreground">No activity yet</p>
-                  <p className="text-xs text-muted-foreground/70 mt-1">Activate the bot to see logs</p>
+                  <p className="text-xs font-medium text-muted-foreground">No activity yet</p>
+                  <p className="text-[10px] text-muted-foreground/70 mt-0.5">Activate the bot to see logs</p>
                 </div>
               ) : (
-                <div className="space-y-1.5">
+                <div className="space-y-1">
                   {displayLogs.map((entry, index) => {
                     const config = levelConfig[entry.level];
                     const Icon = config.icon;

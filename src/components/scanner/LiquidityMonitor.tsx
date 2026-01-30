@@ -643,17 +643,17 @@ const LiquidityMonitor = forwardRef<HTMLDivElement, LiquidityMonitorProps>(funct
   };
 
   return (
-    <Card ref={ref} className="bg-card/80 backdrop-blur-sm border-border/50">
-      <CardHeader className="pb-2 px-4 pt-4">
+    <Card ref={ref} className="bg-card/80 backdrop-blur-sm border-border/40">
+      <CardHeader className="pb-2 px-3 pt-3">
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center border border-primary/20">
-              <Zap className="w-5 h-5 text-primary" />
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center">
+              <Zap className="w-4 h-4 text-primary" />
             </div>
             <div>
-              <CardTitle className="text-base font-semibold">Liquidity Monitor</CardTitle>
-              <p className="text-xs text-muted-foreground tabular-nums">
-                {pools.length} pools detected • {openTrades.length} active trades
+              <CardTitle className="text-xs font-medium text-muted-foreground">LIQUIDITY MONITOR</CardTitle>
+              <p className="text-[10px] text-muted-foreground tabular-nums">
+                {pools.length} pools • {openTrades.length} active
               </p>
             </div>
           </div>
@@ -662,10 +662,10 @@ const LiquidityMonitor = forwardRef<HTMLDivElement, LiquidityMonitorProps>(funct
             <Button
               variant="ghost"
               size="icon"
-              className="h-7 w-7"
+              className="h-6 w-6"
               onClick={() => setIsExpanded(!isExpanded)}
             >
-              {isExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+              {isExpanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
             </Button>
           </div>
         </div>
@@ -675,78 +675,77 @@ const LiquidityMonitor = forwardRef<HTMLDivElement, LiquidityMonitorProps>(funct
         <CardContent className="p-0">
           <Tabs value={activeTab} onValueChange={(val) => {
             setActiveTab(val);
-            // Trigger wallet refresh when switching to waiting tab
             if (val === 'waiting' && onRefreshWalletTokens) {
               onRefreshWalletTokens();
             }
           }}>
-            <div className="px-4 pb-2">
-              <TabsList className="w-full bg-secondary/60 h-9">
+            <div className="px-3 pb-2">
+              <TabsList className="w-full bg-secondary/40 h-8 p-0.5">
                 <TabsTrigger 
                   value="pools" 
-                  className="flex-1 text-xs h-8 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground"
+                  className="flex-1 text-[10px] h-7 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground"
                 >
                   Pools ({filteredPools.length})
                 </TabsTrigger>
                 <TabsTrigger 
                   value="trades" 
-                  className="flex-1 text-xs h-8 data-[state=active]:bg-success data-[state=active]:text-success-foreground"
+                  className="flex-1 text-[10px] h-7 data-[state=active]:bg-success data-[state=active]:text-success-foreground"
                 >
                   Active ({openTrades.length})
                 </TabsTrigger>
                 <TabsTrigger 
                   value="waiting" 
                   className={cn(
-                    "flex-1 text-xs h-8 gap-1",
+                    "flex-1 text-[10px] h-7 gap-1",
                     waitingItemsCount > 0 
                       ? "data-[state=active]:bg-warning data-[state=active]:text-warning-foreground"
                       : "data-[state=active]:bg-muted data-[state=active]:text-muted-foreground"
                   )}
                 >
-                  <Clock className="w-3 h-3" />
-                  Waiting ({waitingItemsCount})
+                  <Clock className="w-2.5 h-2.5" />
+                  Hosting ({waitingItemsCount})
                 </TabsTrigger>
               </TabsList>
             </div>
             
             <TabsContent value="pools" className="mt-0">
               {/* Search */}
-              <div className="px-4 pb-3">
+              <div className="px-3 pb-2">
                 <div className="relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
                   <Input
                     placeholder="Search by name or symbol..."
                     value={searchTerm}
                     onChange={(e) => handleSearchChange(e.target.value)}
-                    className="pl-9 bg-secondary/40 border-border/30 h-9 text-sm"
+                    className="pl-8 bg-secondary/30 border-border/30 h-8 text-xs"
                   />
                 </div>
               </div>
               
               {/* Column Headers */}
-              <div className="grid grid-cols-[40px_1fr_auto_auto] items-center gap-3 px-3 py-2 text-[10px] uppercase tracking-wider text-muted-foreground border-y border-border/30 bg-secondary/20">
+              <div className="grid grid-cols-[32px_1fr_auto_auto_auto] items-center gap-2 px-3 py-1.5 text-[9px] uppercase tracking-wider text-muted-foreground border-y border-border/30 bg-secondary/20">
                 <div></div>
                 <div>Token</div>
-                <div>Safety</div>
-                <div className="text-right">24h / Liquidity</div>
+                <div className="hidden md:block">Source</div>
+                <div className="hidden md:block">Safety</div>
+                <div className="text-right">PVT | Greater</div>
               </div>
               
-              {/* Pool List - No scroll, auto expand */}
-              <div className="divide-y divide-border/10">
+              {/* Pool List */}
+              <div className="divide-y divide-border/10 max-h-[350px] overflow-y-auto">
                 {loading && pools.length === 0 ? (
-                  // Only show skeleton on initial load
                   <>
                     {[1, 2, 3, 4, 5].map((i) => (
                       <PoolSkeleton key={i} />
                     ))}
                   </>
                 ) : displayedPools.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
-                    <Zap className="w-10 h-10 mb-3 opacity-20" />
-                    <p className="font-medium text-sm mb-1">
+                  <div className="flex flex-col items-center justify-center py-10 text-muted-foreground">
+                    <Zap className="w-8 h-8 mb-2 opacity-20" />
+                    <p className="font-medium text-xs mb-0.5">
                       {searchTerm ? 'No matching pools' : 'No pools detected yet'}
                     </p>
-                    <p className="text-xs text-muted-foreground/70">
+                    <p className="text-[10px] text-muted-foreground/70">
                       {searchTerm ? 'Try a different search term' : 'Enable the bot to start scanning'}
                     </p>
                   </div>

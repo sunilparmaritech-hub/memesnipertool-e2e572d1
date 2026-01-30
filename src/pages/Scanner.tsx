@@ -1717,8 +1717,8 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
             </Alert>
           )}
 
-          {/* Stats Row - Mobile optimized with 2x3 grid, 5 cols on desktop */}
-          <div className="grid grid-cols-2 gap-2 md:gap-3 lg:grid-cols-5">
+          {/* Stats Row - 6 compact cards like screenshot */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
             <StatsCard
               title="Invested"
               value={formatSolNativeValue(totalInvested).primary}
@@ -1728,8 +1728,8 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
             />
             <StatsCard
               title="Open Value"
-              value={isDemo ? `${demoBalance.toFixed(2)} SOL` : formatDualValue(totalValue).primary}
-              change={isDemo ? `≈ $${(demoBalance * solPrice).toFixed(2)}` : formatDualValue(totalValue).secondary}
+              value={isDemo ? `${demoBalance.toFixed(4)} SOL` : formatDualValue(totalValue).primary}
+              change={isDemo ? `$${(demoBalance * solPrice).toFixed(2)}` : formatDualValue(totalValue).secondary}
               changeType={totalPnLPercent >= 0 ? 'positive' : 'negative'}
               icon={Wallet}
             />
@@ -1741,11 +1741,11 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
               icon={TrendingUp}
             />
             <StatsCard
-              title="Pools"
-              value={tokens.length.toString()}
-              change={`${tokens.filter(t => t.riskScore < 50).length} signals`}
-              changeType="neutral"
-              icon={Zap}
+              title="Profit"
+              value={closedPositions.filter(p => (p.profit_loss_percent || 0) > 0).length.toString()}
+              change={`${closedPositions.filter(p => (p.profit_loss_percent || 0) > 0).length} profit`}
+              changeType="positive"
+              icon={TrendingUp}
             />
             <StatsCard
               title="Win Rate"
@@ -1754,13 +1754,20 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
               changeType={winRate >= 50 ? 'positive' : winRate > 0 ? 'negative' : 'neutral'}
               icon={Activity}
             />
+            <StatsCard
+              title="Trades"
+              value={closedPositions.length.toString()}
+              change=""
+              changeType="neutral"
+              icon={Activity}
+            />
           </div>
 
-          {/* Main Content Grid - Cleaner 2-column layout */}
-          <div className="grid gap-4 lg:grid-cols-[1fr,400px]">
-            {/* Left Column - Token Monitor (main focus) */}
-            <div className="space-y-4 order-2 lg:order-1">
-              {/* Liquidity Monitor - Primary content */}
+          {/* Main Content Grid - Left/Right layout like screenshot */}
+          <div className="grid gap-3 lg:grid-cols-[1fr,340px]">
+            {/* Left Column - Liquidity Monitor & Bot Activity */}
+            <div className="space-y-3 order-2 lg:order-1">
+              {/* Liquidity Monitor */}
               <LiquidityMonitor 
                 pools={tokens}
                 activeTrades={openPositions}
@@ -1773,9 +1780,7 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
                 onRetryLiquidityCheck={runLiquidityRetryCheck}
                 onMoveBackFromWaiting={moveBackToOpen}
                 onManualSellWaiting={async (pos) => {
-                  // Handle both WaitingPosition and CombinedWaitingItem (wallet tokens)
                   if ('isWalletToken' in pos && pos.isWalletToken) {
-                    // For wallet tokens, we need to create a minimal position object
                     const walletPos = {
                       id: pos.id,
                       token_address: pos.token_address,
@@ -1810,23 +1815,9 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
               <BotActivityLog maxEntries={30} />
             </div>
 
-            {/* Right Column - Bot Controls & Stats */}
-            <div className="space-y-4 order-1 lg:order-2">
-              {/* Bot Preflight Check */}
-              <BotPreflightCheck
-                isBotActive={isBotActive}
-                isDemo={isDemo}
-                walletConnected={wallet.isConnected}
-                walletNetwork={wallet.network}
-                walletBalance={wallet.balance}
-                tradeAmount={settings?.trade_amount ?? null}
-                maxConcurrentTrades={settings?.max_concurrent_trades ?? null}
-                autoEntryEnabled={autoEntryEnabled}
-                openPositionsCount={openPositions.length}
-                onConnectWallet={connectPhantom}
-              />
-              
-              {/* Liquidity Bot Panel - All settings in one place */}
+            {/* Right Column - Bot Settings, Performance, API Health, Trade Signals, Recovery */}
+            <div className="space-y-3 order-1 lg:order-2">
+              {/* Bot Settings Panel */}
               <LiquidityBotPanel
                 settings={settings}
                 saving={saving}
@@ -1844,7 +1835,7 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
                 walletBalance={wallet.balance}
               />
 
-              {/* Performance Panel */}
+              {/* Performance Panel with donut chart */}
               <PerformancePanel
                 winRate={isDemo ? demoWinRate : winRate}
                 totalPnL={isDemo ? demoTotalPnLPercent : totalPnLPercent}
@@ -1856,26 +1847,13 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
                 losses={isDemo ? demoLosses : closedPositions.filter(p => (p.profit_loss_percent || 0) <= 0).length}
               />
 
+              {/* API Health Widget */}
+              <ApiHealthWidget isDemo={isDemo} />
+
               {/* Trade Signals - Live mode only */}
               {!isDemo && <TradeSignalPanel />}
 
-              {/* Sniper Decisions - Live mode debug */}
-              {!isDemo && (
-                <SniperDecisionPanel
-                  decisions={sniperResult?.decisions || []}
-                  loading={sniperLoading}
-                  isDemo={isDemo}
-                  botActive={isBotActive}
-                />
-              )}
-
-              {/* API Health */}
-              <ApiHealthWidget isDemo={isDemo} />
-
-              {/* Paid API Alert */}
-              <PaidApiAlert isBotActive={isBotActive} isDemo={isDemo} />
-
-              {/* Recovery Controls - Live mode only */}
+              {/* Recovery Controls */}
               {!isDemo && (
                 <RecoveryControls
                   onForceScan={handleForceScan}

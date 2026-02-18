@@ -11,6 +11,7 @@ import { DisplayUnitProvider } from "@/contexts/DisplayUnitContext";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { SessionExpiryWarning } from "@/components/session/SessionExpiryWarning";
 import { OfflineIndicator } from "@/components/OfflineIndicator";
+import { SubscriptionProvider } from "@/contexts/SubscriptionContext";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import Index from "./pages/Index";
 import Scanner from "./pages/Scanner";
@@ -24,6 +25,7 @@ import Auth from "./pages/Auth";
 import NotFound from "./pages/NotFound";
 import Notifications from "./pages/Notifications";
 import TokenDetail from "./pages/TokenDetail";
+import Pricing from "./pages/Pricing";
 const queryClient = new QueryClient();
 
 const App = () => (
@@ -37,11 +39,13 @@ const App = () => (
         <Sonner />
         <BrowserRouter>
           <AuthProvider>
+            <SubscriptionProvider>
             <SessionExpiryWarning />
             <OfflineIndicator />
             <ErrorBoundary>
             <Routes>
             <Route path="/auth" element={<Auth />} />
+            <Route path="/pricing" element={<ProtectedRoute><Pricing /></ProtectedRoute>} />
             <Route
               path="/"
               element={
@@ -125,6 +129,7 @@ const App = () => (
             <Route path="*" element={<NotFound />} />
             </Routes>
             </ErrorBoundary>
+            </SubscriptionProvider>
           </AuthProvider>
         </BrowserRouter>
             </BotProvider>

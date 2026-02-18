@@ -116,6 +116,42 @@ export type Database = {
         }
         Relationships: []
       }
+      billing_events: {
+        Row: {
+          amount: number | null
+          created_at: string
+          currency: string | null
+          event_type: string
+          id: string
+          metadata: Json | null
+          stripe_event_id: string | null
+          tier: Database["public"]["Enums"]["subscription_tier"] | null
+          user_id: string
+        }
+        Insert: {
+          amount?: number | null
+          created_at?: string
+          currency?: string | null
+          event_type: string
+          id?: string
+          metadata?: Json | null
+          stripe_event_id?: string | null
+          tier?: Database["public"]["Enums"]["subscription_tier"] | null
+          user_id: string
+        }
+        Update: {
+          amount?: number | null
+          created_at?: string
+          currency?: string | null
+          event_type?: string
+          id?: string
+          metadata?: Json | null
+          stripe_event_id?: string | null
+          tier?: Database["public"]["Enums"]["subscription_tier"] | null
+          user_id?: string
+        }
+        Relationships: []
+      }
       copy_trades: {
         Row: {
           action: string
@@ -160,6 +196,92 @@ export type Database = {
           user_id?: string
         }
         Relationships: []
+      }
+      coupon_codes: {
+        Row: {
+          code: string
+          created_at: string
+          created_by: string | null
+          discount_type: Database["public"]["Enums"]["coupon_discount_type"]
+          discount_value: number
+          duration: Database["public"]["Enums"]["coupon_duration"]
+          expires_at: string | null
+          id: string
+          is_active: boolean
+          max_redemptions: number | null
+          redemption_count: number
+          tier_restriction:
+            | Database["public"]["Enums"]["subscription_tier"]
+            | null
+          updated_at: string
+        }
+        Insert: {
+          code: string
+          created_at?: string
+          created_by?: string | null
+          discount_type?: Database["public"]["Enums"]["coupon_discount_type"]
+          discount_value: number
+          duration?: Database["public"]["Enums"]["coupon_duration"]
+          expires_at?: string | null
+          id?: string
+          is_active?: boolean
+          max_redemptions?: number | null
+          redemption_count?: number
+          tier_restriction?:
+            | Database["public"]["Enums"]["subscription_tier"]
+            | null
+          updated_at?: string
+        }
+        Update: {
+          code?: string
+          created_at?: string
+          created_by?: string | null
+          discount_type?: Database["public"]["Enums"]["coupon_discount_type"]
+          discount_value?: number
+          duration?: Database["public"]["Enums"]["coupon_duration"]
+          expires_at?: string | null
+          id?: string
+          is_active?: boolean
+          max_redemptions?: number | null
+          redemption_count?: number
+          tier_restriction?:
+            | Database["public"]["Enums"]["subscription_tier"]
+            | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      coupon_redemptions: {
+        Row: {
+          coupon_id: string
+          discount_applied: number
+          id: string
+          redeemed_at: string
+          user_id: string
+        }
+        Insert: {
+          coupon_id: string
+          discount_applied: number
+          id?: string
+          redeemed_at?: string
+          user_id: string
+        }
+        Update: {
+          coupon_id?: string
+          discount_applied?: number
+          id?: string
+          redeemed_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "coupon_redemptions_coupon_id_fkey"
+            columns: ["coupon_id"]
+            isOneToOne: false
+            referencedRelation: "coupon_codes"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       disclaimer_acknowledgments: {
         Row: {
@@ -404,6 +526,57 @@ export type Database = {
         }
         Relationships: []
       }
+      subscriptions: {
+        Row: {
+          billing_interval: string | null
+          cancel_at_period_end: boolean | null
+          created_at: string
+          current_period_end: string | null
+          current_period_start: string | null
+          grace_period_end: string | null
+          id: string
+          status: Database["public"]["Enums"]["subscription_status"]
+          stripe_customer_id: string | null
+          stripe_subscription_id: string | null
+          tier: Database["public"]["Enums"]["subscription_tier"]
+          trial_end: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          billing_interval?: string | null
+          cancel_at_period_end?: boolean | null
+          created_at?: string
+          current_period_end?: string | null
+          current_period_start?: string | null
+          grace_period_end?: string | null
+          id?: string
+          status?: Database["public"]["Enums"]["subscription_status"]
+          stripe_customer_id?: string | null
+          stripe_subscription_id?: string | null
+          tier?: Database["public"]["Enums"]["subscription_tier"]
+          trial_end?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          billing_interval?: string | null
+          cancel_at_period_end?: boolean | null
+          created_at?: string
+          current_period_end?: string | null
+          current_period_start?: string | null
+          grace_period_end?: string | null
+          id?: string
+          status?: Database["public"]["Enums"]["subscription_status"]
+          stripe_customer_id?: string | null
+          stripe_subscription_id?: string | null
+          tier?: Database["public"]["Enums"]["subscription_tier"]
+          trial_end?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       system_logs: {
         Row: {
           created_at: string
@@ -479,6 +652,45 @@ export type Database = {
           trade_type?: string
           tx_hash?: string | null
           user_id?: string
+        }
+        Relationships: []
+      }
+      usage_logs: {
+        Row: {
+          api_intensive_count: number
+          auto_executions_count: number
+          clustering_calls_count: number
+          created_at: string
+          id: string
+          rpc_simulations_count: number
+          updated_at: string
+          usage_date: string
+          user_id: string
+          validations_count: number
+        }
+        Insert: {
+          api_intensive_count?: number
+          auto_executions_count?: number
+          clustering_calls_count?: number
+          created_at?: string
+          id?: string
+          rpc_simulations_count?: number
+          updated_at?: string
+          usage_date?: string
+          user_id: string
+          validations_count?: number
+        }
+        Update: {
+          api_intensive_count?: number
+          auto_executions_count?: number
+          clustering_calls_count?: number
+          created_at?: string
+          id?: string
+          rpc_simulations_count?: number
+          updated_at?: string
+          usage_date?: string
+          user_id?: string
+          validations_count?: number
         }
         Relationships: []
       }
@@ -586,6 +798,7 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      get_subscription_with_usage: { Args: { _user_id: string }; Returns: Json }
       get_user_role: {
         Args: { _user_id: string }
         Returns: Database["public"]["Enums"]["app_role"]
@@ -596,6 +809,10 @@ export type Database = {
           _user_id: string
         }
         Returns: boolean
+      }
+      increment_usage: {
+        Args: { _amount?: number; _field: string; _user_id: string }
+        Returns: number
       }
     }
     Enums: {
@@ -611,8 +828,18 @@ export type Database = {
         | "rpc_provider"
         | "raydium"
       app_role: "admin" | "user"
+      coupon_discount_type: "percent" | "flat"
+      coupon_duration: "once" | "three_months" | "lifetime"
       position_status: "open" | "closed" | "pending"
       sniping_priority: "normal" | "fast" | "turbo"
+      subscription_status:
+        | "active"
+        | "trialing"
+        | "past_due"
+        | "canceled"
+        | "unpaid"
+        | "expired"
+      subscription_tier: "free" | "pro" | "elite"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -753,8 +980,19 @@ export const Constants = {
         "raydium",
       ],
       app_role: ["admin", "user"],
+      coupon_discount_type: ["percent", "flat"],
+      coupon_duration: ["once", "three_months", "lifetime"],
       position_status: ["open", "closed", "pending"],
       sniping_priority: ["normal", "fast", "turbo"],
+      subscription_status: [
+        "active",
+        "trialing",
+        "past_due",
+        "canceled",
+        "unpaid",
+        "expired",
+      ],
+      subscription_tier: ["free", "pro", "elite"],
     },
   },
 } as const

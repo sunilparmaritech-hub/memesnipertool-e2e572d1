@@ -9,6 +9,7 @@ import SnipeHistoryTable from "@/components/dashboard/SnipeHistoryTable";
 import RiskExposureChart from "@/components/dashboard/RiskExposureChart";
 import AlertCenter from "@/components/dashboard/AlertCenter";
 import SolTradesBanner from "@/components/dashboard/SolTradesBanner";
+import SubscriptionBanner from "@/components/subscription/SubscriptionBanner";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -123,6 +124,9 @@ function Index() {
             </AlertDescription>
           </Alert>
         )}
+
+        {/* Subscription Banner */}
+        <SubscriptionBanner />
 
         {/* SOL Trades Banner - Informational */}
         <SolTradesBanner />

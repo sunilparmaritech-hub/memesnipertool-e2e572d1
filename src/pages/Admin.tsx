@@ -27,6 +27,7 @@ import {
 import { toast } from "sonner";
 import { ApiSettingsModule } from "@/components/admin/ApiSettingsModule";
 import { UserManagementPanel } from "@/components/admin/UserManagementPanel";
+import SubscriptionDashboard from "@/components/admin/SubscriptionDashboard";
 
 const Admin = forwardRef<HTMLDivElement, object>(function Admin(_props, ref) {
   const { isAdmin, user } = useAuth();
@@ -90,6 +91,7 @@ const Admin = forwardRef<HTMLDivElement, object>(function Admin(_props, ref) {
 
   const tabs = [
     { id: "api", label: "API Settings", icon: Key },
+    { id: "subscriptions", label: "Subscriptions", icon: Crown },
     { id: "scanner", label: "Market Scanner", icon: Search },
     { id: "liquidity", label: "Liquidity Rules", icon: Droplets },
     { id: "risk", label: "Risk Filters", icon: AlertTriangle },
@@ -170,6 +172,13 @@ const Admin = forwardRef<HTMLDivElement, object>(function Admin(_props, ref) {
                 {activeTab === "api" && (
                   <div className="animate-fade-in">
                     <ApiSettingsModule />
+                  </div>
+                )}
+
+                {/* Subscriptions Tab */}
+                {activeTab === "subscriptions" && (
+                  <div className="animate-fade-in">
+                    <SubscriptionDashboard />
                   </div>
                 )}
 

@@ -39,6 +39,7 @@ import { useBotContext } from "@/contexts/BotContext";
 import { useDisplayUnit } from "@/contexts/DisplayUnitContext";
 
 import { reconcilePositionsWithPools } from "@/lib/positionMetadataReconciler";
+import TierGate from "@/components/subscription/TierGate";
 import { fetchDexScreenerTokenMetadata } from "@/lib/dexscreener";
 import { isPlaceholderText } from "@/lib/formatters";
 import { Wallet, TrendingUp, Zap, Activity, AlertTriangle, X, FlaskConical, Coins, RotateCcw, DollarSign } from "lucide-react";
@@ -1817,23 +1818,25 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
 
             {/* Right Column - Bot Settings, Performance, API Health, Trade Signals, Recovery */}
             <div className="space-y-3 order-1 lg:order-2">
-              {/* Bot Settings Panel */}
-              <LiquidityBotPanel
-                settings={settings}
-                saving={saving}
-                onUpdateField={updateField}
-                onSave={handleSaveSettings}
-                isActive={isBotActive}
-                onToggleActive={handleToggleBotActiveWithConfirm}
-                autoEntryEnabled={autoEntryEnabled}
-                onAutoEntryChange={toggleAutoEntry}
-                autoExitEnabled={autoExitEnabled}
-                onAutoExitChange={toggleAutoExit}
-                isDemo={isDemo}
-                walletConnected={wallet.isConnected && wallet.network === 'solana'}
-                walletAddress={wallet.address}
-                walletBalance={wallet.balance}
-              />
+              {/* Bot Settings Panel - Auto trading requires Pro */}
+              <TierGate feature="autoTrading" overlay>
+                <LiquidityBotPanel
+                  settings={settings}
+                  saving={saving}
+                  onUpdateField={updateField}
+                  onSave={handleSaveSettings}
+                  isActive={isBotActive}
+                  onToggleActive={handleToggleBotActiveWithConfirm}
+                  autoEntryEnabled={autoEntryEnabled}
+                  onAutoEntryChange={toggleAutoEntry}
+                  autoExitEnabled={autoExitEnabled}
+                  onAutoExitChange={toggleAutoExit}
+                  isDemo={isDemo}
+                  walletConnected={wallet.isConnected && wallet.network === 'solana'}
+                  walletAddress={wallet.address}
+                  walletBalance={wallet.balance}
+                />
+              </TierGate>
 
               {/* Performance Panel with donut chart */}
               <PerformancePanel
@@ -1851,26 +1854,32 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
               <ApiHealthWidget isDemo={isDemo} />
 
               {/* Trade Signals - Live mode only */}
-              {!isDemo && <TradeSignalPanel />}
+              {!isDemo && (
+                <TierGate feature="earlyTrustMode" overlay>
+                  <TradeSignalPanel />
+                </TierGate>
+              )}
 
               {/* Recovery Controls */}
               {!isDemo && (
-                <RecoveryControls
-                  onForceScan={handleForceScan}
-                  onForceEvaluate={handleForceEvaluate}
-                  onClearProcessed={handleClearProcessed}
-                  onResetBot={handleResetBot}
-                  onCleanupStuck={handleCleanupStuckPositions}
-                  onSyncPositions={handleSyncPositions}
-                  scanning={loading}
-                  evaluating={sniperLoading}
-                  cleaningUp={cleaningUpPositions}
-                  syncingPositions={syncingPositions}
-                  processedCount={processedTokensRef.current.size}
-                  stuckPositionsCount={realOpenPositions.filter(p => p.status === 'open' || p.status === 'pending').length}
-                  openPositionsCount={realOpenPositions.length}
-                  botActive={isBotActive}
-                />
+                <TierGate requiredTier="pro" overlay>
+                  <RecoveryControls
+                    onForceScan={handleForceScan}
+                    onForceEvaluate={handleForceEvaluate}
+                    onClearProcessed={handleClearProcessed}
+                    onResetBot={handleResetBot}
+                    onCleanupStuck={handleCleanupStuckPositions}
+                    onSyncPositions={handleSyncPositions}
+                    scanning={loading}
+                    evaluating={sniperLoading}
+                    cleaningUp={cleaningUpPositions}
+                    syncingPositions={syncingPositions}
+                    processedCount={processedTokensRef.current.size}
+                    stuckPositionsCount={realOpenPositions.filter(p => p.status === 'open' || p.status === 'pending').length}
+                    openPositionsCount={realOpenPositions.length}
+                    botActive={isBotActive}
+                  />
+                </TierGate>
               )}
             </div>
           </div>

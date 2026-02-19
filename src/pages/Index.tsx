@@ -5,6 +5,7 @@ import PerformanceStatsRow from "@/components/dashboard/PerformanceStatsRow";
 import BotPerformancePanel from "@/components/dashboard/BotPerformancePanel";
 import TokenPerformanceMatrix from "@/components/dashboard/TokenPerformanceMatrix";
 import IntelligencePanels from "@/components/dashboard/IntelligencePanels";
+import TierGate from "@/components/subscription/TierGate";
 import SnipeHistoryTable from "@/components/dashboard/SnipeHistoryTable";
 import RiskExposureChart from "@/components/dashboard/RiskExposureChart";
 import AlertCenter from "@/components/dashboard/AlertCenter";
@@ -163,7 +164,9 @@ function Index() {
         {/* Token Performance Matrix + Intelligence Panels */}
         <div className="grid gap-3 lg:grid-cols-[1fr_280px]">
           <TokenPerformanceMatrix positions={allPositions} />
-          <IntelligencePanels />
+          <TierGate feature="walletIntelligence" overlay>
+            <IntelligencePanels />
+          </TierGate>
         </div>
 
         {/* Bottom Section: Snipe History, Risk Chart, Alert Center */}

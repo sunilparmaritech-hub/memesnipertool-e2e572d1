@@ -13,6 +13,7 @@ import {
   Crown,
   BarChart3,
 } from "lucide-react";
+import headerLogo from "@/assets/header-logo.png";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import {
@@ -83,15 +84,8 @@ const TradingHeader = forwardRef<HTMLElement, TradingHeaderProps>(function Tradi
       <div className="container mx-auto px-4">
         <div className="flex items-center justify-between h-14">
           {/* Logo */}
-          <Link to="/" className="flex items-center gap-2 shrink-0 group">
-            <div className="relative p-1.5 rounded-lg bg-primary/10 group-hover:bg-primary/20 transition-colors">
-              <Zap className="w-5 h-5 text-primary" />
-            </div>
-            <span className="text-base font-bold hidden sm:block">
-              <span className="text-primary">Meme</span>
-              <span className="text-foreground">Sniper</span>
-              <span className="text-[10px] text-muted-foreground ml-1 font-normal">AI</span>
-            </span>
+          <Link to="/" className="flex items-center shrink-0">
+            <img src={headerLogo} alt="MemeSniper AI" className="h-8 sm:h-10 w-auto" />
           </Link>
 
           {/* Desktop Navigation */}

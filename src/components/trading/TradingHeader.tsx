@@ -85,7 +85,7 @@ const TradingHeader = forwardRef<HTMLElement, TradingHeaderProps>(function Tradi
         <div className="flex items-center justify-between h-14">
           {/* Logo */}
           <Link to="/" className="flex items-center shrink-0">
-            <img src={headerLogo} alt="MemeSniper AI" className="h-7 sm:h-9 w-auto max-w-[180px] sm:max-w-[220px] object-contain" />
+            <img src={headerLogo} alt="MemeSniper AI" className="h-14 sm:h-[72px] w-auto max-w-[360px] sm:max-w-[440px] object-contain" />
           </Link>
 
           {/* Desktop Navigation */}

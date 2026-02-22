@@ -26,6 +26,7 @@ import NotFound from "./pages/NotFound";
 import Notifications from "./pages/Notifications";
 import TokenDetail from "./pages/TokenDetail";
 import Pricing from "./pages/Pricing";
+import Promotion from "./pages/Promotion";
 const queryClient = new QueryClient();
 
 const App = () => (
@@ -126,6 +127,7 @@ const App = () => (
                 </ProtectedRoute>
               }
             />
+            <Route path="/promotion" element={<Promotion />} />
             <Route path="*" element={<NotFound />} />
             </Routes>
             </ErrorBoundary>

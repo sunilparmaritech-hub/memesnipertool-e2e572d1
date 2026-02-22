@@ -3,7 +3,8 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Zap, Mail, Lock, AlertCircle, CheckCircle, ArrowLeft, Loader2 } from "lucide-react";
+import { Mail, Lock, AlertCircle, CheckCircle, ArrowLeft, Loader2 } from "lucide-react";
+import headerLogo from "@/assets/header-logo.png";
 import { z } from "zod";
 import { supabase } from "@/integrations/supabase/client";
 
@@ -188,17 +189,7 @@ const Auth = forwardRef<HTMLDivElement, object>(function Auth(_props, ref) {
 
         <div className="w-full max-w-md relative animate-fade-in">
           <div className="text-center mb-8">
-            <div className="inline-flex items-center gap-2 mb-4">
-              <div className="relative">
-                <Zap className="w-10 h-10 text-primary animate-pulse" />
-                <div className="absolute inset-0 blur-lg bg-primary/30" />
-              </div>
-              <span className="text-2xl font-bold">
-                <span className="text-gradient">Meme</span>
-                <span className="text-foreground">Sniper</span>
-                <span className="text-gradient-accent ml-1">AI</span>
-              </span>
-            </div>
+          <img src={headerLogo} alt="Alpha MemeSniper AI" className="h-[54px] sm:h-[72px] w-auto max-w-[330px] sm:max-w-[440px] object-contain mx-auto mb-2" />
             <Skeleton className="h-8 w-48 mx-auto mb-2" />
             <Skeleton className="h-4 w-64 mx-auto" />
           </div>
@@ -222,17 +213,7 @@ const Auth = forwardRef<HTMLDivElement, object>(function Auth(_props, ref) {
       <div className="w-full max-w-md relative animate-fade-in">
         {/* Logo */}
         <div className="text-center mb-8">
-          <div className="inline-flex items-center gap-2 mb-4">
-            <div className="relative">
-              <Zap className="w-10 h-10 text-primary" />
-              <div className="absolute inset-0 blur-lg bg-primary/30" />
-            </div>
-            <span className="text-2xl font-bold">
-              <span className="text-gradient">Meme</span>
-              <span className="text-foreground">Sniper</span>
-              <span className="text-gradient-accent ml-1">AI</span>
-            </span>
-          </div>
+          <img src={headerLogo} alt="Alpha MemeSniper AI" className="h-[54px] sm:h-[72px] w-auto max-w-[330px] sm:max-w-[440px] object-contain mx-auto mb-2" />
           <h1 className="text-2xl font-bold text-foreground mb-2">
             {getTitle()}
           </h1>

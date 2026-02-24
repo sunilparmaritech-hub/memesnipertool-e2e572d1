@@ -12,6 +12,7 @@ import {
   Settings,
   Crown,
   BarChart3,
+  Coins,
 } from "lucide-react";
 import headerLogo from "@/assets/header-logo.png";
 import { Link, useLocation, useNavigate } from "react-router-dom";
@@ -26,6 +27,7 @@ import {
 import NotificationBell from "@/components/notifications/NotificationBell";
 import WalletConnectionModal from "@/components/wallet/WalletConnectionModal";
 import ModeSwitcher from "@/components/mode/ModeSwitcher";
+import { useCredits } from "@/contexts/CreditContext";
 
 interface TradingHeaderProps {
   walletConnected?: boolean;

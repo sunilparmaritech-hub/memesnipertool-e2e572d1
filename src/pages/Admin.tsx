@@ -2,6 +2,7 @@ import React, { forwardRef, useState, useEffect } from "react";
 import AppLayout from "@/components/layout/AppLayout";
 import { useWallet } from "@/hooks/useWallet";
 import { Button } from "@/components/ui/button";
+import PaymentSettingsPanel from "@/components/admin/PaymentSettingsPanel";
 import { useAuth } from "@/contexts/AuthContext";
 import { useAdminSettings } from "@/hooks/useAdminSettings";
 import {

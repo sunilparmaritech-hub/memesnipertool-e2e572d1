@@ -92,6 +92,7 @@ const Admin = forwardRef<HTMLDivElement, object>(function Admin(_props, ref) {
 
   const tabs = [
     { id: "api", label: "API Settings", icon: Key },
+    { id: "payments", label: "Payment & Credits", icon: Crown },
     { id: "subscriptions", label: "Subscriptions", icon: Crown },
     { id: "scanner", label: "Market Scanner", icon: Search },
     { id: "liquidity", label: "Liquidity Rules", icon: Droplets },

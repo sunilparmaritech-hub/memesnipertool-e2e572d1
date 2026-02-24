@@ -49,6 +49,7 @@ const TradingHeader = forwardRef<HTMLElement, TradingHeaderProps>(function Tradi
   onConnectWallet,
 }, ref) {
   const { user, isAdmin, signOut } = useAuth();
+  const { credits } = useCredits();
   const navigate = useNavigate();
   const location = useLocation();
 

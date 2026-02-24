@@ -12,6 +12,7 @@ import {
   Settings,
   Crown,
   BarChart3,
+  Coins,
 } from "lucide-react";
 import headerLogo from "@/assets/header-logo.png";
 import { Link, useLocation, useNavigate } from "react-router-dom";
@@ -26,6 +27,7 @@ import {
 import NotificationBell from "@/components/notifications/NotificationBell";
 import WalletConnectionModal from "@/components/wallet/WalletConnectionModal";
 import ModeSwitcher from "@/components/mode/ModeSwitcher";
+import { useCredits } from "@/contexts/CreditContext";
 
 interface TradingHeaderProps {
   walletConnected?: boolean;
@@ -47,6 +49,7 @@ const TradingHeader = forwardRef<HTMLElement, TradingHeaderProps>(function Tradi
   onConnectWallet,
 }, ref) {
   const { user, isAdmin, signOut } = useAuth();
+  const { credits } = useCredits();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -112,6 +115,13 @@ const TradingHeader = forwardRef<HTMLElement, TradingHeaderProps>(function Tradi
           
           {/* Right Side Actions */}
           <div className="flex items-center gap-2">
+            {/* Credit Balance */}
+            <Link to="/pricing" className="hidden sm:flex">
+              <Badge variant="outline" className="items-center gap-1.5 px-2.5 py-1 bg-primary/5 border-primary/20 hover:bg-primary/10 transition-colors cursor-pointer">
+                <Coins className="w-3 h-3 text-primary" />
+                <span className="text-xs font-bold text-primary">{credits.credit_balance.toLocaleString()}</span>
+              </Badge>
+            </Link>
             {/* Mode Switcher */}
             <ModeSwitcher />
             

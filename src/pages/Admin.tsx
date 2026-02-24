@@ -2,6 +2,7 @@ import React, { forwardRef, useState, useEffect } from "react";
 import AppLayout from "@/components/layout/AppLayout";
 import { useWallet } from "@/hooks/useWallet";
 import { Button } from "@/components/ui/button";
+import PaymentSettingsPanel from "@/components/admin/PaymentSettingsPanel";
 import { useAuth } from "@/contexts/AuthContext";
 import { useAdminSettings } from "@/hooks/useAdminSettings";
 import {
@@ -91,6 +92,7 @@ const Admin = forwardRef<HTMLDivElement, object>(function Admin(_props, ref) {
 
   const tabs = [
     { id: "api", label: "API Settings", icon: Key },
+    { id: "payments", label: "Payment & Credits", icon: Crown },
     { id: "subscriptions", label: "Subscriptions", icon: Crown },
     { id: "scanner", label: "Market Scanner", icon: Search },
     { id: "liquidity", label: "Liquidity Rules", icon: Droplets },
@@ -172,6 +174,13 @@ const Admin = forwardRef<HTMLDivElement, object>(function Admin(_props, ref) {
                 {activeTab === "api" && (
                   <div className="animate-fade-in">
                     <ApiSettingsModule />
+                  </div>
+                )}
+
+                {/* Payment & Credits Tab */}
+                {activeTab === "payments" && (
+                  <div className="animate-fade-in">
+                    <PaymentSettingsPanel />
                   </div>
                 )}
 

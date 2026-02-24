@@ -115,6 +115,13 @@ const TradingHeader = forwardRef<HTMLElement, TradingHeaderProps>(function Tradi
           
           {/* Right Side Actions */}
           <div className="flex items-center gap-2">
+            {/* Credit Balance */}
+            <Link to="/pricing" className="hidden sm:flex">
+              <Badge variant="outline" className="items-center gap-1.5 px-2.5 py-1 bg-primary/5 border-primary/20 hover:bg-primary/10 transition-colors cursor-pointer">
+                <Coins className="w-3 h-3 text-primary" />
+                <span className="text-xs font-bold text-primary">{credits.credit_balance.toLocaleString()}</span>
+              </Badge>
+            </Link>
             {/* Mode Switcher */}
             <ModeSwitcher />
             

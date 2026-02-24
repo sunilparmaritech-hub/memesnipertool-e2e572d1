@@ -283,6 +283,134 @@ export type Database = {
           },
         ]
       }
+      credit_packs: {
+        Row: {
+          badge: string | null
+          bonus_credits: number
+          created_at: string
+          credits: number
+          description: string | null
+          features: Json | null
+          id: string
+          is_active: boolean
+          name: string
+          sol_price: number
+          sort_order: number
+          updated_at: string
+        }
+        Insert: {
+          badge?: string | null
+          bonus_credits?: number
+          created_at?: string
+          credits: number
+          description?: string | null
+          features?: Json | null
+          id?: string
+          is_active?: boolean
+          name: string
+          sol_price: number
+          sort_order?: number
+          updated_at?: string
+        }
+        Update: {
+          badge?: string | null
+          bonus_credits?: number
+          created_at?: string
+          credits?: number
+          description?: string | null
+          features?: Json | null
+          id?: string
+          is_active?: boolean
+          name?: string
+          sol_price?: number
+          sort_order?: number
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      credit_transactions: {
+        Row: {
+          amount_sol: number
+          confirmed_at: string | null
+          created_at: string
+          credits_added: number
+          id: string
+          memo: string | null
+          pack_id: string | null
+          sender_wallet: string | null
+          status: Database["public"]["Enums"]["credit_tx_status"]
+          tx_hash: string | null
+          updated_at: string
+          usd_value_at_payment: number | null
+          user_id: string
+        }
+        Insert: {
+          amount_sol: number
+          confirmed_at?: string | null
+          created_at?: string
+          credits_added?: number
+          id?: string
+          memo?: string | null
+          pack_id?: string | null
+          sender_wallet?: string | null
+          status?: Database["public"]["Enums"]["credit_tx_status"]
+          tx_hash?: string | null
+          updated_at?: string
+          usd_value_at_payment?: number | null
+          user_id: string
+        }
+        Update: {
+          amount_sol?: number
+          confirmed_at?: string | null
+          created_at?: string
+          credits_added?: number
+          id?: string
+          memo?: string | null
+          pack_id?: string | null
+          sender_wallet?: string | null
+          status?: Database["public"]["Enums"]["credit_tx_status"]
+          tx_hash?: string | null
+          updated_at?: string
+          usd_value_at_payment?: number | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "credit_transactions_pack_id_fkey"
+            columns: ["pack_id"]
+            isOneToOne: false
+            referencedRelation: "credit_packs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      credit_usage_log: {
+        Row: {
+          action_type: string
+          created_at: string
+          credits_used: number
+          id: string
+          reference_id: string | null
+          user_id: string
+        }
+        Insert: {
+          action_type: string
+          created_at?: string
+          credits_used: number
+          id?: string
+          reference_id?: string | null
+          user_id: string
+        }
+        Update: {
+          action_type?: string
+          created_at?: string
+          credits_used?: number
+          id?: string
+          reference_id?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
       disclaimer_acknowledgments: {
         Row: {
           acknowledged_at: string
@@ -724,6 +852,36 @@ export type Database = {
         }
         Relationships: []
       }
+      user_credits: {
+        Row: {
+          created_at: string
+          credit_balance: number
+          id: string
+          total_credits_purchased: number
+          total_credits_used: number
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          credit_balance?: number
+          id?: string
+          total_credits_purchased?: number
+          total_credits_used?: number
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          credit_balance?: number
+          id?: string
+          total_credits_purchased?: number
+          total_credits_used?: number
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       user_roles: {
         Row: {
           created_at: string
@@ -798,6 +956,19 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      add_credits: {
+        Args: { _amount: number; _tx_id?: string; _user_id: string }
+        Returns: Json
+      }
+      deduct_credits: {
+        Args: {
+          _action_type: string
+          _amount: number
+          _reference_id?: string
+          _user_id: string
+        }
+        Returns: Json
+      }
       get_subscription_with_usage: { Args: { _user_id: string }; Returns: Json }
       get_user_role: {
         Args: { _user_id: string }
@@ -830,6 +1001,7 @@ export type Database = {
       app_role: "admin" | "user"
       coupon_discount_type: "percent" | "flat"
       coupon_duration: "once" | "three_months" | "lifetime"
+      credit_tx_status: "pending" | "confirmed" | "failed" | "expired"
       position_status: "open" | "closed" | "pending"
       sniping_priority: "normal" | "fast" | "turbo"
       subscription_status:
@@ -982,6 +1154,7 @@ export const Constants = {
       app_role: ["admin", "user"],
       coupon_discount_type: ["percent", "flat"],
       coupon_duration: ["once", "three_months", "lifetime"],
+      credit_tx_status: ["pending", "confirmed", "failed", "expired"],
       position_status: ["open", "closed", "pending"],
       sniping_priority: ["normal", "fast", "turbo"],
       subscription_status: [

@@ -20,7 +20,7 @@ export default function BuyCreditsModal({ trigger }: BuyCreditsModalProps) {
   const { packs, refreshCredits } = useCredits();
   const { wallet } = useWallet();
   const { user } = useAuth();
-  const { solPrice } = useSolPrice();
+  const { price: solPrice } = useSolPrice();
   const { toast } = useToast();
   const [selectedPack, setSelectedPack] = useState<CreditPack | null>(null);
   const [processing, setProcessing] = useState(false);

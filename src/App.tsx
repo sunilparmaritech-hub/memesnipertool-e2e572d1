@@ -11,7 +11,7 @@ import { DisplayUnitProvider } from "@/contexts/DisplayUnitContext";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { SessionExpiryWarning } from "@/components/session/SessionExpiryWarning";
 import { OfflineIndicator } from "@/components/OfflineIndicator";
-import { SubscriptionProvider } from "@/contexts/SubscriptionContext";
+import { CreditProvider } from "@/contexts/CreditContext";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import Index from "./pages/Index";
 import Scanner from "./pages/Scanner";
@@ -40,98 +40,28 @@ const App = () => (
         <Sonner />
         <BrowserRouter>
           <AuthProvider>
-            <SubscriptionProvider>
+            <CreditProvider>
             <SessionExpiryWarning />
             <OfflineIndicator />
             <ErrorBoundary>
             <Routes>
             <Route path="/auth" element={<Auth />} />
             <Route path="/pricing" element={<ProtectedRoute><Pricing /></ProtectedRoute>} />
-            <Route
-              path="/"
-              element={
-                <ProtectedRoute>
-                  <Index />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/scanner"
-              element={
-                <ProtectedRoute>
-                  <Scanner />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/portfolio"
-              element={
-                <ProtectedRoute>
-                  <Portfolio />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/settings"
-              element={
-                <ProtectedRoute>
-                  <UserSettings />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/sniper-settings"
-              element={
-                <ProtectedRoute>
-                  <MemeSniperSettings />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/risk"
-              element={
-                <ProtectedRoute>
-                  <RiskCompliance />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/notifications"
-              element={
-                <ProtectedRoute>
-                  <Notifications />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/admin"
-              element={
-                <ProtectedRoute requireAdmin>
-                  <Admin />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/admin/analytics"
-              element={
-                <ProtectedRoute requireAdmin>
-                  <AdminAnalytics />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/token/:address"
-              element={
-                <ProtectedRoute>
-                  <TokenDetail />
-                </ProtectedRoute>
-              }
-            />
+            <Route path="/" element={<ProtectedRoute><Index /></ProtectedRoute>} />
+            <Route path="/scanner" element={<ProtectedRoute><Scanner /></ProtectedRoute>} />
+            <Route path="/portfolio" element={<ProtectedRoute><Portfolio /></ProtectedRoute>} />
+            <Route path="/settings" element={<ProtectedRoute><UserSettings /></ProtectedRoute>} />
+            <Route path="/sniper-settings" element={<ProtectedRoute><MemeSniperSettings /></ProtectedRoute>} />
+            <Route path="/risk" element={<ProtectedRoute><RiskCompliance /></ProtectedRoute>} />
+            <Route path="/notifications" element={<ProtectedRoute><Notifications /></ProtectedRoute>} />
+            <Route path="/admin" element={<ProtectedRoute requireAdmin><Admin /></ProtectedRoute>} />
+            <Route path="/admin/analytics" element={<ProtectedRoute requireAdmin><AdminAnalytics /></ProtectedRoute>} />
+            <Route path="/token/:address" element={<ProtectedRoute><TokenDetail /></ProtectedRoute>} />
             <Route path="/promotion" element={<Promotion />} />
             <Route path="*" element={<NotFound />} />
             </Routes>
             </ErrorBoundary>
-            </SubscriptionProvider>
+            </CreditProvider>
           </AuthProvider>
         </BrowserRouter>
             </BotProvider>

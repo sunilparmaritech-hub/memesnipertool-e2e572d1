@@ -177,6 +177,13 @@ const Admin = forwardRef<HTMLDivElement, object>(function Admin(_props, ref) {
                   </div>
                 )}
 
+                {/* Payment & Credits Tab */}
+                {activeTab === "payments" && (
+                  <div className="animate-fade-in">
+                    <PaymentSettingsPanel />
+                  </div>
+                )}
+
                 {/* Subscriptions Tab */}
                 {activeTab === "subscriptions" && (
                   <div className="animate-fade-in">

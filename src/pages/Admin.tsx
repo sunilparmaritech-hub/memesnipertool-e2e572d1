@@ -31,6 +31,7 @@ import { UserManagementPanel } from "@/components/admin/UserManagementPanel";
 import { TransactionAuditPanel } from "@/components/admin/TransactionAuditPanel";
 import { SubscriptionManagementPanel } from "@/components/admin/SubscriptionManagementPanel";
 import { PaymentSettingsPanel } from "@/components/admin/PaymentSettingsPanel";
+import { RuleWeightsPanel } from "@/components/admin/RuleWeightsPanel";
 
 const Admin = forwardRef<HTMLDivElement, object>(function Admin(_props, ref) {
   const { isAdmin, user } = useAuth();

@@ -431,19 +431,20 @@ export async function calculateRugProbability(
     breakdown.buyerDistribution.contribution
   );
   
-  // Determine risk level based on updated thresholds
-  // < 40% = SAFE (trade)
-  // 40-55% = OBSERVE (warn but allow)
-  // >= 55% = BLOCK
+  // Determine risk level — new probabilistic thresholds:
+  // < 40% = SAFE (full trade)
+  // 40–54% = OBSERVE (warn, allow with normal size)
+  // 55–69% = REDUCED SIZE (allow but penalise position size)
+  // >= 70% = HARD BLOCK
   let riskLevel: RugProbabilityResult['riskLevel'];
   if (rugProbability < 40) {
-    riskLevel = 'LOW';      // SAFE - can trade
+    riskLevel = 'LOW';      // SAFE
   } else if (rugProbability < 55) {
-    riskLevel = 'MEDIUM';   // OBSERVE - warn but allow
-  } else if (rugProbability < 75) {
-    riskLevel = 'HIGH';     // BLOCK
+    riskLevel = 'MEDIUM';   // OBSERVE
+  } else if (rugProbability < 70) {
+    riskLevel = 'HIGH';     // REDUCED SIZE
   } else {
-    riskLevel = 'CRITICAL'; // BLOCK - extreme risk
+    riskLevel = 'CRITICAL'; // HARD BLOCK
   }
   
   // Generate warnings

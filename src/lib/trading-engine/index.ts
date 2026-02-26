@@ -112,3 +112,124 @@ export {
   executeExit,
 } from './controller';
 export type { TradingFlowOptions } from './controller';
+
+// Pre-Execution Gate (CRITICAL SAFETY LAYER)
+export {
+  preExecutionGate,
+  simulateJupiterSell,
+  batchPreExecutionGate,
+  filterExecutableTokens,
+  updateTokenState,
+  fetchLiquidityThresholds,
+  getMinLiquidityForMode,
+  DEFAULT_LIQUIDITY_THRESHOLDS,
+} from '../preExecutionGate';
+export type { 
+  PreExecutionGateInput, 
+  GateDecision, 
+  GateRuleResult,
+  GateActivityLogEntry,
+} from '../preExecutionGate';
+
+// Deployer Reputation (RUG DETECTION)
+export {
+  checkDeployerReputation,
+  calculateReputationScore,
+  getDeployerReputation,
+  recordTokenDeployment,
+  recordRugPull,
+  recordSuccessfulToken,
+  updateDeployerReputationOnClose,
+  loadKnownClusters,
+} from '../deployerReputation';
+export type {
+  DeployerReputationData,
+  DeployerCheckResult,
+} from '../deployerReputation';
+
+// Liquidity Monitor (REAL-TIME STABILITY CHECK)
+export {
+  startLiquidityMonitoring,
+  addLiquiditySnapshot,
+  recordTransaction,
+  recordLpWithdrawal,
+  stopMonitoring,
+  isBeingMonitored,
+  getMonitoringResult,
+  runFullMonitoringCycle,
+  quickLiquidityCheck,
+  checkLiquidityStability,
+  cleanupExpiredSessions,
+  getActiveSessionCount,
+} from '../liquidityMonitor';
+export type {
+  LiquiditySnapshot,
+  VolumeByWallet,
+  LiquidityMonitorResult,
+  MonitoringSession,
+} from '../liquidityMonitor';
+
+// SOL Delta Parser (DUAL-RPC VALIDATION + INSTITUTIONAL GRADE)
+export {
+  parseSolDelta,
+  verifyDeltaWithBalance,
+  shouldBlockPnlCalculation,
+  getPreTradeBalanceSnapshot,
+  hasIntegrityWarnings,
+  getIntegritySummary,
+} from '../solDeltaParser';
+export type {
+  SolDeltaResult,
+  DeltaExtractionInput,
+  IntegrityFlags,
+  DeltaBreakdown,
+} from '../solDeltaParser';
+
+// Sell Tax Detector (HIDDEN TAX DETECTION)
+export {
+  detectHiddenSellTax,
+  checkSellTax,
+  batchCheckSellTax,
+  HIDDEN_TAX_THRESHOLD,
+  HIGH_TAX_THRESHOLD,
+  MODERATE_TAX_THRESHOLD,
+} from '../sellTaxDetector';
+export type {
+  SellTaxDetectionResult,
+  SellTaxCheckInput,
+} from '../sellTaxDetector';
+
+// Rug Probability Calculator (MULTI-FACTOR RUG DETECTION)
+export {
+  calculateRugProbability,
+  quickRugCheck,
+  checkRugProbability,
+  RUG_PROBABILITY_BLOCK_THRESHOLD,
+  RUG_PROBABILITY_WEIGHTS,
+  LIQUIDITY_FDV_THRESHOLDS,
+  HOLDER_THRESHOLDS,
+} from '../rugProbability';
+export type {
+  RugProbabilityInput,
+  RugFactorBreakdown,
+  RugProbabilityResult,
+} from '../rugProbability';
+
+// Holder Entropy Calculator (DISTRIBUTION ANALYSIS)
+export {
+  calculateHolderEntropy,
+  checkHolderEntropy,
+  calculateEntropyFromBalances,
+  formatEntropyScore,
+  getEntropyRiskColor,
+  calculateShannonEntropy,
+  calculateGiniCoefficient,
+  calculateHerfindahlIndex,
+  ENTROPY_THRESHOLDS,
+  CONCENTRATION_THRESHOLDS,
+} from '../holderEntropy';
+export type {
+  HolderData,
+  EntropyResult,
+  EntropyDetails,
+} from '../holderEntropy';

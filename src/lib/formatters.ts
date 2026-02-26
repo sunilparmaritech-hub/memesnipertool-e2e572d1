@@ -1,89 +1,97 @@
 /**
  * Unified formatting utilities for P&L, percentages, and currency values
  * Use these throughout the app for consistent display
+ * 
+ * CRITICAL: Financial-grade precision handling
+ * - No hidden scaling (/1000 or *1000)
+ * - No artificial truncation
+ * - Preserves significant digits for small values
  */
 
+import {
+  formatPreciseUsd,
+  formatPreciseSol,
+  formatTokenPrice as formatPrecisePrice,
+  type FormatPrecisionOptions,
+} from './precision';
+
 /**
- * Format percentage value with consistent 2 decimal places and +/- sign
+ * Format percentage value with adaptive decimal places based on magnitude
  * @param value - The percentage value
  * @param showSign - Whether to show +/- sign (default true)
  * @returns Formatted string like "+12.34%" or "-5.00%"
  */
 export function formatPercentage(value: number | null | undefined, showSign = true): string {
   const num = value ?? 0;
+  if (!Number.isFinite(num)) return showSign ? '+0.00%' : '0.00%';
+  
   const sign = showSign && num >= 0 ? '+' : '';
-  return `${sign}${num.toFixed(2)}%`;
+  const absValue = Math.abs(num);
+  
+  // Adaptive decimals based on magnitude
+  let decimals: number;
+  if (absValue >= 1000) {
+    decimals = 0;
+  } else if (absValue >= 100) {
+    decimals = 1;
+  } else if (absValue >= 1) {
+    decimals = 2;
+  } else if (absValue >= 0.01) {
+    decimals = 3;
+  } else if (absValue > 0) {
+    decimals = 4;
+  } else {
+    decimals = 2;
+  }
+  
+  return `${sign}${num.toFixed(decimals)}%`;
 }
 
 /**
  * Format currency value with appropriate precision
- * Enhanced for accurate small value display in P&L
+ * CRITICAL: Preserves significant digits for small values - no artificial truncation
  * @param value - The dollar value
  * @param showSign - Whether to show +/- sign (default true)
  * @returns Formatted string like "+$12.34" or "-$5.00"
  */
 export function formatCurrency(value: number | null | undefined, showSign = true): string {
-  const num = value ?? 0;
-  const sign = showSign && num >= 0 ? '+' : '';
-  const absValue = Math.abs(num);
-  
-  if (absValue >= 1000000) {
-    return `${sign}$${(num / 1000000).toFixed(2)}M`;
-  }
-  if (absValue >= 1000) {
-    return `${sign}$${(num / 1000).toFixed(2)}K`;
-  }
-  if (absValue >= 100) {
-    return `${sign}$${num.toFixed(2)}`;
-  }
-  if (absValue >= 1) {
-    return `${sign}$${num.toFixed(3)}`;
-  }
-  if (absValue >= 0.01) {
-    return `${sign}$${num.toFixed(4)}`;
-  }
-  if (absValue >= 0.001) {
-    return `${sign}$${num.toFixed(5)}`;
-  }
-  if (absValue >= 0.0001) {
-    return `${sign}$${num.toFixed(6)}`;
-  }
-  if (absValue > 0.0000001) {
-    // Show up to 8 decimals for very small values
-    return `${sign}$${num.toFixed(8)}`;
-  }
-  if (absValue > 0) {
-    // Scientific notation for extremely small values
-    return `${sign}$${num.toExponential(2)}`;
-  }
-  return showSign ? '+$0.00' : '$0.00';
+  return formatPreciseUsd(value, { showSign });
 }
 
 /**
- * Format P&L dollar value, ensuring proper calculation if entry_value is missing
- * @param entryValue - The entry value (SOL invested)
+ * Calculate P&L dollar value from amount and prices
+ * CRITICAL: This bypasses stored entry_value which may have unit inconsistencies
+ * @param entryValue - The entry value (may be in SOL or USD - unreliable)
  * @param profitLossPercent - The P&L percentage
- * @param fallbackEntryPrice - Fallback entry price if entry_value is null
- * @param amount - Token amount for fallback calculation
+ * @param entryPrice - Entry price (entry_price_usd preferred, fallback to entry_price)
+ * @param amount - Token amount
+ * @param currentPrice - Current token price in USD
  * @returns The calculated P&L dollar value
  */
 export function calculatePnLValue(
   entryValue: number | null | undefined,
   profitLossPercent: number | null | undefined,
-  fallbackEntryPrice?: number | null,
-  amount?: number | null
+  entryPrice?: number | null,
+  amount?: number | null,
+  currentPrice?: number | null
 ): number {
-  const pnlPercent = profitLossPercent ?? 0;
-  
-  // Use entry_value if available
-  if (entryValue && entryValue > 0) {
-    return entryValue * (pnlPercent / 100);
+  // If we have all the data for accurate calculation, use it
+  if (entryPrice && amount && currentPrice && entryPrice > 0 && amount > 0) {
+    const entryValueCalc = entryPrice * amount;
+    const currentValueCalc = currentPrice * amount;
+    return currentValueCalc - entryValueCalc;
   }
   
-  // Fallback: calculate from entry_price * amount
-  if (fallbackEntryPrice && amount && fallbackEntryPrice > 0 && amount > 0) {
-    const calculatedEntryValue = fallbackEntryPrice * amount;
+  // Fallback: Use percentage-based calculation if we have entry price and amount
+  const pnlPercent = profitLossPercent ?? 0;
+  if (entryPrice && amount && entryPrice > 0 && amount > 0) {
+    const calculatedEntryValue = entryPrice * amount;
     return calculatedEntryValue * (pnlPercent / 100);
+  }
+  
+  // Last resort: use stored entry_value (may be inaccurate)
+  if (entryValue && entryValue > 0) {
+    return entryValue * (pnlPercent / 100);
   }
   
   return 0;
@@ -91,20 +99,12 @@ export function calculatePnLValue(
 
 /**
  * Format price with appropriate precision based on magnitude
- * Enhanced for high-precision display of small token prices
+ * CRITICAL: Token prices can be extremely small - preserve all significant digits
  * @param value - The price value
  * @returns Formatted string like "$0.00012345" or "$123.45"
  */
 export function formatPrice(value: number | null | undefined): string {
-  const num = value ?? 0;
-  if (num === 0) return '$0.00';
-  if (num < 0.0000001) return `$${num.toExponential(2)}`;
-  if (num < 0.00001) return `$${num.toFixed(8)}`;
-  if (num < 0.001) return `$${num.toFixed(6)}`;
-  if (num < 0.01) return `$${num.toFixed(5)}`;
-  if (num < 1) return `$${num.toFixed(4)}`;
-  if (num < 100) return `$${num.toFixed(3)}`;
-  return `$${num.toFixed(2)}`;
+  return formatPrecisePrice(value);
 }
 
 /**

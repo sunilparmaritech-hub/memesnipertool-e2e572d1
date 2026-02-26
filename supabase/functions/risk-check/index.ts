@@ -1,11 +1,14 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.90.1";
 import { validateRiskCheckInput } from "../_shared/validation.ts";
+import { checkRateLimit, rateLimitResponse, GENERIC_LIMIT } from "../_shared/rate-limiter.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
+
+const RISK_CHECK_LIMIT = { ...GENERIC_LIMIT, maxRequests: 15, windowMs: 60_000, functionName: 'risk-check' };
 
 interface RiskSettings {
   emergency_stop_active: boolean;
@@ -13,6 +16,14 @@ interface RiskSettings {
   circuit_breaker_loss_threshold: number;
   circuit_breaker_time_window_minutes: number;
   circuit_breaker_triggered_at: string | null;
+  circuit_breaker_trigger_reason: string | null;
+  circuit_breaker_requires_admin_override: boolean;
+  circuit_breaker_cooldown_minutes: number;
+  circuit_breaker_drawdown_threshold: number;
+  circuit_breaker_drawdown_window_minutes: number;
+  circuit_breaker_rug_count: number;
+  circuit_breaker_tax_count: number;
+  circuit_breaker_freeze_count: number;
   max_risk_score: number;
   require_ownership_renounced: boolean;
   require_liquidity_locked: boolean;
@@ -41,21 +52,35 @@ interface RiskCheckResult {
   emergencyStopActive: boolean;
 }
 
+interface CircuitBreakerCheckResult {
+  triggered: boolean;
+  reason?: string;
+  triggerType?: 'drawdown' | 'rug_streak' | 'hidden_tax' | 'frozen_token' | 'cumulative_loss';
+  details?: Record<string, unknown>;
+}
+
+// Circuit breaker thresholds
+const CB_THRESHOLDS = {
+  DRAWDOWN_PERCENT: 20,
+  DRAWDOWN_WINDOW_MINUTES: 30,
+  RUG_COUNT_IN_TRADES: 3,
+  TRADES_WINDOW: 10,
+  HIDDEN_TAX_COUNT: 2,
+  FROZEN_TOKEN_COUNT: 2,
+  COOLDOWN_MINUTES: 60,
+};
+
 // Get API key from environment (secure) with fallback to database (legacy)
 function getApiKey(apiType: string, dbApiKey: string | null): string | null {
-  // Priority 1: Environment variable (Supabase Secrets - secure)
   const envKey = Deno.env.get(`${apiType.toUpperCase()}_API_KEY`);
   if (envKey) {
     console.log(`Using secure environment variable for ${apiType}`);
     return envKey;
   }
-  
-  // Priority 2: Database fallback (legacy - less secure)
   if (dbApiKey) {
     console.log(`Warning: Using database-stored API key for ${apiType} - migrate to Supabase Secrets`);
     return dbApiKey;
   }
-  
   return null;
 }
 
@@ -83,56 +108,284 @@ async function callSolanaRugcheck(tokenAddress: string): Promise<any> {
   }
 }
 
-// Check if circuit breaker should be triggered based on recent losses
-async function checkCircuitBreaker(
+// Check wallet drawdown in time window
+async function checkDrawdownTrigger(
   supabase: any,
   userId: string,
-  settings: RiskSettings
-): Promise<{ triggered: boolean; reason?: string }> {
-  if (!settings.circuit_breaker_enabled) {
-    return { triggered: false };
-  }
-
-  // Check if already triggered
-  if (settings.circuit_breaker_triggered_at) {
-    const triggeredTime = new Date(settings.circuit_breaker_triggered_at);
-    const resetTime = new Date(triggeredTime.getTime() + settings.circuit_breaker_time_window_minutes * 60 * 1000);
-    if (new Date() < resetTime) {
-      return { triggered: true, reason: 'Circuit breaker still active from previous trigger' };
-    }
-  }
-
-  // Calculate losses in time window
+  threshold: number,
+  windowMinutes: number
+): Promise<CircuitBreakerCheckResult> {
   const windowStart = new Date();
-  windowStart.setMinutes(windowStart.getMinutes() - settings.circuit_breaker_time_window_minutes);
+  windowStart.setMinutes(windowStart.getMinutes() - windowMinutes);
 
-  const { data: recentTrades } = await supabase
+  const { data: positions } = await supabase
     .from('positions')
-    .select('profit_loss_percent, closed_at')
+    .select('entry_value, profit_loss_value, closed_at')
     .eq('user_id', userId)
     .eq('status', 'closed')
     .gte('closed_at', windowStart.toISOString());
 
-  if (recentTrades && recentTrades.length > 0) {
-    const totalLoss = recentTrades
-      .filter((t: any) => t.profit_loss_percent < 0)
-      .reduce((sum: number, t: any) => sum + Math.abs(t.profit_loss_percent), 0);
+  if (!positions || positions.length === 0) {
+    return { triggered: false };
+  }
 
-    if (totalLoss >= settings.circuit_breaker_loss_threshold) {
-      // Trigger circuit breaker
-      await supabase
-        .from('risk_settings')
-        .update({ circuit_breaker_triggered_at: new Date().toISOString() })
-        .eq('user_id', userId);
+  const totalEntryValue = positions.reduce((sum: number, p: any) => sum + (p.entry_value || 0), 0);
+  const totalLoss = positions
+    .filter((p: any) => (p.profit_loss_value || 0) < 0)
+    .reduce((sum: number, p: any) => sum + Math.abs(p.profit_loss_value || 0), 0);
 
-      return { 
-        triggered: true, 
-        reason: `Circuit breaker triggered: ${totalLoss.toFixed(1)}% cumulative loss in ${settings.circuit_breaker_time_window_minutes} mins` 
+  if (totalEntryValue === 0) return { triggered: false };
+
+  const drawdownPercent = (totalLoss / totalEntryValue) * 100;
+
+  if (drawdownPercent >= threshold) {
+    return {
+      triggered: true,
+      triggerType: 'drawdown',
+      reason: `Wallet drawdown ${drawdownPercent.toFixed(1)}% exceeds ${threshold}% in ${windowMinutes} min`,
+      details: { drawdownPercent, totalLoss, totalEntryValue, windowMinutes },
+    };
+  }
+
+  return { triggered: false };
+}
+
+// Check for rug streak in recent trades
+async function checkRugStreakTrigger(
+  supabase: any,
+  userId: string,
+  rugThreshold: number,
+  tradesWindow: number
+): Promise<CircuitBreakerCheckResult> {
+  const { data: positions } = await supabase
+    .from('positions')
+    .select('exit_reason, token_symbol, closed_at')
+    .eq('user_id', userId)
+    .eq('status', 'closed')
+    .order('closed_at', { ascending: false })
+    .limit(tradesWindow);
+
+  if (!positions) return { triggered: false };
+
+  const rugIndicators = ['rug', 'honeypot', 'lp_removed', 'liquidity_removed', 'scam', 'unsellable'];
+  const ruggedPositions = positions.filter((p: any) => {
+    const reason = (p.exit_reason || '').toLowerCase();
+    return rugIndicators.some(indicator => reason.includes(indicator));
+  });
+
+  if (ruggedPositions.length >= rugThreshold) {
+    return {
+      triggered: true,
+      triggerType: 'rug_streak',
+      reason: `${ruggedPositions.length} rugs in last ${tradesWindow} trades (threshold: ${rugThreshold})`,
+      details: { rugCount: ruggedPositions.length, tradesChecked: positions.length },
+    };
+  }
+
+  return { triggered: false };
+}
+
+// Comprehensive circuit breaker check
+async function checkCircuitBreaker(
+  supabase: any,
+  userId: string,
+  settings: RiskSettings
+): Promise<CircuitBreakerCheckResult> {
+  if (!settings.circuit_breaker_enabled) {
+    return { triggered: false };
+  }
+
+  // Check if already triggered and still in cooldown
+  if (settings.circuit_breaker_triggered_at) {
+    const triggeredTime = new Date(settings.circuit_breaker_triggered_at);
+    const cooldownMs = (settings.circuit_breaker_cooldown_minutes || CB_THRESHOLDS.COOLDOWN_MINUTES) * 60 * 1000;
+    const cooldownExpiresAt = new Date(triggeredTime.getTime() + cooldownMs);
+    
+    if (new Date() < cooldownExpiresAt) {
+      // Check if admin override is required
+      if (settings.circuit_breaker_requires_admin_override) {
+        return {
+          triggered: true,
+          reason: `Circuit breaker active - requires admin override (expires ${cooldownExpiresAt.toISOString()})`,
+          triggerType: 'cumulative_loss',
+        };
+      }
+      return {
+        triggered: true,
+        reason: settings.circuit_breaker_trigger_reason || 'Circuit breaker still active',
+      };
+    }
+    
+    // Cooldown expired but requires admin override
+    if (settings.circuit_breaker_requires_admin_override) {
+      return {
+        triggered: true,
+        reason: 'Circuit breaker cooldown expired - awaiting admin override to reset',
       };
     }
   }
 
-  return { triggered: false };
+  // Run all trigger checks in parallel
+  const [drawdownResult, rugResult] = await Promise.all([
+    checkDrawdownTrigger(
+      supabase,
+      userId,
+      settings.circuit_breaker_drawdown_threshold || CB_THRESHOLDS.DRAWDOWN_PERCENT,
+      settings.circuit_breaker_drawdown_window_minutes || CB_THRESHOLDS.DRAWDOWN_WINDOW_MINUTES
+    ),
+    checkRugStreakTrigger(
+      supabase,
+      userId,
+      CB_THRESHOLDS.RUG_COUNT_IN_TRADES,
+      CB_THRESHOLDS.TRADES_WINDOW
+    ),
+  ]);
+
+  // Check counter-based triggers
+  const taxCount = settings.circuit_breaker_tax_count || 0;
+  const freezeCount = settings.circuit_breaker_freeze_count || 0;
+
+  let triggeredResult: CircuitBreakerCheckResult | null = null;
+
+  if (drawdownResult.triggered) {
+    triggeredResult = drawdownResult;
+  } else if (rugResult.triggered) {
+    triggeredResult = rugResult;
+  } else if (taxCount >= CB_THRESHOLDS.HIDDEN_TAX_COUNT) {
+    triggeredResult = {
+      triggered: true,
+      triggerType: 'hidden_tax',
+      reason: `${taxCount} hidden tax tokens detected (threshold: ${CB_THRESHOLDS.HIDDEN_TAX_COUNT})`,
+      details: { taxCount },
+    };
+  } else if (freezeCount >= CB_THRESHOLDS.FROZEN_TOKEN_COUNT) {
+    triggeredResult = {
+      triggered: true,
+      triggerType: 'frozen_token',
+      reason: `${freezeCount} frozen tokens encountered (threshold: ${CB_THRESHOLDS.FROZEN_TOKEN_COUNT})`,
+      details: { freezeCount },
+    };
+  }
+
+  // If triggered, update the database
+  if (triggeredResult?.triggered) {
+    const now = new Date();
+    const cooldownMs = CB_THRESHOLDS.COOLDOWN_MINUTES * 60 * 1000;
+    const cooldownExpiresAt = new Date(now.getTime() + cooldownMs);
+
+    // Update risk_settings
+    await supabase
+      .from('risk_settings')
+      .update({
+        circuit_breaker_triggered_at: now.toISOString(),
+        circuit_breaker_trigger_reason: triggeredResult.reason,
+        circuit_breaker_requires_admin_override: true,
+      })
+      .eq('user_id', userId);
+
+    // Log the event
+    await supabase
+      .from('circuit_breaker_events')
+      .insert({
+        user_id: userId,
+        trigger_type: triggeredResult.triggerType || 'unknown',
+        trigger_details: triggeredResult.details || {},
+        cooldown_expires_at: cooldownExpiresAt.toISOString(),
+      });
+
+    console.log(`[CircuitBreaker] TRIGGERED for ${userId}: ${triggeredResult.reason}`);
+  }
+
+  return triggeredResult || { triggered: false };
+}
+
+// Increment counter and check if should trigger
+async function incrementAndCheckCounter(
+  supabase: any,
+  userId: string,
+  counterType: 'tax' | 'freeze',
+  settings: RiskSettings
+): Promise<{ newCount: number; triggered: boolean }> {
+  const columnMap = {
+    tax: 'circuit_breaker_tax_count',
+    freeze: 'circuit_breaker_freeze_count',
+  };
+  const thresholdMap = {
+    tax: CB_THRESHOLDS.HIDDEN_TAX_COUNT,
+    freeze: CB_THRESHOLDS.FROZEN_TOKEN_COUNT,
+  };
+
+  const column = columnMap[counterType];
+  const currentValue = (settings as any)[column] || 0;
+  const newValue = currentValue + 1;
+
+  await supabase
+    .from('risk_settings')
+    .update({ [column]: newValue })
+    .eq('user_id', userId);
+
+  return {
+    newCount: newValue,
+    triggered: newValue >= thresholdMap[counterType],
+  };
+}
+
+// Admin reset circuit breaker
+async function adminResetCircuitBreaker(
+  supabase: any,
+  adminUserId: string,
+  targetUserId: string,
+  reason: string
+): Promise<{ success: boolean; error?: string }> {
+  // Verify admin role
+  const { data: roleData } = await supabase
+    .from('user_roles')
+    .select('role')
+    .eq('user_id', adminUserId)
+    .eq('role', 'admin')
+    .single();
+
+  if (!roleData) {
+    return { success: false, error: 'Admin role required for circuit breaker reset' };
+  }
+
+  const now = new Date().toISOString();
+
+  // Reset the circuit breaker
+  await supabase
+    .from('risk_settings')
+    .update({
+      circuit_breaker_triggered_at: null,
+      circuit_breaker_trigger_reason: null,
+      circuit_breaker_requires_admin_override: false,
+      circuit_breaker_rug_count: 0,
+      circuit_breaker_tax_count: 0,
+      circuit_breaker_freeze_count: 0,
+    })
+    .eq('user_id', targetUserId);
+
+  // Update the most recent event record
+  const { data: events } = await supabase
+    .from('circuit_breaker_events')
+    .select('id')
+    .eq('user_id', targetUserId)
+    .is('reset_at', null)
+    .order('triggered_at', { ascending: false })
+    .limit(1);
+
+  if (events && events.length > 0) {
+    await supabase
+      .from('circuit_breaker_events')
+      .update({
+        reset_at: now,
+        reset_by: adminUserId,
+        reset_reason: reason,
+      })
+      .eq('id', events[0].id);
+  }
+
+  console.log(`[CircuitBreaker] Admin ${adminUserId} reset for ${targetUserId}: ${reason}`);
+  return { success: true };
 }
 
 // Perform comprehensive risk check on a token
@@ -144,7 +397,6 @@ async function performRiskCheck(
   const rejectionReasons: string[] = [];
   let riskScore = 0;
 
-  // Initialize check results
   const checks = {
     honeypot: { passed: true, detected: false },
     blacklist: { passed: true, blacklisted: false },
@@ -153,20 +405,17 @@ async function performRiskCheck(
     taxCheck: { passed: true, buyTax: 0, sellTax: 0 },
   };
 
-  // Try to get data from APIs
   let apiData: any = null;
   
   if (honeypotApiUrl) {
     apiData = await callRugcheckApi(token.address, honeypotApiUrl);
   }
   
-  // Fallback to Solana rugcheck for Solana tokens
   if (!apiData && (!token.chain || token.chain === 'solana')) {
     apiData = await callSolanaRugcheck(token.address);
   }
 
   if (apiData) {
-    // Honeypot check
     const isHoneypot = apiData.honeypotResult?.isHoneypot || apiData.is_honeypot || false;
     checks.honeypot.detected = isHoneypot;
     checks.honeypot.passed = !isHoneypot;
@@ -175,7 +424,6 @@ async function performRiskCheck(
       riskScore += 100;
     }
 
-    // Blacklist check
     const isBlacklisted = apiData.simulationResult?.isBlacklisted || 
                           apiData.is_blacklisted || 
                           apiData.risks?.some((r: any) => r.name === 'Blacklisted') || 
@@ -187,7 +435,6 @@ async function performRiskCheck(
       riskScore += 50;
     }
 
-    // Ownership renounced check
     const ownerRenounced = apiData.contractCode?.ownershipRenounced || 
                            apiData.ownership_renounced || 
                            apiData.mint_authority === null ||
@@ -199,7 +446,6 @@ async function performRiskCheck(
       riskScore += 30;
     }
 
-    // Liquidity lock check
     const liquidityLocked = apiData.pair?.liquidity?.isLocked || 
                             apiData.liquidity_locked || 
                             false;
@@ -214,7 +460,6 @@ async function performRiskCheck(
       riskScore += 25;
     }
 
-    // Tax check
     const buyTax = apiData.simulationResult?.buyTax || apiData.buy_tax || 0;
     const sellTax = apiData.simulationResult?.sellTax || apiData.sell_tax || 0;
     checks.taxCheck.buyTax = buyTax;
@@ -226,21 +471,17 @@ async function performRiskCheck(
       riskScore += 20;
     }
 
-    // Get risk score from API if available
     if (apiData.riskScore !== undefined) {
       riskScore = Math.max(riskScore, apiData.riskScore);
     } else if (apiData.score !== undefined) {
-      // Rugcheck.xyz uses inverted scoring (higher = better)
       riskScore = Math.max(riskScore, 100 - apiData.score);
     }
   } else {
-    // No API data available - conservative approach
     riskScore = 75;
     rejectionReasons.push('Unable to verify token - Risk APIs unavailable');
     checks.honeypot.passed = false;
   }
 
-  // Check against max risk score setting
   const passed = riskScore <= settings.max_risk_score && rejectionReasons.length === 0;
   if (riskScore > settings.max_risk_score && !rejectionReasons.includes('Risk score exceeds threshold')) {
     rejectionReasons.push(`Risk score ${riskScore} exceeds maximum ${settings.max_risk_score}`);
@@ -282,7 +523,10 @@ serve(async (req) => {
       });
     }
 
-    // Parse and validate request body
+    // Per-user rate limiting
+    const rl = checkRateLimit(user.id, RISK_CHECK_LIMIT);
+    if (!rl.allowed) return rateLimitResponse(rl, corsHeaders);
+
     const rawBody = await req.json().catch(() => ({}));
     const validationResult = validateRiskCheckInput(rawBody);
     
@@ -293,7 +537,7 @@ serve(async (req) => {
       });
     }
     
-    const { action, tokens, updates, active, limit } = validationResult.data!;
+    const { action, tokens, updates, active, limit, targetUserId, reason } = validationResult.data!;
 
     // Fetch user's risk settings
     let { data: riskSettings, error: settingsError } = await supabase
@@ -302,7 +546,6 @@ serve(async (req) => {
       .eq('user_id', user.id)
       .single();
 
-    // Create default settings if not exist
     if (settingsError || !riskSettings) {
       const { data: newSettings } = await supabase
         .from('risk_settings')
@@ -337,12 +580,10 @@ serve(async (req) => {
     }
 
     if (action === 'emergency_stop') {
-      const { data: updatedSettings } = await supabase
+      await supabase
         .from('risk_settings')
         .update({ emergency_stop_active: active })
-        .eq('user_id', user.id)
-        .select()
-        .single();
+        .eq('user_id', user.id);
 
       console.log(`Emergency stop ${active ? 'ACTIVATED' : 'DEACTIVATED'} for user ${user.id}`);
 
@@ -356,14 +597,82 @@ serve(async (req) => {
     }
 
     if (action === 'reset_circuit_breaker') {
+      // Check if admin override is required
+      if (settings.circuit_breaker_requires_admin_override) {
+        return new Response(JSON.stringify({ 
+          success: false, 
+          error: 'Admin override required to reset circuit breaker',
+          requiresAdmin: true,
+        }), {
+          status: 403,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
       await supabase
         .from('risk_settings')
-        .update({ circuit_breaker_triggered_at: null })
+        .update({
+          circuit_breaker_triggered_at: null,
+          circuit_breaker_trigger_reason: null,
+          circuit_breaker_rug_count: 0,
+          circuit_breaker_tax_count: 0,
+          circuit_breaker_freeze_count: 0,
+        })
         .eq('user_id', user.id);
 
       return new Response(JSON.stringify({ 
         success: true, 
         message: 'Circuit breaker reset' 
+      }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    // Admin reset endpoint
+    if (action === 'admin_reset_circuit_breaker') {
+      const resetResult = await adminResetCircuitBreaker(
+        supabase,
+        user.id,
+        targetUserId || user.id,
+        reason || 'Admin override'
+      );
+
+      if (!resetResult.success) {
+        return new Response(JSON.stringify({ error: resetResult.error }), {
+          status: 403,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      return new Response(JSON.stringify({ 
+        success: true, 
+        message: 'Circuit breaker reset by admin' 
+      }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    // Increment counter endpoint
+    if (action === 'increment_counter') {
+      const counterType = rawBody.counterType as 'tax' | 'freeze';
+      if (!counterType || !['tax', 'freeze'].includes(counterType)) {
+        return new Response(JSON.stringify({ error: 'Invalid counter type' }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      const result = await incrementAndCheckCounter(supabase, user.id, counterType, settings);
+
+      if (result.triggered) {
+        // Re-check circuit breaker to trigger it
+        await checkCircuitBreaker(supabase, user.id, settings);
+      }
+
+      return new Response(JSON.stringify({ 
+        success: true,
+        newCount: result.newCount,
+        triggered: result.triggered,
       }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
@@ -381,13 +690,15 @@ serve(async (req) => {
         });
       }
 
-      // Check circuit breaker
+      // Check circuit breaker (comprehensive check)
       const circuitBreakerStatus = await checkCircuitBreaker(supabase, user.id, settings);
       if (circuitBreakerStatus.triggered) {
         return new Response(JSON.stringify({
           canTrade: false,
           reason: circuitBreakerStatus.reason,
           circuitBreakerTriggered: true,
+          triggerType: circuitBreakerStatus.triggerType,
+          requiresAdminOverride: settings.circuit_breaker_requires_admin_override,
           results: [],
         }), {
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -409,7 +720,6 @@ serve(async (req) => {
       for (const tokenData of tokens) {
         const checkResult = await performRiskCheck(tokenData, settings, honeypotApiUrl);
         
-        // Log the check
         await supabase.from('risk_check_logs').insert({
           user_id: user.id,
           token_address: tokenData.address,
@@ -462,6 +772,21 @@ serve(async (req) => {
         .limit(queryLimit);
 
       return new Response(JSON.stringify({ logs: logs || [] }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    // Get circuit breaker events
+    if (action === 'get_circuit_breaker_events') {
+      const queryLimit = limit ?? 20;
+      const { data: events } = await supabase
+        .from('circuit_breaker_events')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('triggered_at', { ascending: false })
+        .limit(queryLimit);
+
+      return new Response(JSON.stringify({ events: events || [] }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }

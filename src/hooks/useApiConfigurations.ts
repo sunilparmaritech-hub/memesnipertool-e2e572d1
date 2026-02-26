@@ -2,17 +2,17 @@ import { useState, useEffect } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 
+// NOTE: Using DexScreener (primary) and GeckoTerminal (secondary) - no CoinGecko
 export type ApiType = 
   | 'dexscreener'
   | 'geckoterminal'
-  | 'birdeye'
-  | 'dextools'
   | 'honeypot_rugcheck'
-  | 'liquidity_lock'
   | 'jupiter'
   | 'raydium'
   | 'rpc_provider'
-  | 'pumpfun';
+  | 'pumpfun'
+  | 'helius'
+  | 'birdeye';
 
 export type ApiStatus = 'active' | 'inactive' | 'error' | 'rate_limited';
 

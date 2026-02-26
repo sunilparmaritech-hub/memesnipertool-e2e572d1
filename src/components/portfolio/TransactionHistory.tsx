@@ -40,6 +40,9 @@ import {
   Search,
   X,
   RefreshCcw,
+  AlertTriangle,
+  ShieldAlert,
+  ShieldCheck,
 } from 'lucide-react';
 import {
   DropdownMenu,
@@ -47,30 +50,39 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 import { format, subDays, subWeeks, subMonths, subYears, isAfter, isBefore, startOfDay, endOfDay } from 'date-fns';
 import { TradeHistoryEntry } from '@/hooks/useTradeHistory';
 import { isPlaceholderTokenText } from '@/lib/dexscreener';
 import { useDisplayUnit } from '@/contexts/DisplayUnitContext';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
+import { TokenRiskAssessment, getRiskLabelBadge } from '@/lib/tokenRiskAssessment';
 
 interface TransactionHistoryProps {
   trades: TradeHistoryEntry[];
   loading: boolean;
   onRefetch: () => void;
   onForceSync?: () => void;
+  getTokenAssessment?: (tokenAddress: string) => TokenRiskAssessment | null;
 }
 
 type DatePreset = 'all' | 'today' | 'week' | 'month' | 'year' | 'custom';
 type TradeTypeFilter = 'all' | 'buy' | 'sell';
 type StatusFilter = 'all' | 'confirmed' | 'pending' | 'failed';
+type RiskFilter = 'all' | 'real' | 'flagged';
 
 const shortAddress = (address: string) =>
   address && address.length > 10
     ? `${address.slice(0, 4)}…${address.slice(-4)}`
     : address || 'Token';
 
-export function TransactionHistory({ trades, loading, onRefetch, onForceSync }: TransactionHistoryProps) {
+export function TransactionHistory({ trades, loading, onRefetch, onForceSync, getTokenAssessment }: TransactionHistoryProps) {
   const { formatPrimaryValue, formatDualValue } = useDisplayUnit();
   const [exporting, setExporting] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -93,6 +105,7 @@ export function TransactionHistory({ trades, loading, onRefetch, onForceSync }: 
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [showFilters, setShowFilters] = useState(false);
+  const [riskFilter, setRiskFilter] = useState<RiskFilter>('all');
 
   // Calculate date range based on preset
   const dateRange = useMemo(() => {
@@ -119,6 +132,11 @@ export function TransactionHistory({ trades, loading, onRefetch, onForceSync }: 
   // Filter trades
   const filteredTrades = useMemo(() => {
     return trades.filter(trade => {
+      // CRITICAL: Skip entries without tx_hash - these are fake/non-trade movements
+      // (transfers, staking, airdrops, sold_externally detection errors)
+      // Only show real on-chain swaps that have a valid transaction signature
+      if (!trade.tx_hash) return false;
+      
       // Date filter
       if (dateRange.start && isBefore(new Date(trade.created_at), dateRange.start)) return false;
       if (dateRange.end && isAfter(new Date(trade.created_at), dateRange.end)) return false;
@@ -128,6 +146,13 @@ export function TransactionHistory({ trades, loading, onRefetch, onForceSync }: 
       
       // Status filter
       if (statusFilter !== 'all' && trade.status !== statusFilter) return false;
+      
+      // Risk filter
+      if (riskFilter !== 'all' && getTokenAssessment) {
+        const assessment = getTokenAssessment(trade.token_address);
+        if (riskFilter === 'real' && assessment && assessment.riskLabel !== 'REAL') return false;
+        if (riskFilter === 'flagged' && (!assessment || assessment.riskLabel === 'REAL')) return false;
+      }
       
       // Search filter
       if (searchQuery) {
@@ -144,7 +169,7 @@ export function TransactionHistory({ trades, loading, onRefetch, onForceSync }: 
       
       return true;
     });
-  }, [trades, dateRange, tradeTypeFilter, statusFilter, searchQuery]);
+  }, [trades, dateRange, tradeTypeFilter, statusFilter, searchQuery, riskFilter, getTokenAssessment]);
 
   // Stats for filtered trades
   const stats = useMemo(() => {
@@ -160,6 +185,29 @@ export function TransactionHistory({ trades, loading, onRefetch, onForceSync }: 
       completed: completed.length,
       totalVolumeSol,
     };
+  }, [filteredTrades]);
+
+  // Calculate running SOL balance for each transaction (from newest to oldest)
+  // This creates a rolling balance that shows the SOL impact of each trade
+  const tradesWithRunningBalance = useMemo(() => {
+    // Sort by date ascending first to calculate running balance correctly
+    const sortedByDate = [...filteredTrades].sort(
+      (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+    );
+    
+    let runningBalance = 0;
+    const withBalance = sortedByDate.map(trade => {
+      const solAmount = trade.price_sol || 0;
+      if (trade.trade_type === 'buy') {
+        runningBalance -= solAmount; // Buys reduce balance
+      } else {
+        runningBalance += solAmount; // Sells increase balance
+      }
+      return { ...trade, runningBalance };
+    });
+    
+    // Reverse back to newest first for display
+    return withBalance.reverse();
   }, [filteredTrades]);
 
   // Export functions
@@ -355,9 +403,10 @@ export function TransactionHistory({ trades, loading, onRefetch, onForceSync }: 
     setTradeTypeFilter('all');
     setStatusFilter('all');
     setSearchQuery('');
+    setRiskFilter('all');
   };
 
-  const hasActiveFilters = datePreset !== 'all' || tradeTypeFilter !== 'all' || statusFilter !== 'all' || searchQuery !== '';
+  const hasActiveFilters = datePreset !== 'all' || tradeTypeFilter !== 'all' || statusFilter !== 'all' || searchQuery !== '' || riskFilter !== 'all';
 
   return (
     <Card>
@@ -487,6 +536,28 @@ export function TransactionHistory({ trades, loading, onRefetch, onForceSync }: 
                 </SelectContent>
               </Select>
 
+              {/* Risk Filter */}
+              <Select value={riskFilter} onValueChange={(v) => setRiskFilter(v as RiskFilter)}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Risk Status" />
+                </SelectTrigger>
+                <SelectContent className="bg-card border-border z-50">
+                  <SelectItem value="all">All Tokens</SelectItem>
+                  <SelectItem value="real">
+                    <span className="flex items-center gap-2">
+                      <ShieldCheck className="w-3 h-3 text-green-400" />
+                      Verified Only
+                    </span>
+                  </SelectItem>
+                  <SelectItem value="flagged">
+                    <span className="flex items-center gap-2">
+                      <ShieldAlert className="w-3 h-3 text-orange-400" />
+                      Flagged Only
+                    </span>
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+
               {/* Custom Date Range */}
               {datePreset === 'custom' && (
                 <div className="sm:col-span-2 lg:col-span-5 flex flex-wrap gap-3">
@@ -580,34 +651,44 @@ export function TransactionHistory({ trades, loading, onRefetch, onForceSync }: 
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <Table>
+             <Table>
               <TableHeader>
                 <TableRow>
                   <TableHead>Date</TableHead>
                   <TableHead>Type</TableHead>
                   <TableHead>Token</TableHead>
+                  <TableHead>Risk</TableHead>
                   <TableHead className="text-right">Amount</TableHead>
-                  <TableHead className="text-right">Price (SOL)</TableHead>
+                  <TableHead className="text-right">SOL Flow</TableHead>
+                  <TableHead className="text-right">Running Balance</TableHead>
                   <TableHead className="text-right">Value (USD)</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead className="text-right">TX</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filteredTrades.map((trade) => {
-                  // Normalize status for display (confirmed = completed in the UI)
-                  const displayStatus = trade.status === 'confirmed' ? 'completed' : (trade.status || 'pending');
-                  const statusColors = {
+                {tradesWithRunningBalance.map((trade) => {
+                  // Get risk assessment for this token
+                  const assessment = getTokenAssessment?.(trade.token_address);
+                  const riskBadge = assessment ? getRiskLabelBadge(assessment.riskLabel) : null;
+                  
+                  // Normalize status for display - show actual status from database
+                  const rawStatus = trade.status?.toLowerCase() || 'pending';
+                  const displayStatus = rawStatus === 'confirmed' ? 'completed' : rawStatus;
+                  const statusColors: Record<string, string> = {
                     completed: 'bg-success/10 text-success border-success/30',
                     confirmed: 'bg-success/10 text-success border-success/30',
                     failed: 'bg-destructive/10 text-destructive border-destructive/30',
                     pending: 'bg-warning/10 text-warning border-warning/30',
                   };
-                  const statusColor = statusColors[displayStatus as keyof typeof statusColors] || statusColors.pending;
+                  const statusColor = statusColors[rawStatus] || statusColors.pending;
                   
                   // Calculate total value
                   const totalValueUsd = trade.price_usd ? trade.amount * trade.price_usd : null;
                   const totalValueSol = trade.price_sol ? trade.amount * trade.price_sol : null;
+                  
+                  // Running balance from the calculated memo
+                  const runningBalance = trade.runningBalance;
                   
                   return (
                     <TableRow key={trade.id} className="hover:bg-secondary/30 group">
@@ -647,19 +728,82 @@ export function TransactionHistory({ trades, loading, onRefetch, onForceSync }: 
                           </a>
                         </div>
                       </TableCell>
+                      <TableCell>
+                        {assessment && riskBadge ? (
+                          <TooltipProvider>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Badge 
+                                  variant={riskBadge.variant}
+                                  className={cn("text-[10px] cursor-help", riskBadge.className)}
+                                >
+                                  {riskBadge.icon} {assessment.riskLabel}
+                                </Badge>
+                              </TooltipTrigger>
+                              <TooltipContent className="max-w-xs">
+                                <p className="font-medium">{assessment.displayMessage}</p>
+                                {assessment.warningMessage && (
+                                  <p className="text-xs text-orange-400 mt-1">
+                                    ⚠️ {assessment.warningMessage}
+                                  </p>
+                                )}
+                                {assessment.realizedPnL !== null && (
+                                  <p className="text-xs mt-1">
+                                    Realized P&L: {assessment.realizedPnL >= 0 ? '+' : ''}{assessment.realizedPnL.toFixed(4)} SOL
+                                    ({assessment.realizedPnLPercent?.toFixed(1)}%)
+                                  </p>
+                                )}
+                              </TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                        ) : (
+                          <Badge variant="outline" className="text-[10px] text-muted-foreground">
+                            -
+                          </Badge>
+                        )}
+                      </TableCell>
                       <TableCell className="text-right">
                         <div className="font-mono text-sm">{trade.amount.toLocaleString(undefined, { maximumFractionDigits: 4 })}</div>
                         <div className="text-xs text-muted-foreground">tokens</div>
                       </TableCell>
                       <TableCell className="text-right">
-                        <div className="font-medium text-primary">
-                          {trade.price_sol ? `${trade.price_sol.toFixed(6)}` : '-'}
-                        </div>
-                        {trade.price_usd && (
-                          <div className="text-xs text-muted-foreground">
-                            ${trade.price_usd.toFixed(6)}
+                        {trade.price_sol ? (
+                          <div className={cn(
+                            "font-semibold",
+                            trade.trade_type === 'buy' 
+                              ? "text-destructive" 
+                              : "text-success"
+                          )}>
+                            {trade.trade_type === 'buy' ? (
+                              <span className="flex items-center justify-end gap-1">
+                                <ArrowUpRight className="w-3.5 h-3.5" />
+                                -{trade.price_sol.toFixed(4)} SOL
+                              </span>
+                            ) : (
+                              <span className="flex items-center justify-end gap-1">
+                                <ArrowDownRight className="w-3.5 h-3.5" />
+                                +{trade.price_sol.toFixed(4)} SOL
+                              </span>
+                            )}
                           </div>
+                        ) : (
+                          <span className="text-muted-foreground">-</span>
                         )}
+                        <div className="text-[10px] text-muted-foreground mt-0.5">
+                          {trade.trade_type === 'buy' ? 'Debited' : 'Credited'}
+                        </div>
+                      </TableCell>
+                      {/* Running Balance Column - Shows cumulative SOL position after this trade */}
+                      <TableCell className="text-right">
+                        <div className={cn(
+                          "font-semibold font-mono",
+                          runningBalance >= 0 ? "text-success" : "text-destructive"
+                        )}>
+                          {runningBalance >= 0 ? '+' : ''}{runningBalance.toFixed(4)} SOL
+                        </div>
+                        <div className="text-[10px] text-muted-foreground mt-0.5">
+                          Net Position
+                        </div>
                       </TableCell>
                       <TableCell className="text-right">
                         {totalValueSol !== null ? (

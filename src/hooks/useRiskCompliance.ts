@@ -9,6 +9,14 @@ export interface RiskSettings {
   circuit_breaker_loss_threshold: number;
   circuit_breaker_time_window_minutes: number;
   circuit_breaker_triggered_at: string | null;
+  circuit_breaker_trigger_reason: string | null;
+  circuit_breaker_requires_admin_override: boolean;
+  circuit_breaker_cooldown_minutes: number;
+  circuit_breaker_drawdown_threshold: number;
+  circuit_breaker_drawdown_window_minutes: number;
+  circuit_breaker_rug_count: number;
+  circuit_breaker_tax_count: number;
+  circuit_breaker_freeze_count: number;
   max_risk_score: number;
   require_ownership_renounced: boolean;
   require_liquidity_locked: boolean;
@@ -55,6 +63,14 @@ const defaultSettings: RiskSettings = {
   circuit_breaker_loss_threshold: 20,
   circuit_breaker_time_window_minutes: 60,
   circuit_breaker_triggered_at: null,
+  circuit_breaker_trigger_reason: null,
+  circuit_breaker_requires_admin_override: true,
+  circuit_breaker_cooldown_minutes: 60,
+  circuit_breaker_drawdown_threshold: 20,
+  circuit_breaker_drawdown_window_minutes: 30,
+  circuit_breaker_rug_count: 0,
+  circuit_breaker_tax_count: 0,
+  circuit_breaker_freeze_count: 0,
   max_risk_score: 70,
   require_ownership_renounced: true,
   require_liquidity_locked: true,
@@ -124,19 +140,93 @@ export function useRiskCompliance() {
   }, [user, toast]);
 
   const resetCircuitBreaker = useCallback(async () => {
-    if (!user) return;
+    if (!user) return { success: false, requiresAdmin: false };
     setLoading(true);
     try {
-      const { error } = await supabase.functions.invoke('risk-check', {
+      const { data, error } = await supabase.functions.invoke('risk-check', {
         body: { action: 'reset_circuit_breaker' },
       });
+      
       if (error) throw error;
-      setSettings(prev => ({ ...prev, circuit_breaker_triggered_at: null }));
+      
+      // Check if admin override is required
+      if (data?.requiresAdmin) {
+        toast({ 
+          title: 'Admin Override Required', 
+          description: 'Circuit breaker requires admin approval to reset',
+          variant: 'destructive',
+        });
+        return { success: false, requiresAdmin: true };
+      }
+      
+      setSettings(prev => ({ 
+        ...prev, 
+        circuit_breaker_triggered_at: null,
+        circuit_breaker_trigger_reason: null,
+        circuit_breaker_rug_count: 0,
+        circuit_breaker_tax_count: 0,
+        circuit_breaker_freeze_count: 0,
+      }));
       toast({ title: 'Circuit Breaker Reset', description: 'Trading can now resume' });
+      return { success: true, requiresAdmin: false };
     } catch (err: any) {
       toast({ title: 'Error', description: err.message, variant: 'destructive' });
+      return { success: false, requiresAdmin: false };
     } finally {
       setLoading(false);
+    }
+  }, [user, toast]);
+
+  const adminResetCircuitBreaker = useCallback(async (targetUserId: string, reason: string) => {
+    if (!user) return false;
+    setLoading(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('risk-check', {
+        body: { 
+          action: 'admin_reset_circuit_breaker',
+          targetUserId,
+          reason,
+        },
+      });
+      if (error) throw error;
+      toast({ title: 'Circuit Breaker Reset', description: 'Admin override successful' });
+      await fetchSettings();
+      return true;
+    } catch (err: any) {
+      toast({ title: 'Error', description: err.message, variant: 'destructive' });
+      return false;
+    } finally {
+      setLoading(false);
+    }
+  }, [user, toast, fetchSettings]);
+
+  const incrementCounter = useCallback(async (counterType: 'tax' | 'freeze') => {
+    if (!user) return { newCount: 0, triggered: false };
+    try {
+      const { data, error } = await supabase.functions.invoke('risk-check', {
+        body: { action: 'increment_counter', counterType },
+      });
+      if (error) throw error;
+      
+      // Update local state
+      const column = counterType === 'tax' ? 'circuit_breaker_tax_count' : 'circuit_breaker_freeze_count';
+      setSettings(prev => ({
+        ...prev,
+        [column]: data.newCount,
+      }));
+      
+      if (data.triggered) {
+        toast({ 
+          title: '🔒 Circuit Breaker Triggered', 
+          description: `Too many ${counterType === 'tax' ? 'hidden tax' : 'frozen'} tokens detected`,
+          variant: 'destructive',
+        });
+      }
+      
+      return { newCount: data.newCount, triggered: data.triggered };
+    } catch (err: any) {
+      console.error('Increment counter failed:', err);
+      return { newCount: 0, triggered: false };
     }
   }, [user, toast]);
 
@@ -189,9 +279,18 @@ export function useRiskCompliance() {
     updateSettings,
     toggleEmergencyStop,
     resetCircuitBreaker,
+    adminResetCircuitBreaker,
+    incrementCounter,
     checkTokens,
     fetchLogs,
     isEmergencyStopActive: settings.emergency_stop_active,
     isCircuitBreakerTriggered: !!settings.circuit_breaker_triggered_at,
+    circuitBreakerRequiresAdmin: settings.circuit_breaker_requires_admin_override,
+    circuitBreakerTriggerReason: settings.circuit_breaker_trigger_reason,
+    circuitBreakerCounters: {
+      rug: settings.circuit_breaker_rug_count,
+      tax: settings.circuit_breaker_tax_count,
+      freeze: settings.circuit_breaker_freeze_count,
+    },
   };
 }

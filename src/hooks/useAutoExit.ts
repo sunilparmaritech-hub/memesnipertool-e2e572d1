@@ -5,7 +5,8 @@ import { useNotifications } from '@/hooks/useNotifications';
 import { useWallet } from '@/hooks/useWallet';
 import { addBotLog } from '@/components/scanner/BotActivityLog';
 import { fetchJupiterQuote } from '@/lib/jupiterQuote';
-
+import { acquireSellLock, releaseSellLock, isSellLocked } from '@/lib/sellLock';
+import { updateDeployerReputationOnClose } from '@/lib/deployerReputation';
 export interface ExitResult {
   positionId: string;
   symbol: string;
@@ -72,6 +73,18 @@ export function useAutoExit() {
         return false;
       }
 
+      // CRITICAL: Acquire sell lock to prevent duplicate transactions
+      if (!acquireSellLock(position.token_address, 'auto_exit')) {
+        addBotLog({
+          level: 'warning',
+          category: 'exit',
+          message: `⏳ Sell already in progress: ${result.symbol}`,
+          tokenSymbol: result.symbol,
+          details: 'Another sell transaction is being processed. Skipping duplicate.',
+        });
+        return false;
+      }
+
       // Build Jupiter swap transaction for the sell.
       // CRITICAL FIX: Always sell the on-chain balance, not the DB amount.
       const SOL_MINT = 'So11111111111111111111111111111111111111112';
@@ -120,6 +133,7 @@ export function useAutoExit() {
         outputMint: SOL_MINT,
         amount: amountInSmallestUnit,
         slippageBps: EXIT_SLIPPAGE_BPS,
+        critical: true, // Exits bypass circuit breaker and get extra retries
       });
 
       if (quoteResult.ok === true) {
@@ -202,6 +216,7 @@ export function useAutoExit() {
         });
 
         if (!swapRes.ok) {
+          releaseSellLock(position.token_address);
           toast({
             title: 'Swap Build Failed',
             description: 'Could not build Jupiter swap transaction',
@@ -213,6 +228,7 @@ export function useAutoExit() {
         const swapData = await swapRes.json();
         
         if (!swapData.swapTransaction) {
+          releaseSellLock(position.token_address);
           toast({
             title: 'Transaction Error',
             description: 'Jupiter did not return transaction data',
@@ -276,11 +292,51 @@ export function useAutoExit() {
         return false;
       }
 
-      // Confirm transaction
+      // Fetch original BUY transaction metadata for this position
+      let buyerPosition: number | null = null;
+      let liquidity: number | null = null;
+      let riskScore: number | null = null;
+      let entryPriceSol: number | null = null;
+      
+      const { data: buyTrade } = await supabase
+        .from('trade_history')
+        .select('buyer_position, liquidity, risk_score, entry_price, sol_spent')
+        .eq('token_address', position.token_address)
+        .eq('trade_type', 'buy')
+        .order('created_at', { ascending: true })
+        .limit(1)
+        .maybeSingle();
+      
+      if (buyTrade) {
+        buyerPosition = buyTrade.buyer_position;
+        liquidity = buyTrade.liquidity;
+        riskScore = buyTrade.risk_score;
+        entryPriceSol = buyTrade.sol_spent || buyTrade.entry_price;
+      }
+
+      // Confirm transaction with extended metadata and semantic SOL values
       const { data: confirmData, error: confirmError } = await supabase.functions.invoke('confirm-transaction', {
         body: {
           signature: signResult.signature,
+          walletAddress: wallet.address,
           action: 'sell',
+          positionId: position.id,
+          tokenAddress: position.token_address,
+          tokenSymbol: position.token_symbol,
+          tokenName: position.token_name,
+          // SEMANTIC SOL VALUES (source of truth for P&L)
+          solSpent: 0, // SELL never spends SOL
+          solReceived: position.current_value || 0,
+          // Extended metadata - inherited from BUY trade
+          buyerPosition: buyerPosition,
+          liquidity: liquidity,
+          riskScore: riskScore,
+          entryPrice: position.entry_price_usd,
+          exitPrice: position.current_price,
+          priceSol: position.current_value,
+          slippage: 15, // Default slippage for auto-exit
+          // For FIFO matching
+          matchedBuySolSpent: entryPriceSol,
         },
       });
 
@@ -328,29 +384,13 @@ export function useAutoExit() {
         })
         .eq('id', result.positionId);
 
-      // Log sell to trade_history (use type assertion since types may not be updated)
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
-        await (supabase
-          .from('trade_history' as any)
-          .insert({
-            user_id: user.id,
-            token_address: position.token_address,
-            token_symbol: position.token_symbol,
-            token_name: position.token_name,
-            trade_type: 'sell',
-            amount: tokenAmountToSell,
-            price_sol: result.currentPrice,
-            price_usd: null,
-            status: 'confirmed',
-            tx_hash: signResult.signature,
-          }) as any);
-      }
+      // NOTE: Trade history is now logged centrally in confirm-transaction edge function
+      // Do NOT insert here - it causes duplicate SELL records
 
       // Success notification & detailed log with position data
       const exitLabel = result.action === 'take_profit' ? '💰 TAKE PROFIT' : '🛑 STOP LOSS';
       const pnlText = result.profitLossPercent >= 0 ? `+${result.profitLossPercent.toFixed(2)}%` : `${result.profitLossPercent.toFixed(2)}%`;
-      const entryPrice = (position as any).entry_price_usd || position.entry_price || 0;
+      const entryPrice = position.entry_price_usd || position.entry_price || 0;
       const exitValue = result.currentPrice * tokenAmountToSell;
       const entryValue = position.entry_value || (entryPrice * tokenAmountToSell);
       const pnlValue = entryValue * (result.profitLossPercent / 100);
@@ -370,7 +410,27 @@ export function useAutoExit() {
         variant: result.action === 'take_profit' ? 'default' : 'destructive',
       });
 
+      // CRITICAL FIX: Aggressive balance refresh after exit - immediate + delayed updates
       refreshBalance();
+      setTimeout(() => refreshBalance(), 2000);
+      setTimeout(() => refreshBalance(), 5000);
+      setTimeout(() => refreshBalance(), 10000);
+      
+      // Update deployer reputation after position close
+      // Calculate position duration
+      const positionDurationSeconds = Math.round((Date.now() - new Date(position.created_at).getTime()) / 1000);
+      
+      // Get deployer wallet if available (may not be stored on position)
+      // For now, we use the exit reason to track rug vs normal exit
+      updateDeployerReputationOnClose(
+        undefined, // TODO: Store deployer_wallet on positions table
+        position.token_address,
+        result.action, // 'take_profit' or 'stop_loss' or other exit reason
+        positionDurationSeconds
+      ).catch(err => console.error('[AutoExit] Deployer reputation update error:', err));
+      
+      // Release the sell lock after successful exit
+      releaseSellLock(position.token_address);
       return true;
 
     } catch (error: any) {
@@ -391,6 +451,21 @@ export function useAutoExit() {
         variant: 'destructive',
       });
       return false;
+    } finally {
+      // Always release lock, even on error (if we had acquired one)
+      // Re-fetch position to get the token_address
+      try {
+        const { data: pos } = await supabase
+          .from('positions')
+          .select('token_address')
+          .eq('id', result.positionId)
+          .single();
+        if (pos?.token_address) {
+          releaseSellLock(pos.token_address);
+        }
+      } catch {
+        // Ignore - lock will timeout anyway
+      }
     }
   }, [wallet, signAndSendTransaction, refreshBalance, toast]);
 

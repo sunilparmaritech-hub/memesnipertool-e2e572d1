@@ -4,6 +4,7 @@ import { useToast } from '@/hooks/use-toast';
 import { useWallet } from '@/hooks/useWallet';
 import { addBotLog } from '@/components/scanner/BotActivityLog';
 import { fetchJupiterQuote } from '@/lib/jupiterQuote';
+import { acquireSellLock, releaseSellLock, isSellLocked } from '@/lib/sellLock';
 
 export interface WaitingPosition {
   id: string;
@@ -37,44 +38,26 @@ export function useLiquidityRetryWorker() {
   const { toast } = useToast();
   const { wallet, signAndSendTransaction, refreshBalance } = useWallet();
 
-  // Fetch positions waiting for liquidity (uses exit_reason field to track waiting status)
+  // Fetch positions waiting for liquidity
   const fetchWaitingPositions = useCallback(async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return [];
 
-      // Use 'pending' status with exit_reason='waiting_for_liquidity' to track waiting positions
       const { data, error } = await supabase
         .from('positions')
         .select('*')
         .eq('user_id', user.id)
-        .eq('status', 'pending')
-        .eq('exit_reason', 'waiting_for_liquidity')
-        .order('created_at', { ascending: true });
+        .eq('status', 'waiting_for_liquidity')
+        .order('waiting_for_liquidity_since', { ascending: true });
 
       if (error) {
         console.error('[LiquidityRetry] Fetch error:', error);
         return [];
       }
 
-      // Map DB positions to WaitingPosition interface
-      const mappedPositions: WaitingPosition[] = (data || []).map((p: any) => ({
-        id: p.id,
-        token_address: p.token_address,
-        token_symbol: p.token_symbol,
-        token_name: p.token_name,
-        amount: p.amount,
-        entry_price: p.entry_price,
-        current_price: p.current_price,
-        profit_loss_percent: p.profit_loss_percent,
-        liquidity_last_checked_at: null, // Not stored in DB
-        liquidity_check_count: 0, // Not stored in DB
-        waiting_for_liquidity_since: p.created_at, // Use created_at as proxy
-        status: p.status,
-      }));
-
-      setWaitingPositions(mappedPositions);
-      return mappedPositions;
+      setWaitingPositions(data || []);
+      return data || [];
     } catch (err) {
       console.error('[LiquidityRetry] Error:', err);
       return [];
@@ -90,6 +73,7 @@ export function useLiquidityRetryWorker() {
         amount,
         slippageBps: 1500,
         timeoutMs: 10000,
+        critical: true, // Retry sells bypass circuit breaker
       });
 
       if (!quoteResult.ok) {
@@ -229,6 +213,21 @@ export function useLiquidityRetryWorker() {
     }
 
     try {
+      // Derive user's ATA for the input token - Raydium requires inputAccount for non-SOL swaps
+      const { PublicKey: PK } = await import('@solana/web3.js');
+      const TOKEN_PROGRAM_ID = new PK('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
+      const ASSOCIATED_TOKEN_PROGRAM_ID = new PK('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
+      const inputMint = quoteResponse?.data?.inputMint;
+      
+      let inputAccountStr: string | undefined;
+      if (inputMint && inputMint !== 'So11111111111111111111111111111111111111112') {
+        const [ata] = PK.findProgramAddressSync(
+          [new PK(wallet.address).toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), new PK(inputMint).toBuffer()],
+          ASSOCIATED_TOKEN_PROGRAM_ID
+        );
+        inputAccountStr = ata.toBase58();
+      }
+
       const response = await fetch('https://transaction-v1.raydium.io/transaction/swap-base-in', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -238,6 +237,7 @@ export function useLiquidityRetryWorker() {
           txVersion: 'V0',
           wrapSol: false,
           unwrapSol: true,
+          ...(inputAccountStr ? { inputAccount: inputAccountStr } : {}),
           computeUnitPriceMicroLamports: '500000',
         }),
       });
@@ -271,6 +271,12 @@ export function useLiquidityRetryWorker() {
       return false;
     }
 
+    // CRITICAL: Check if another system is already selling this token
+    if (isSellLocked(position.token_address)) {
+      console.log(`[LiquidityRetry] Skipping ${position.token_symbol} - already being sold by another system`);
+      return false;
+    }
+
     // CRITICAL: Detect if this is a wallet token (not a DB position)
     // Wallet tokens have synthetic IDs starting with "wallet-" which are NOT valid UUIDs
     const isWalletToken = typeof position.id === 'string' && position.id.startsWith('wallet-');
@@ -288,11 +294,11 @@ export function useLiquidityRetryWorker() {
     // Only update DB for real positions (valid UUID IDs)
     // Wallet tokens have synthetic IDs like "wallet-<mint>" which would cause UUID parse errors
     if (!isWalletToken) {
-      // Just update the updated_at timestamp as a check tracker
       await supabase
         .from('positions')
         .update({
-          updated_at: new Date().toISOString(),
+          liquidity_last_checked_at: new Date().toISOString(),
+          liquidity_check_count: (position.liquidity_check_count || 0) + 1,
         })
         .eq('id', position.id);
     }
@@ -315,6 +321,18 @@ export function useLiquidityRetryWorker() {
       message: `✅ Route found: ${position.token_symbol} via ${routeResult.source}`,
       tokenSymbol: position.token_symbol,
     });
+
+    // CRITICAL: Acquire sell lock before executing swap
+    if (!acquireSellLock(position.token_address, 'liquidity_worker')) {
+      addBotLog({
+        level: 'warning',
+        category: 'exit',
+        message: `⏳ Sell already in progress: ${position.token_symbol}`,
+        tokenSymbol: position.token_symbol,
+        details: 'Another sell transaction is being processed. Skipping duplicate.',
+      });
+      return false;
+    }
 
     toast({
       title: `🎯 Route Available: ${position.token_symbol}`,
@@ -341,20 +359,61 @@ export function useLiquidityRetryWorker() {
           .eq('id', position.id);
       }
 
-      // Log to trade_history (always - uses user.id not position.id)
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
-        await (supabase.from('trade_history' as any).insert({
-          user_id: user.id,
-          token_address: position.token_address,
-          token_symbol: position.token_symbol,
-          token_name: position.token_name,
-          trade_type: 'sell',
-          amount: position.amount,
-          price_sol: position.current_price,
-          status: 'confirmed',
-          tx_hash: swapResult.signature,
-        }) as any);
+      // NOTE: Trade history is now logged centrally in confirm-transaction edge function
+      // This prevents duplicate entries and ensures only confirmed on-chain transactions are recorded
+      // Call confirm-transaction to finalize the sell and log to trade_history
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session && !isWalletToken) {
+        try {
+          // Fetch original BUY transaction metadata for this position
+          let buyerPosition: number | null = null;
+          let liquidity: number | null = null;
+          let riskScore: number | null = null;
+          let entryPriceSol: number | null = null;
+          
+          const { data: buyTrade } = await supabase
+            .from('trade_history')
+            .select('buyer_position, liquidity, risk_score, entry_price, sol_spent')
+            .eq('token_address', position.token_address)
+            .eq('trade_type', 'buy')
+            .order('created_at', { ascending: true })
+            .limit(1)
+            .maybeSingle();
+          
+          if (buyTrade) {
+            buyerPosition = buyTrade.buyer_position;
+            liquidity = buyTrade.liquidity;
+            riskScore = buyTrade.risk_score;
+            entryPriceSol = buyTrade.sol_spent || buyTrade.entry_price;
+          }
+          
+          await supabase.functions.invoke('confirm-transaction', {
+            body: {
+              signature: swapResult.signature,
+              walletAddress: wallet.address,
+              positionId: position.id,
+              action: 'sell',
+              tokenAddress: position.token_address,
+              tokenSymbol: position.token_symbol,
+              tokenName: position.token_name,
+              // SEMANTIC SOL VALUES (source of truth for P&L)
+              solSpent: 0, // SELL never spends SOL
+              solReceived: (position as any).entry_value || entryPriceSol || 0,
+              priceSol: position.current_price,
+              // Extended metadata - inherited from BUY trade
+              buyerPosition: buyerPosition,
+              liquidity: liquidity,
+              riskScore: riskScore,
+              entryPrice: position.entry_price,
+              exitPrice: position.current_price,
+              slippage: 30, // Higher slippage for liquidity retry exits
+              // For FIFO matching
+              matchedBuySolSpent: entryPriceSol,
+            },
+          });
+        } catch (confirmErr) {
+          console.log('[LiquidityRetry] Confirm-transaction failed (non-blocking):', confirmErr);
+        }
       }
 
       addBotLog({
@@ -371,6 +430,7 @@ export function useLiquidityRetryWorker() {
       });
 
       refreshBalance();
+      releaseSellLock(position.token_address);
       return true;
     } else {
       addBotLog({
@@ -380,6 +440,7 @@ export function useLiquidityRetryWorker() {
         tokenSymbol: position.token_symbol,
         details: swapResult.error,
       });
+      releaseSellLock(position.token_address);
       return false;
     }
   }, [wallet, signAndSendTransaction, refreshBalance, toast]);
@@ -407,7 +468,7 @@ export function useLiquidityRetryWorker() {
       for (let i = 0; i < positions.length; i += CONCURRENCY_LIMIT) {
         const batch = positions.slice(i, i + CONCURRENCY_LIMIT);
         const batchResults = await Promise.all(
-          batch.map((position: WaitingPosition) => checkAndExecutePosition(position))
+          batch.map(position => checkAndExecutePosition(position))
         );
         results.push(...batchResults);
         
@@ -429,19 +490,45 @@ export function useLiquidityRetryWorker() {
     }
   }, [checking, wallet.isConnected, fetchWaitingPositions, checkAndExecutePosition]);
 
-  // Move a position to waiting for liquidity (uses pending status + exit_reason)
+  // Move a position to waiting for liquidity
   const moveToWaitingForLiquidity = useCallback(async (positionId: string): Promise<boolean> => {
+    console.log('[LiquidityRetry] moveToWaitingForLiquidity called with ID:', positionId);
+    
+    if (!positionId) {
+      console.error('[LiquidityRetry] No position ID provided');
+      return false;
+    }
+    
     try {
-      const { error } = await supabase
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        console.error('[LiquidityRetry] No authenticated user');
+        return false;
+      }
+      
+      console.log('[LiquidityRetry] Updating position for user:', user.id);
+
+      const { data, error } = await supabase
         .from('positions')
         .update({
-          status: 'pending',
-          exit_reason: 'waiting_for_liquidity',
+          status: 'waiting_for_liquidity',
+          waiting_for_liquidity_since: new Date().toISOString(),
+          liquidity_check_count: 0,
+          liquidity_last_checked_at: null,
         })
-        .eq('id', positionId);
+        .eq('id', positionId)
+        .eq('user_id', user.id)
+        .select();
 
       if (error) {
-        console.error('[LiquidityRetry] Move error:', error);
+        console.error('[LiquidityRetry] Database update error:', error);
+        return false;
+      }
+      
+      console.log('[LiquidityRetry] Update result:', data);
+      
+      if (!data || data.length === 0) {
+        console.error('[LiquidityRetry] No rows updated - position may not exist or belong to different user');
         return false;
       }
 
@@ -462,13 +549,19 @@ export function useLiquidityRetryWorker() {
   // Move position back to open (remove from waiting)
   const moveBackToOpen = useCallback(async (positionId: string): Promise<boolean> => {
     try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return false;
+
       const { error } = await supabase
         .from('positions')
         .update({
           status: 'open',
-          exit_reason: null,
+          waiting_for_liquidity_since: null,
+          liquidity_check_count: 0,
+          liquidity_last_checked_at: null,
         })
-        .eq('id', positionId);
+        .eq('id', positionId)
+        .eq('user_id', user.id);
 
       if (error) {
         return false;

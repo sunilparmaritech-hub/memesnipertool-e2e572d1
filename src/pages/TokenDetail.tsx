@@ -23,6 +23,7 @@ import {
   LineChart
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import TokenImage from '@/components/ui/TokenImage';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -377,9 +378,7 @@ export default function TokenDetail() {
             </Button>
             
             <div className="flex items-center gap-3">
-              <div className="w-12 h-12 rounded-full bg-gradient-to-br from-primary/20 to-accent/20 flex items-center justify-center">
-                <span className="text-xl font-bold text-primary">{token.symbol[0]}</span>
-              </div>
+              <TokenImage symbol={token.symbol} address={token.address} size="lg" />
               <div>
                 <div className="flex items-center gap-2">
                   <h1 className="text-2xl font-bold">{token.name}</h1>
@@ -634,13 +633,13 @@ export default function TokenDetail() {
                         </Button>
                       </a>
                       <a 
-                        href={`https://birdeye.so/token/${address}?chain=solana`}
+                        href={`https://www.geckoterminal.com/solana/pools/${address}`}
                         target="_blank"
                         rel="noopener noreferrer"
                       >
                         <Button variant="outline" size="sm" className="gap-2">
                           <ExternalLink className="w-3 h-3" />
-                          Birdeye
+                          GeckoTerminal
                         </Button>
                       </a>
                       {token.isPumpFun && (

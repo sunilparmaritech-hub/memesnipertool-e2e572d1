@@ -1,9 +1,9 @@
-import "https://deno.land/x/xhr@0.1.0/mod.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.90.1";
 import { getApiKey, API_VALIDATION_ENDPOINTS } from "../_shared/api-keys.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
 interface ApiStatus {
@@ -16,13 +16,15 @@ interface ApiStatus {
 }
 
 // API endpoints to check with their display names
+// NOTE: Using only free APIs - DexScreener (primary), GeckoTerminal (secondary), Solana RPC
 const API_ENDPOINTS: { name: string; type: string }[] = [
+  { name: 'DexScreener', type: 'dexscreener' },
+  { name: 'GeckoTerminal', type: 'geckoterminal' },
   { name: 'Jupiter', type: 'jupiter' },
   { name: 'Raydium', type: 'raydium' },
   { name: 'Pump.fun', type: 'pumpfun' },
-  { name: 'DexScreener', type: 'dexscreener' },
-  { name: 'Birdeye', type: 'birdeye' },
   { name: 'RugCheck', type: 'honeypot_rugcheck' },
+  { name: 'Helius RPC', type: 'helius' },
 ];
 
 async function checkEndpoint(endpoint: { name: string; type: string }): Promise<ApiStatus> {
@@ -80,9 +82,6 @@ async function checkEndpoint(endpoint: { name: string; type: string }): Promise<
     // Add API key based on type
     if (apiKey) {
       switch (endpoint.type) {
-        case 'birdeye':
-          headers['X-API-KEY'] = apiKey;
-          break;
         case 'jupiter':
           headers['x-api-key'] = apiKey;
           break;
@@ -90,8 +89,12 @@ async function checkEndpoint(endpoint: { name: string; type: string }): Promise<
           // Dextools V2 API uses x-api-key header
           headers['x-api-key'] = apiKey;
           break;
+        case 'helius':
+          headers['x-api-key'] = apiKey;
+          break;
         case 'honeypot_rugcheck':
-          // RugCheck doesn't require auth for basic checks
+        case 'coingecko':
+          // These don't require auth for basic checks
           break;
       }
     }

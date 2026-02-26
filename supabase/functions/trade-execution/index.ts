@@ -1,9 +1,10 @@
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.90.1";
 import { getApiKey, getApiConfig } from "../_shared/api-keys.ts";
+import { checkRateLimit, rateLimitResponse, TRADE_EXECUTION_LIMIT } from "../_shared/rate-limiter.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
 // API configuration - dynamically fetched from database
@@ -123,7 +124,17 @@ interface TokenValidation {
   canBuy: boolean;
   canSell: boolean;
   reasons: string[];
+  sellSimulation?: {
+    canSell: boolean;
+    estimatedTax?: number;
+    priceImpact?: number;
+    source?: string;
+    error?: string;
+  };
 }
+
+// Position status types
+type PositionStatus = 'open' | 'closed' | 'pending' | 'waiting_for_liquidity' | 'swap_failed';
 
 // Priority fee levels in microLamports
 const PRIORITY_FEES = {
@@ -132,6 +143,51 @@ const PRIORITY_FEES = {
   high: 200000,
   veryHigh: 1000000,
 };
+
+// Sell tax threshold - block if >= this percentage
+const SELL_TAX_THRESHOLD = 50;
+
+// Dynamic slippage calculation based on conditions
+function calculateDynamicSlippage(params: {
+  liquidity?: number;
+  priceImpact?: number;
+  isSell?: boolean;
+  requestedSlippage?: number;
+}): { slippageBps: number; reason: string } {
+  const { liquidity, priceImpact = 0, isSell = false, requestedSlippage } = params;
+  
+  // Use requested slippage as minimum
+  let baseBps = requestedSlippage || (isSell ? 150 : 100);
+  let reason = 'Default slippage';
+  
+  // Adjust for liquidity
+  if (liquidity !== undefined) {
+    if (liquidity < 500) {
+      baseBps = Math.max(baseBps, 2000); // 20% for very low liquidity
+      reason = 'Very low liquidity (<$500)';
+    } else if (liquidity < 1000) {
+      baseBps = Math.max(baseBps, 1500); // 15% for low liquidity
+      reason = 'Low liquidity (<$1000)';
+    } else if (liquidity < 5000) {
+      baseBps = Math.max(baseBps, 1000); // 10% for moderate liquidity
+      reason = 'Moderate liquidity (<$5000)';
+    } else if (liquidity < 10000) {
+      baseBps = Math.max(baseBps, 500); // 5% for decent liquidity
+      reason = 'Decent liquidity';
+    }
+  }
+  
+  // Adjust for price impact
+  if (priceImpact >= 10) {
+    baseBps = Math.max(baseBps, 2000); // 20% for very high impact
+    reason = `Very high price impact (${priceImpact.toFixed(1)}%)`;
+  } else if (priceImpact >= 5) {
+    baseBps = Math.max(baseBps, 1500); // 15% for high impact
+    reason = `High price impact (${priceImpact.toFixed(1)}%)`;
+  }
+  
+  return { slippageBps: baseBps, reason };
+}
 
 // Retry configuration
 const RETRY_CONFIG = {
@@ -298,8 +354,94 @@ async function validateToken(tokenMint: string): Promise<TokenValidation> {
   return validation;
 }
 
+// NEW: Simulate sell to detect honeypots and estimate sell tax
+async function simulateSellRoute(tokenMint: string): Promise<{
+  canSell: boolean;
+  estimatedTax?: number;
+  priceImpact?: number;
+  source?: string;
+  error?: string;
+}> {
+  // Use a small test amount for simulation
+  const testAmount = "1000000"; // Small amount in base units
+  
+  // Try Jupiter sell quote first
+  try {
+    const params = new URLSearchParams({
+      inputMint: tokenMint,
+      outputMint: SOL_MINT,
+      amount: testAmount,
+      slippageBps: "500", // 5% for simulation
+      swapMode: "ExactIn",
+    });
+
+    const response = await fetch(`${JUPITER_QUOTE_API}?${params}`, {
+      signal: AbortSignal.timeout(10000),
+      headers: JUPITER_API_KEY ? { 'x-api-key': JUPITER_API_KEY } : {},
+    });
+
+    if (response.ok) {
+      const quoteData = await response.json();
+      if (quoteData && !quoteData.error) {
+        const priceImpact = parseFloat(quoteData.priceImpactPct || "0");
+        // High price impact with small amounts often indicates sell tax
+        const estimatedTax = priceImpact > 10 ? priceImpact : 0;
+        
+        return {
+          canSell: true,
+          estimatedTax,
+          priceImpact,
+          source: "jupiter",
+        };
+      }
+    }
+  } catch (err) {
+    console.log("[SellSim] Jupiter failed:", err);
+  }
+
+  // Try Raydium as fallback
+  try {
+    const raydiumParams = new URLSearchParams({
+      inputMint: tokenMint,
+      outputMint: SOL_MINT,
+      amount: testAmount,
+      slippageBps: "500",
+      txVersion: "V0",
+    });
+
+    const raydiumRes = await fetch(`${RAYDIUM_QUOTE_API}?${raydiumParams}`, {
+      signal: AbortSignal.timeout(8000),
+    });
+
+    if (raydiumRes.ok) {
+      const raydiumData = await raydiumRes.json();
+      if (raydiumData?.success) {
+        return {
+          canSell: true,
+          priceImpact: raydiumData.data?.priceImpactPct || 0,
+          source: "raydium",
+        };
+      }
+    }
+  } catch (err) {
+    console.log("[SellSim] Raydium failed:", err);
+  }
+
+  return {
+    canSell: false,
+    error: "No sell route available on Jupiter or Raydium",
+  };
+}
+
 // Get Jupiter quote with retry (uses API key if available)
 async function getJupiterQuote(request: QuoteRequest): Promise<any> {
+  // Build fallback endpoint list: primary + free lite-api
+  const endpoints: string[] = [JUPITER_QUOTE_API];
+  const freeLiteQuote = 'https://lite-api.jup.ag/swap/v1/quote';
+  const freeV6Quote = 'https://quote-api.jup.ag/v6/quote';
+  if (!endpoints.includes(freeLiteQuote)) endpoints.push(freeLiteQuote);
+  if (!endpoints.includes(freeV6Quote)) endpoints.push(freeV6Quote);
+
   return withRetry(async () => {
     const params = new URLSearchParams({
       inputMint: request.inputMint,
@@ -309,88 +451,148 @@ async function getJupiterQuote(request: QuoteRequest): Promise<any> {
       swapMode: "ExactIn",
     });
 
-    console.log(`[Jupiter] Fetching quote: ${params.toString()}`);
+    // Race all endpoints — first success wins
+    let lastError = '';
+    for (const endpoint of endpoints) {
+      try {
+        const headers: Record<string, string> = { 'Accept': 'application/json' };
+        // Only attach API key to the paid endpoint
+        if (JUPITER_API_KEY && endpoint === JUPITER_QUOTE_API) {
+          headers['x-api-key'] = JUPITER_API_KEY;
+        }
 
-    const headers: Record<string, string> = {
-      'Accept': 'application/json',
-    };
-    
-    // Add API key header if available (for paid Jupiter API)
-    if (JUPITER_API_KEY) {
-      headers['x-api-key'] = JUPITER_API_KEY;
-    }
+        const response = await fetch(`${endpoint}?${params}`, {
+          signal: AbortSignal.timeout(12000),
+          headers,
+        });
 
-    const response = await fetch(`${JUPITER_QUOTE_API}?${params}`, {
-      signal: AbortSignal.timeout(15000),
-      headers,
-    });
-    
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error(`[Jupiter] Quote error: ${response.status} - ${errorText}`);
-      
-      // Provide more helpful error messages
-      if (response.status === 429) {
-        throw new Error(`Jupiter rate limited - consider upgrading to paid API`);
+        if (response.status === 429) {
+          console.warn(`[Jupiter] Rate limited on ${endpoint}, trying next...`);
+          lastError = 'Jupiter rate limited';
+          continue; // Try next endpoint
+        }
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error(`[Jupiter] ${endpoint} error: ${response.status} - ${errorText}`);
+          lastError = `Jupiter quote failed: ${response.status}`;
+          continue; // Try next endpoint
+        }
+
+        const quoteData = await response.json();
+        if (quoteData.error) {
+          console.error(`[Jupiter] Quote failed on ${endpoint}:`, quoteData);
+          lastError = `Jupiter quote failed: ${quoteData.error}`;
+          continue;
+        }
+
+        console.log(`[Jupiter] Quote received from ${endpoint}: ${quoteData.outAmount} output for ${request.amount} input`);
+        return quoteData;
+      } catch (err: any) {
+        console.warn(`[Jupiter] ${endpoint} failed: ${err.message}`);
+        lastError = err.message;
+        continue;
       }
-      throw new Error(`Jupiter quote failed: ${response.status}`);
     }
 
-    const quoteData = await response.json();
-    
-    if (quoteData.error) {
-      console.error(`[Jupiter] Quote failed:`, quoteData);
-      throw new Error(`Jupiter quote failed: ${quoteData.error}`);
-    }
-
-    console.log(`[Jupiter] Quote received: ${quoteData.outAmount} output for ${request.amount} input`);
-    
-    return quoteData;
+    // All endpoints failed
+    throw new Error(lastError || 'All Jupiter endpoints failed');
   }, 'Jupiter quote');
 }
 
-// Get Jupiter swap transaction (uses API key if available)
+// Get Jupiter swap transaction with multi-endpoint fallback
 async function getJupiterSwap(request: SwapRequest): Promise<any> {
   console.log(`[Jupiter] Building swap transaction for ${request.userPublicKey}`);
 
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
+  // Validate required fields before calling API
+  if (!request.quoteResponse) {
+    throw new Error('Missing quote response for Jupiter swap');
+  }
+  if (!request.userPublicKey) {
+    throw new Error('Missing wallet address for Jupiter swap');
+  }
+
+  // Validate quoteResponse has required fields
+  const qr = request.quoteResponse;
+  if (!qr.inputMint || !qr.outputMint || !qr.inAmount || !qr.outAmount) {
+    console.error('[Jupiter] Invalid quoteResponse:', JSON.stringify(qr).slice(0, 500));
+    throw new Error('Invalid quote response: missing inputMint, outputMint, inAmount, or outAmount');
+  }
+
+  const swapBody = {
+    quoteResponse: request.quoteResponse,
+    userPublicKey: request.userPublicKey,
+    wrapAndUnwrapSol: true,
+    prioritizationFeeLamports: request.priorityFee || PRIORITY_FEES.medium,
+    dynamicComputeUnitLimit: true,
   };
-  
-  // Add API key header if available
-  if (JUPITER_API_KEY) {
-    headers['x-api-key'] = JUPITER_API_KEY;
+
+  // Build fallback endpoint list for swap
+  const swapEndpoints: string[] = [JUPITER_SWAP_API];
+  const freeLiteSwap = 'https://lite-api.jup.ag/swap/v1/swap';
+  const freeV6Swap = 'https://quote-api.jup.ag/v6/swap';
+  if (!swapEndpoints.includes(freeLiteSwap)) swapEndpoints.push(freeLiteSwap);
+  if (!swapEndpoints.includes(freeV6Swap)) swapEndpoints.push(freeV6Swap);
+
+  let lastError = '';
+
+  for (const endpoint of swapEndpoints) {
+    try {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      
+      // Only attach API key to the paid endpoint
+      if (JUPITER_API_KEY && endpoint === JUPITER_SWAP_API) {
+        headers['x-api-key'] = JUPITER_API_KEY;
+      }
+
+      console.log(`[Jupiter] Trying swap endpoint: ${endpoint}`);
+
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(swapBody),
+        signal: AbortSignal.timeout(20000),
+      });
+
+      if (response.status === 429) {
+        console.warn(`[Jupiter] Rate limited on swap ${endpoint}, trying next...`);
+        lastError = 'Jupiter swap rate limited';
+        continue;
+      }
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`[Jupiter] Swap build error on ${endpoint}: ${response.status} - ${errorText}`);
+        lastError = errorText || `Jupiter swap failed: HTTP ${response.status}`;
+        continue;
+      }
+
+      const swapData = await response.json();
+      
+      if (swapData.error) {
+        console.error(`[Jupiter] Swap build failed on ${endpoint}:`, swapData.error);
+        lastError = typeof swapData.error === 'string' ? swapData.error : JSON.stringify(swapData.error);
+        continue;
+      }
+
+      if (!swapData.swapTransaction) {
+        console.error(`[Jupiter] No swapTransaction in response from ${endpoint}`);
+        lastError = 'Jupiter returned empty swap transaction';
+        continue;
+      }
+
+      console.log(`[Jupiter] Swap transaction built successfully via ${endpoint}`);
+      return swapData;
+    } catch (err: any) {
+      console.warn(`[Jupiter] Swap ${endpoint} failed: ${err.message}`);
+      lastError = err.message;
+      continue;
+    }
   }
 
-  const response = await fetch(JUPITER_SWAP_API, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      quoteResponse: request.quoteResponse,
-      userPublicKey: request.userPublicKey,
-      wrapAndUnwrapSol: true,
-      prioritizationFeeLamports: request.priorityFee || PRIORITY_FEES.medium,
-      dynamicComputeUnitLimit: true,
-    }),
-    signal: AbortSignal.timeout(20000),
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    console.error(`[Jupiter] Swap build error: ${response.status} - ${errorText}`);
-    throw new Error(`Jupiter swap build failed: ${response.status}`);
-  }
-
-  const swapData = await response.json();
-  
-  if (swapData.error) {
-    console.error(`[Jupiter] Swap build failed:`, swapData);
-    throw new Error(`Jupiter swap build failed: ${swapData.error}`);
-  }
-
-  console.log(`[Jupiter] Swap transaction built successfully`);
-  
-  return swapData;
+  throw new Error(`Jupiter swap build failed: ${lastError}`);
 }
 
 // Get Raydium quote (fallback) with retry
@@ -565,15 +767,31 @@ Deno.serve(async (req) => {
       global: { headers: { Authorization: authHeader } },
     });
 
-    const token = authHeader.slice("Bearer ".length);
-    const { data: claimsData, error: claimsError } = await authClient.auth.getClaims(token);
-    const userId = claimsData?.claims?.sub;
-
-    if (claimsError || !userId) {
+    // PRODUCTION FIX: Use getClaims for reliable JWT validation in edge environment
+    const jwtToken = authHeader.replace('Bearer ', '');
+    let userId: string;
+    
+    try {
+      const { data: claimsData, error: claimsError } = await authClient.auth.getClaims(jwtToken);
+      const sub = claimsData?.claims?.sub as string | undefined;
+      if (claimsError || !sub) {
+        return new Response(
+          JSON.stringify({ error: claimsError?.message || "Invalid or expired token" }),
+          { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+      userId = sub;
+    } catch (authErr: any) {
       return new Response(
-        JSON.stringify({ error: "Invalid or expired token" }),
+        JSON.stringify({ error: authErr.message || "Auth failed" }),
         { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
+    }
+
+    // Per-user rate limiting
+    const rateCheck = checkRateLimit(userId, TRADE_EXECUTION_LIMIT);
+    if (!rateCheck.allowed) {
+      return rateLimitResponse(rateCheck, corsHeaders);
     }
 
     const user = { id: userId };
@@ -764,7 +982,7 @@ Deno.serve(async (req) => {
           );
         }
 
-        // Step 1: Validate token safety
+        // Step 1: Validate token safety (includes RugCheck honeypot detection)
         const [validation, pumpCheck] = await Promise.all([
           validateToken(body.outputMint),
           isPumpFunToken(body.outputMint),
@@ -775,7 +993,8 @@ Deno.serve(async (req) => {
           return new Response(
             JSON.stringify({
               success: false,
-              error: "Token failed safety check: HONEYPOT DETECTED",
+              error: "🚨 HONEYPOT DETECTED - Token blocked for your safety",
+              errorCode: "HONEYPOT",
               validation,
             }),
             { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -785,6 +1004,49 @@ Deno.serve(async (req) => {
         // Warn if freeze authority is not revoked
         if (validation.freezeAuthority) {
           console.log(`[Trade] Warning: Token has freeze authority: ${validation.freezeAuthority}`);
+          validation.reasons.push("⚠️ Token has freeze authority - owner can freeze your tokens");
+        }
+
+        // Step 1.5: CRITICAL - Simulate sell BEFORE buying (unless it's a Pump.fun token)
+        // This prevents buying tokens that cannot be sold (honeypots, high-tax tokens)
+        if (!pumpCheck.isPumpFun) {
+          console.log(`[Trade] Simulating sell route for ${body.outputMint}...`);
+          const sellSimulation = await simulateSellRoute(body.outputMint);
+          validation.sellSimulation = sellSimulation;
+          
+          if (!sellSimulation.canSell) {
+            console.log(`[Trade] ❌ BLOCKED: Cannot sell token - ${sellSimulation.error}`);
+            return new Response(
+              JSON.stringify({
+                success: false,
+                error: `🚨 ILLIQUID TOKEN - No sell route available. This token cannot be sold on Jupiter or Raydium.`,
+                errorCode: "ILLIQUID",
+                validation,
+              }),
+              { status: 422, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+            );
+          }
+          
+          // Check for high sell tax
+          if (sellSimulation.estimatedTax && sellSimulation.estimatedTax >= SELL_TAX_THRESHOLD) {
+            console.log(`[Trade] ❌ BLOCKED: High sell tax ${sellSimulation.estimatedTax}%`);
+            return new Response(
+              JSON.stringify({
+                success: false,
+                error: `🚨 HIGH SELL TAX DETECTED - Estimated ${sellSimulation.estimatedTax.toFixed(1)}% tax. Token blocked for your safety.`,
+                errorCode: "HIGH_TAX",
+                validation,
+              }),
+              { status: 422, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+            );
+          }
+          
+          if (sellSimulation.canSell) {
+            validation.reasons.push(`✅ Sell route verified via ${sellSimulation.source}`);
+            if (sellSimulation.priceImpact && sellSimulation.priceImpact > 5) {
+              validation.reasons.push(`⚠️ High sell price impact: ${sellSimulation.priceImpact.toFixed(1)}%`);
+            }
+          }
         }
 
         // Step 2: Get quote - CRITICAL: Check Pump.fun FIRST for new tokens
@@ -931,7 +1193,60 @@ Deno.serve(async (req) => {
           ? 6
           : await getMintDecimals(rpcUrl, body.outputMint);
         const outputAmountDecimal = outputAmountLamports / Math.pow(10, outputDecimals);
+        
+        // CRITICAL FIX: Fetch USD prices at execution time to ensure unit consistency
+        // entry_price_usd must be in USD to match DexScreener's current_price (also USD)
+        let entryPriceUsd: number | null = null;
+        let solPriceUsd = 150; // Fallback SOL price
+        
+        try {
+          // Fetch SOL price in USD from DexScreener
+          const solPriceRes = await fetch(
+            `https://api.dexscreener.com/latest/dex/tokens/${SOL_MINT}`,
+            { signal: AbortSignal.timeout(3000) }
+          );
+          if (solPriceRes.ok) {
+            const solData = await solPriceRes.json();
+            const solPairs = solData?.pairs || [];
+            const bestSolPair = solPairs
+              .filter((p: any) => p?.chainId === 'solana' && p?.quoteToken?.symbol === 'USDC')
+              .sort((a: any, b: any) => (b?.liquidity?.usd || 0) - (a?.liquidity?.usd || 0))[0];
+            if (bestSolPair?.priceUsd) {
+              solPriceUsd = parseFloat(bestSolPair.priceUsd) || solPriceUsd;
+            }
+          }
+          
+          // Fetch token price in USD from DexScreener
+          const tokenPriceRes = await fetch(
+            `https://api.dexscreener.com/latest/dex/tokens/${body.outputMint}`,
+            { signal: AbortSignal.timeout(3000) }
+          );
+          if (tokenPriceRes.ok) {
+            const tokenData = await tokenPriceRes.json();
+            const tokenPairs = tokenData?.pairs || [];
+            const bestTokenPair = tokenPairs
+              .filter((p: any) => p?.chainId === 'solana')
+              .sort((a: any, b: any) => (b?.liquidity?.usd || 0) - (a?.liquidity?.usd || 0))[0];
+            if (bestTokenPair?.priceUsd) {
+              entryPriceUsd = parseFloat(bestTokenPair.priceUsd) || null;
+              console.log(`[Trade] Token USD price from DexScreener: $${entryPriceUsd}`);
+            }
+          }
+        } catch (priceErr) {
+          console.log(`[Trade] USD price fetch failed (non-blocking): ${priceErr}`);
+        }
+        
+        // Calculate entry price in SOL (for backwards compatibility)
         const entryPrice = inputAmountDecimal / outputAmountDecimal;
+        
+        // Calculate entry value in USD (SOL invested * SOL price)
+        const entryValueUsd = inputAmountDecimal * solPriceUsd;
+        
+        // If we couldn't get token USD price from DexScreener, calculate from SOL price
+        if (!entryPriceUsd) {
+          entryPriceUsd = entryPrice * solPriceUsd;
+          console.log(`[Trade] Calculated USD price from SOL: $${entryPriceUsd}`);
+        }
 
         // CRITICAL: Fetch token metadata from DexScreener if not provided
         // This ensures proper token names are stored in the database for all tabs
@@ -1022,10 +1337,11 @@ Deno.serve(async (req) => {
             token_name: finalTokenName,
             chain: "solana",
             entry_price: entryPrice,
-            current_price: entryPrice,
+            entry_price_usd: entryPriceUsd,
+            current_price: entryPriceUsd || entryPrice,
             amount: outputAmountDecimal,
-            entry_value: inputAmountDecimal,
-            current_value: inputAmountDecimal,
+            entry_value: entryValueUsd,
+            current_value: entryValueUsd,
             profit_take_percent: body.profitTakePercent || 100,
             stop_loss_percent: body.stopLossPercent || 20,
             status: "pending",

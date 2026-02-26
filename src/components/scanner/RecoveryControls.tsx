@@ -64,31 +64,31 @@ export default function RecoveryControls({
   }, [onForceEvaluate, evalCooldown]);
 
   return (
-    <Card className="bg-card/80 backdrop-blur-sm border-border/40">
-      <CardHeader className="pb-2 pt-3 px-3">
-        <CardTitle className="text-xs font-medium flex items-center justify-between">
+    <Card className="bg-card/80 backdrop-blur-sm border-border/50">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm font-medium flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <AlertTriangle className="w-3.5 h-3.5 text-warning" />
-            <span className="text-muted-foreground">RECOVERY CONTROLS</span>
+            <AlertTriangle className="w-4 h-4 text-warning" />
+            Recovery Controls
           </div>
-          <Badge variant="outline" className="text-[9px] h-4 px-1.5 bg-muted/30">
+          <Badge variant="outline" className="text-[10px] h-4">
             {processedCount} processed
           </Badge>
         </CardTitle>
       </CardHeader>
-      <CardContent className="px-3 pb-3 pt-0">
-        <div className="grid grid-cols-2 gap-1.5">
+      <CardContent className="pt-0">
+        <div className="grid grid-cols-2 gap-2">
           <Button
             variant="outline"
             size="sm"
-            className="h-8 text-[10px] bg-secondary/30 border-border/40 hover:bg-secondary/50"
+            className="h-9 text-xs"
             onClick={handleForceScan}
             disabled={scanning || scanCooldown}
           >
             {scanning ? (
-              <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+              <Loader2 className="w-3 h-3 mr-1.5 animate-spin" />
             ) : (
-              <RefreshCw className="w-3 h-3 mr-1" />
+              <RefreshCw className="w-3 h-3 mr-1.5" />
             )}
             {scanCooldown ? 'Wait...' : 'Force Scan'}
           </Button>
@@ -96,36 +96,36 @@ export default function RecoveryControls({
           <Button
             variant="outline"
             size="sm"
-            className="h-8 text-[10px] bg-secondary/30 border-border/40 hover:bg-secondary/50"
+            className="h-9 text-xs"
             onClick={handleForceEvaluate}
             disabled={evaluating || evalCooldown || !botActive}
           >
             {evaluating ? (
-              <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+              <Loader2 className="w-3 h-3 mr-1.5 animate-spin" />
             ) : (
-              <Zap className="w-3 h-3 mr-1" />
+              <Zap className="w-3 h-3 mr-1.5" />
             )}
-            {evalCooldown ? 'Wait...' : 'Force Exit'}
+            {evalCooldown ? 'Wait...' : 'Force Eval'}
           </Button>
           
           <Button
             variant="outline"
             size="sm"
-            className="h-8 text-[10px] bg-secondary/30 border-border/40 hover:bg-secondary/50"
+            className="h-9 text-xs"
             onClick={onClearProcessed}
           >
-            <Trash2 className="w-3 h-3 mr-1" />
+            <Trash2 className="w-3 h-3 mr-1.5" />
             Clear Cache
           </Button>
           
           <Button
             variant="outline"
             size="sm"
-            className="h-8 text-[10px] text-destructive hover:text-destructive bg-secondary/30 border-border/40 hover:bg-destructive/10"
+            className="h-9 text-xs text-destructive hover:text-destructive"
             onClick={onResetBot}
           >
-            <Play className="w-3 h-3 mr-1" />
-            Reset Exit
+            <Play className="w-3 h-3 mr-1.5" />
+            Reset Bot
           </Button>
         </div>
         
@@ -134,29 +134,38 @@ export default function RecoveryControls({
           <Button
             variant="outline"
             size="sm"
-            className="w-full h-8 text-[10px] mt-1.5 border-primary/40 text-primary hover:bg-primary/10 bg-secondary/30"
+            className="w-full h-9 text-xs mt-2 border-primary/50 text-primary hover:bg-primary/10 hover:text-primary"
             onClick={onSyncPositions}
             disabled={syncingPositions}
           >
             {syncingPositions ? (
-              <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+              <Loader2 className="w-3 h-3 mr-1.5 animate-spin" />
             ) : (
-              <Wallet className="w-3 h-3 mr-1" />
+              <Wallet className="w-3 h-3 mr-1.5" />
             )}
-            {syncingPositions ? 'Syncing...' : `Set TX Position with Wallet`}
+            {syncingPositions ? 'Syncing...' : `Sync ${openPositionsCount} Position${openPositionsCount > 1 ? 's' : ''} with Wallet`}
           </Button>
         )}
         
-        <Button
-          variant="outline"
-          size="sm"
-          className="w-full h-8 text-[10px] mt-1.5 border-primary/40 text-primary hover:bg-primary/10 bg-secondary/30"
-        >
-          <Play className="w-3 h-3 mr-1" />
-          Commit & Push Positions
-        </Button>
+        {/* Cleanup Stuck Positions - Full width button */}
+        {onCleanupStuck && stuckPositionsCount > 0 && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="w-full h-9 text-xs mt-2 border-destructive/50 text-destructive hover:bg-destructive/10 hover:text-destructive"
+            onClick={onCleanupStuck}
+            disabled={cleaningUp}
+          >
+            {cleaningUp ? (
+              <Loader2 className="w-3 h-3 mr-1.5 animate-spin" />
+            ) : (
+              <XCircle className="w-3 h-3 mr-1.5" />
+            )}
+            {cleaningUp ? 'Cleaning...' : `Cleanup ${stuckPositionsCount} Stuck Position${stuckPositionsCount > 1 ? 's' : ''}`}
+          </Button>
+        )}
         
-        <p className="text-[9px] text-muted-foreground mt-2 text-center">
+        <p className="text-[10px] text-muted-foreground mt-2 text-center">
           Use if bot appears stuck or not trading.
         </p>
       </CardContent>

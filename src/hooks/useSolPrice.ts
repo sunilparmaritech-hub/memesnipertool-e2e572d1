@@ -43,64 +43,59 @@ export function useSolPrice(refreshInterval = 60000) {
     setLoading(true);
     setError(null);
 
-    // Try multiple price sources for resilience
-    const priceSources = [
-      // Primary: CoinGecko (most reliable, no API key)
-      async (): Promise<number | null> => {
-        const response = await fetch(
-          'https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd',
-          { 
-            method: 'GET',
-            headers: { 'Accept': 'application/json' },
-            signal: AbortSignal.timeout(5000),
-          }
-        );
-        if (!response.ok) return null;
-        const data = await response.json();
-        return data?.solana?.usd ?? null;
-      },
-      // Fallback 1: Jupiter Price API (fast, Solana-native)
-      async (): Promise<number | null> => {
-        const response = await fetch(
-          'https://price.jup.ag/v6/price?ids=So11111111111111111111111111111111111111112',
-          { 
-            method: 'GET',
-            headers: { 'Accept': 'application/json' },
-            signal: AbortSignal.timeout(5000),
-          }
-        );
-        if (!response.ok) return null;
-        const data = await response.json();
-        return data?.data?.['So11111111111111111111111111111111111111112']?.price ?? null;
-      },
-      // Fallback 2: Binance public API
-      async (): Promise<number | null> => {
-        const response = await fetch(
-          'https://api.binance.com/api/v3/ticker/price?symbol=SOLUSDT',
-          { 
-            method: 'GET',
-            headers: { 'Accept': 'application/json' },
-            signal: AbortSignal.timeout(5000),
-          }
-        );
-        if (!response.ok) return null;
-        const data = await response.json();
-        return data?.price ? parseFloat(data.price) : null;
-      },
-    ];
-
     let newPrice: number | null = null;
     
-    for (const fetchSource of priceSources) {
-      try {
-        const result = await fetchSource();
-        if (typeof result === 'number' && result > 0 && Number.isFinite(result)) {
-          newPrice = result;
-          break; // Success - stop trying other sources
+    // Primary: Use edge function to avoid CORS issues
+    try {
+      const { supabase } = await import('@/integrations/supabase/client');
+      let { data, error } = await supabase.functions.invoke('sol-price');
+      
+      // If we get an auth error, refresh session and retry once
+      if (error && (error.message?.includes('expired') || error.message?.includes('401'))) {
+        await supabase.auth.refreshSession();
+        const retry = await supabase.functions.invoke('sol-price');
+        data = retry.data;
+        error = retry.error;
+      }
+      
+      if (data?.price && typeof data.price === 'number' && data.price > 0) {
+        newPrice = data.price;
+      } else if (!error && data?.success === false) {
+        console.warn('Sol price: all sources unavailable, using fallback');
+      }
+    } catch (err) {
+      console.warn('Edge function price fetch failed:', err);
+    }
+    
+    // Fallback: Direct API calls (may fail due to CORS in some environments)
+    if (newPrice === null) {
+      const priceSources = [
+        // Binance (usually works from browser)
+        async (): Promise<number | null> => {
+          const response = await fetch(
+            'https://api.binance.com/api/v3/ticker/price?symbol=SOLUSDT',
+            { 
+              method: 'GET',
+              headers: { 'Accept': 'application/json' },
+              signal: AbortSignal.timeout(5000),
+            }
+          );
+          if (!response.ok) return null;
+          const data = await response.json();
+          return data?.price ? parseFloat(data.price) : null;
+        },
+      ];
+
+      for (const fetchSource of priceSources) {
+        try {
+          const result = await fetchSource();
+          if (typeof result === 'number' && result > 0 && Number.isFinite(result)) {
+            newPrice = result;
+            break;
+          }
+        } catch {
+          continue;
         }
-      } catch {
-        // Try next source
-        continue;
       }
     }
 

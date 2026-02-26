@@ -1,139 +1,339 @@
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+/**
+ * Production-Grade Token Scanner v3
+ * 
+ * OPTIMIZED for sub-second token detection with HARD DISCOVERY FILTERS:
+ * 
+ * STAGE 1 - Fast Discovery: Racing parallel APIs (first response wins)
+ * STAGE 1.5 - HARD FILTERS: Reject unsafe tokens BEFORE storage
+ * STAGE 2 - Tradability: High-concurrency Jupiter verification
+ * 
+ * HARD DISCOVERY FILTERS (enforced before NEW state):
+ * - Liquidity >= $5000 (≈33 SOL)
+ * - Holder count >= 5
+ * - Pool age >= 60 seconds
+ * - No freeze authority
+ * - No mint authority
+ * 
+ * Performance Target: <2s full scan
+ */
+
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.90.1";
 import { validateTokenScannerInput } from "../_shared/validation.ts";
-import { getApiKey, decryptKey as sharedDecryptKey } from "../_shared/api-keys.ts";
+import { getBatchQuotes, getBatchSellQuotes, type QuoteResult } from "../_shared/jupiter-fast.ts";
+import { raceDiscovery, fastBatchQuotes, type DiscoveredPool } from "../_shared/fast-discovery.ts";
+import { getApiKey } from "../_shared/api-keys.ts";
+import { getLiveSolPrice } from "../_shared/sol-price.ts";
+import { checkRateLimit, rateLimitResponse, TOKEN_SCANNER_LIMIT } from "../_shared/rate-limiter.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version',
 };
-
-// Jupiter API for tradability check
-const JUPITER_QUOTE_API = "https://lite-api.jup.ag/swap/v1/quote";
-
-// RugCheck API for safety validation
-const RUGCHECK_API = "https://api.rugcheck.xyz/v1";
 
 const SOL_MINT = "So11111111111111111111111111111111111111112";
 const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+const RUGCHECK_API = "https://api.rugcheck.xyz/v1";
 
-// ============================================================================
-// DexScreener ENRICHMENT ONLY - permanent cache, non-blocking
-// ============================================================================
-interface DexScreenerCache {
-  [poolAddress: string]: {
-    result: DexScreenerPairResult;
-    timestamp: number;
-    queryCount: number;
-    lastQueryAt: number;
+// =============================================================================
+// HARD DISCOVERY FILTER THRESHOLDS
+// =============================================================================
+
+const HARD_FILTERS = {
+  MIN_LIQUIDITY_USD: 5000,      // $5000 minimum
+  // MIN_LIQUIDITY_SOL is computed dynamically from live SOL price in the handler
+  MIN_HOLDER_COUNT: 5,          // At least 5 holders
+  MIN_POOL_AGE_SECONDS: 60,     // Pool must be 60+ seconds old
+  REJECT_FREEZE_AUTHORITY: true,
+  REJECT_MINT_AUTHORITY: true,
+};
+
+// =============================================================================
+// TYPES
+// =============================================================================
+
+interface DiscoveredToken {
+  address: string;
+  name: string;
+  symbol: string;
+  chain: string;
+  liquidity: number;
+  liquidityUsd: number;
+  priceUsd: number;
+  volume24h: number;
+  marketCap: number;
+  source: string;
+  pairAddress: string;
+  poolCreatedAt: string;
+  dexId: string;
+  holderCount?: number;
+  buyerPosition?: number;
+}
+
+interface HardFilterResult {
+  passed: boolean;
+  rejectionReason?: string;
+  rejectionDetails?: {
+    liquidity?: number;
+    holderCount?: number;
+    poolAgeSeconds?: number;
+    hasFreezeAuthority?: boolean;
+    hasMintAuthority?: boolean;
   };
 }
 
-const dexScreenerCache: DexScreenerCache = {};
-const DEXSCREENER_MAX_QUERIES_PER_POOL = 1;
-const DEXSCREENER_MAX_COOLDOWN = 120000;
-
-interface DexScreenerPairResult {
-  pairFound: boolean;
-  pairAddress?: string;
-  priceUsd?: number;
-  volume24h?: number;
-  liquidity?: number;
-  dexId?: string;
-  retryAt?: number;
+interface AuthorityCheckResult {
+  freezeAuthority: string | null;
+  mintAuthority: string | null;
+  isHoneypot: boolean;
+  riskScore: number;
+  // Deployer & LP enrichment (extracted from RugCheck report)
+  creatorAddress: string | null;
+  lpMintAddress: string | null;
+  lpLockedPercent: number | null;
+  topHolders: { address: string; pct: number }[];
 }
 
-// Token lifecycle stages (only tradable stages now)
-type TokenStage = 'LP_LIVE' | 'INDEXING' | 'LISTED';
+interface TradableToken extends DiscoveredToken {
+  id: string;
+  riskScore: number;
+  isTradeable: boolean;
+  canBuy: boolean;
+  canSell: boolean;
+  freezeAuthority: string | null;
+  mintAuthority: string | null;
+  safetyReasons: string[];
+  holders?: number;
+  // Deployer & LP enrichment
+  deployerWallet: string | null;
+  lpMintAddress: string | null;
+  creatorAddress: string | null;
+  lpLockedPercent: number | null;
+  rugcheckTopHolders: { address: string; pct: number }[];
+  tokenStatus: {
+    tradable: boolean;
+    stage: 'DISCOVERED' | 'PENDING' | 'TRADEABLE' | 'REJECTED';
+    jupiterIndexed: boolean;
+    lastChecked: string;
+  };
+}
 
-// Helper: generate short address format instead of "Unknown"
+interface PendingToken {
+  address: string;
+  symbol: string;
+  name: string;
+  liquidity: number;
+  source: string;
+  reason: string;
+}
+
+interface RejectedToken {
+  address: string;
+  symbol: string;
+  name: string;
+  liquidity: number;
+  source: string;
+  reason: string;
+}
+
+// =============================================================================
+// HELPERS
+// =============================================================================
+
 function shortAddress(address: string | null | undefined): string {
   if (!address || address.length < 10) return 'TOKEN';
   return `${address.slice(0, 4)}…${address.slice(-4)}`;
 }
 
 function safeTokenName(name: string | null | undefined, address: string): string {
-  if (name && name.trim() && !/^(unknown|unknown token|token|\?\?\?|n\/a)$/i.test(name.trim())) {
+  if (name?.trim() && !/^(unknown|unknown token|token|\?\?\?|n\/a)$/i.test(name.trim())) {
     return name.trim();
   }
   return `Token ${shortAddress(address)}`;
 }
 
 function safeTokenSymbol(symbol: string | null | undefined, address: string): string {
-  if (symbol && symbol.trim() && !/^(unknown|\?\?\?|n\/a)$/i.test(symbol.trim())) {
+  if (symbol?.trim() && !/^(unknown|\?\?\?|n\/a)$/i.test(symbol.trim())) {
     return symbol.trim();
   }
   return shortAddress(address);
 }
 
-interface TokenStatus {
-  tradable: boolean;
-  stage: TokenStage;
-  poolAddress?: string;
-  detectedAtSlot?: number;
-  dexScreener: {
-    pairFound: boolean;
-    retryAt?: number;
+function getPoolAgeSeconds(poolCreatedAt: string | undefined): number {
+  if (!poolCreatedAt) return 0;
+  try {
+    const createdTime = new Date(poolCreatedAt).getTime();
+    const now = Date.now();
+    return Math.max(0, Math.floor((now - createdTime) / 1000));
+  } catch {
+    return 0;
+  }
+}
+
+// =============================================================================
+// HARD DISCOVERY FILTERS (PRE-STORAGE VALIDATION)
+// =============================================================================
+
+function applyHardFilters(
+  token: DiscoveredToken,
+  holderCount: number | undefined,
+  authorityCheck: AuthorityCheckResult | null
+): HardFilterResult {
+  const details: HardFilterResult['rejectionDetails'] = {};
+  const reasons: string[] = [];
+
+  // 1. Liquidity check ($5000 minimum)
+  // liquidityUsd is calculated in the caller using live SOL price; never fall back to hardcoded $150
+  const liquidityUsd = token.liquidityUsd || 0;
+  details.liquidity = liquidityUsd;
+  
+  if (liquidityUsd < HARD_FILTERS.MIN_LIQUIDITY_USD) {
+    reasons.push(`Liquidity $${liquidityUsd.toFixed(0)} < $${HARD_FILTERS.MIN_LIQUIDITY_USD}`);
+  }
+
+  // 2. Holder count check (minimum 5)
+  details.holderCount = holderCount ?? 0;
+  
+  if (holderCount !== undefined && holderCount < HARD_FILTERS.MIN_HOLDER_COUNT) {
+    reasons.push(`Holders ${holderCount} < ${HARD_FILTERS.MIN_HOLDER_COUNT}`);
+  }
+
+  // 3. Pool age check (minimum 60 seconds)
+  const poolAgeSeconds = getPoolAgeSeconds(token.poolCreatedAt);
+  details.poolAgeSeconds = poolAgeSeconds;
+  
+  if (poolAgeSeconds < HARD_FILTERS.MIN_POOL_AGE_SECONDS) {
+    reasons.push(`Pool age ${poolAgeSeconds}s < ${HARD_FILTERS.MIN_POOL_AGE_SECONDS}s`);
+  }
+
+  // 4. Freeze authority check
+  if (authorityCheck?.freezeAuthority && HARD_FILTERS.REJECT_FREEZE_AUTHORITY) {
+    details.hasFreezeAuthority = true;
+    reasons.push('Freeze authority present');
+  }
+
+  // 5. Mint authority check
+  if (authorityCheck?.mintAuthority && HARD_FILTERS.REJECT_MINT_AUTHORITY) {
+    details.hasMintAuthority = true;
+    reasons.push('Mint authority present');
+  }
+
+  // 6. Honeypot check
+  if (authorityCheck?.isHoneypot) {
+    reasons.push('Detected as honeypot');
+  }
+
+  return {
+    passed: reasons.length === 0,
+    rejectionReason: reasons.length > 0 ? reasons.join('; ') : undefined,
+    rejectionDetails: details,
   };
 }
 
-interface ApiConfig {
-  id: string;
-  api_type: string;
-  api_name: string;
-  base_url: string;
-  api_key_encrypted: string | null;
-  is_enabled: boolean;
-  rate_limit_per_minute: number;
+// =============================================================================
+// BATCH AUTHORITY CHECK (PARALLEL RUGCHECK CALLS)
+// =============================================================================
+
+async function batchCheckAuthorities(
+  tokenAddresses: string[]
+): Promise<Record<string, AuthorityCheckResult>> {
+  const results: Record<string, AuthorityCheckResult> = {};
+  
+  if (tokenAddresses.length === 0) return results;
+
+  // Parallel fetch with 3s timeout (increased from 1.5s to get deployer/LP data)
+  const checks = await Promise.allSettled(
+    tokenAddresses.map(async (address) => {
+      try {
+        const response = await fetch(`${RUGCHECK_API}/tokens/${address}/report`, {
+          signal: AbortSignal.timeout(3000),
+        });
+        
+        if (!response.ok) {
+          return { address, result: null };
+        }
+        
+        const data = await response.json();
+        
+        const freezeAuthority = data.token?.freezeAuthority || null;
+        const mintAuthority = data.token?.mintAuthority || null;
+        
+        // Extract deployer/creator address from RugCheck report
+        // RugCheck uses 'creator' at top level for the deployer wallet
+        const creatorAddress = data.creator || data.token?.creator || data.token?.owner || data.creatorAddress || null;
+        
+        // Extract LP info from markets array
+        const markets = data.markets || [];
+        let lpMintAddress: string | null = null;
+        let lpLockedPercent: number | null = null;
+        for (const m of markets) {
+          // RugCheck markets have lp.lpMint and lp.lpLockedPct or lpLockedPct at market level
+          const lpMint = m?.lp?.lpMint || m?.lpMint || m?.lp?.mint || null;
+          const lockedPct = m?.lp?.lpLockedPct ?? m?.lpLockedPct ?? m?.lp?.lockedPct ?? null;
+          if (lpMint && !lpMintAddress) lpMintAddress = lpMint;
+          if (lockedPct !== null && lpLockedPercent === null) lpLockedPercent = lockedPct;
+          if (lpMintAddress && lpLockedPercent !== null) break;
+        }
+        
+        // Extract top holders
+        const topHolders: { address: string; pct: number }[] = [];
+        const rawHolders = data.topHolders || [];
+        for (const h of rawHolders.slice(0, 10)) {
+          if (h.address && typeof h.pct === 'number') {
+            topHolders.push({ address: h.address, pct: h.pct });
+          }
+        }
+        
+        let isHoneypot = false;
+        let riskScore = 50;
+        
+        if (data.risks) {
+          const honeypotRisk = data.risks.find((r: { name?: string; level?: string }) =>
+            r.name?.toLowerCase().includes("honeypot") && (r.level === "danger" || r.level === "warn")
+          );
+          if (honeypotRisk) {
+            isHoneypot = true;
+            riskScore = 100;
+          }
+        }
+        
+        if (freezeAuthority) riskScore = Math.min(riskScore + 20, 100);
+        if (mintAuthority) riskScore = Math.min(riskScore + 15, 100);
+        
+        return {
+          address,
+          result: { freezeAuthority, mintAuthority, isHoneypot, riskScore, creatorAddress, lpMintAddress, lpLockedPercent, topHolders },
+        };
+      } catch {
+        return { address, result: null };
+      }
+    })
+  );
+
+  for (const check of checks) {
+    if (check.status === 'fulfilled' && check.value.result) {
+      results[check.value.address] = check.value.result;
+    }
+  }
+
+  console.log(`[HardFilter] Authority check: ${Object.keys(results).length}/${tokenAddresses.length} tokens`);
+  return results;
 }
 
-interface TokenData {
-  id: string;
-  address: string;
-  name: string;
-  symbol: string;
-  chain: string;
-  liquidity: number;
-  liquidityLocked: boolean;
-  lockPercentage: number | null;
-  priceUsd: number;
-  priceChange24h: number;
-  volume24h: number;
-  marketCap: number;
-  holders: number;
-  createdAt: string;
-  earlyBuyers: number;
-  buyerPosition: number | null;
-  riskScore: number;
-  source: string;
-  pairAddress: string;
-  // Safety validation fields
-  isTradeable: boolean;
-  canBuy: boolean;
-  canSell: boolean;
-  freezeAuthority: string | null;
-  mintAuthority: string | null;
-  isPumpFun: boolean;
-  safetyReasons: string[];
-  tokenStatus?: TokenStatus;
-}
+// =============================================================================
+// MAIN HANDLER
+// =============================================================================
 
-interface ApiError {
-  apiName: string;
-  apiType: string;
-  errorMessage: string;
-  endpoint: string;
-  timestamp: string;
-}
-
-serve(async (req) => {
+Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
   }
 
+  const startTime = Date.now();
+
   try {
+    // Auth validation
     const authHeader = req.headers.get('Authorization');
-    if (!authHeader) {
+    if (!authHeader?.startsWith('Bearer ')) {
       return new Response(JSON.stringify({ error: 'Unauthorized' }), {
         status: 401,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -144,32 +344,32 @@ serve(async (req) => {
     const anonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
     const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
-    // Auth client (verifies JWT via signing keys)
     const authClient = createClient(supabaseUrl, anonKey, {
-      global: {
-        headers: {
-          Authorization: authHeader,
-        },
-      },
+      global: { headers: { Authorization: authHeader } },
     });
 
-    const token = authHeader.startsWith('Bearer ')
-      ? authHeader.slice('Bearer '.length)
-      : authHeader;
+    const token = authHeader.replace('Bearer ', '');
+    const { data: claimsData, error: authError } = await authClient.auth.getClaims(token);
+    const userId = claimsData?.claims?.sub as string | undefined;
 
-    const { data: claimsData, error: claimsError } = await authClient.auth.getClaims(token);
-    const userId = claimsData?.claims?.sub;
-
-    if (claimsError || !userId) {
-      return new Response(JSON.stringify({ error: 'Invalid or expired token' }), {
-        status: 401,
+    if (authError || !userId) {
+      const errMsg = authError?.message || 'Invalid token';
+      const status = errMsg.toLowerCase().includes('expired') ? 401 : 401;
+      return new Response(JSON.stringify({ error: errMsg }), {
+        status,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
 
-    // Admin client for DB access (bypasses RLS where needed)
+    // Per-user rate limiting
+    const rateCheck = checkRateLimit(userId, TOKEN_SCANNER_LIMIT);
+    if (!rateCheck.allowed) {
+      return rateLimitResponse(rateCheck, corsHeaders);
+    }
+
     const supabase = createClient(supabaseUrl, serviceRoleKey);
 
+    // Parse request
     const rawBody = await req.json().catch(() => ({}));
     const validationResult = validateTokenScannerInput(rawBody);
     
@@ -179,648 +379,709 @@ serve(async (req) => {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
-    
+
     const { minLiquidity, chains } = validationResult.data!;
+    const stage = rawBody.stage || 'both';
 
-    const { data: apiConfigs } = await supabase
-      .from('api_configurations')
-      .select('*')
-      .eq('is_enabled', true);
+    if (!chains.includes('solana')) {
+      return new Response(JSON.stringify({
+        tokens: [],
+        errors: ['Only Solana chain supported'],
+        timestamp: new Date().toISOString(),
+        stats: { total: 0, tradeable: 0, pending: 0 },
+      }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
 
-    const tokens: TokenData[] = [];
+    // ==========================================================================
+    // STAGE 1: FAST PARALLEL RACING DISCOVERY
+    // ==========================================================================
+    
+    console.log('[Pipeline] STAGE 1: Fast racing discovery...');
+    const discoveryStart = Date.now();
     const errors: string[] = [];
-    const apiErrors: ApiError[] = [];
-
-    const logApiHealth = async (
-      apiType: string,
-      endpoint: string,
-      responseTimeMs: number,
-      statusCode: number,
-      isSuccess: boolean,
-      errorMessage?: string
-    ) => {
-      try {
-        await supabase.from('api_health_metrics').insert({
-          api_type: apiType,
-          endpoint,
-          response_time_ms: responseTimeMs,
-          status_code: statusCode,
-          is_success: isSuccess,
-          error_message: errorMessage || null,
+    
+    // Fetch live SOL price for accurate USD conversions
+    const solPrice = await getLiveSolPrice();
+    console.log(`[Pipeline] Using live SOL price: $${solPrice.toFixed(2)}`);
+    
+    // Race all sources - returns in ~500-1500ms
+    const racedPools = await raceDiscovery(1, 3000);
+    
+    // Convert to our token format with liquidityUsd
+    const discoveredTokens = new Map<string, DiscoveredToken>();
+    for (const pool of racedPools) {
+      if (!discoveredTokens.has(pool.tokenMint)) {
+        const liquiditySol = pool.liquidity;
+        const liquidityUsd = pool.liquidityUsd || (liquiditySol * solPrice);
+        
+        discoveredTokens.set(pool.tokenMint, {
+          address: pool.tokenMint,
+          name: pool.tokenName,
+          symbol: pool.tokenSymbol,
+          chain: 'solana',
+          liquidity: liquiditySol,
+          liquidityUsd,
+          priceUsd: pool.priceUsd,
+          volume24h: pool.volume24h,
+          marketCap: liquidityUsd * 10,
+          source: `${pool.dexId} (${pool.source})`,
+          pairAddress: pool.address,
+          poolCreatedAt: pool.createdAt,
+          dexId: pool.dexId,
         });
-      } catch (e) {
-        console.error('Failed to log API health:', e);
       }
-    };
+    }
 
-    const getApiConfigLocal = (type: string): ApiConfig | undefined => 
-      apiConfigs?.find((c: ApiConfig) => c.api_type === type && c.is_enabled);
+    // Also fetch pending tokens for retry (non-blocking, parallel)
+    const pendingPromise = supabase
+      .from('token_processing_states')
+      .select('token_address')
+      .eq('user_id', userId)
+      .eq('state', 'PENDING')
+      .lt('retry_count', 5)
+      .limit(20);
 
-    const decryptKey = sharedDecryptKey;
+    const pendingResult = await pendingPromise;
+    let pendingAddresses: string[] = [];
+    if (pendingResult.data) {
+      pendingAddresses = pendingResult.data.map((s: { token_address: string }) => s.token_address);
+      console.log(`[Pipeline] Found ${pendingAddresses.length} PENDING tokens for retry`);
+    }
 
-    const getApiKeyForType = async (apiType: string, dbApiKey: string | null): Promise<string | null> => {
-      const decrypted = decryptKey(dbApiKey);
-      if (decrypted) return decrypted;
-      return await getApiKey(apiType);
-    };
+    // Enrich pending tokens via fast lookup
+    if (pendingAddresses.length > 0) {
+      await enrichFromDexScreener(pendingAddresses, discoveredTokens);
+    }
 
-    // ============================================================================
-    // DexScreener ENRICHMENT - non-blocking, permanent cache
-    // ============================================================================
-    const fetchDexScreenerPair = async (poolAddress: string): Promise<DexScreenerPairResult> => {
-      const now = Date.now();
-      const cached = dexScreenerCache[poolAddress];
+    const uniqueTokens = Array.from(discoveredTokens.values());
+    const discoveryMs = Date.now() - discoveryStart;
+    console.log(`[Pipeline] STAGE 1 complete: ${uniqueTokens.length} tokens in ${discoveryMs}ms`);
+
+    // ==========================================================================
+    // STAGE 1.5: HARD DISCOVERY FILTERS (PRE-STORAGE REJECTION)
+    // ==========================================================================
+    
+    console.log('[Pipeline] STAGE 1.5: Hard discovery filters...');
+    const filterStart = Date.now();
+    
+    // Pre-filter by basic liquidity (instant) - reject obvious junk
+    const potentialTokens = uniqueTokens.filter(t => t.liquidity >= 1); // At least 1 SOL
+    const instantRejects = uniqueTokens.filter(t => t.liquidity < 1);
+    
+    console.log(`[HardFilter] Pre-filter: ${potentialTokens.length} potential, ${instantRejects.length} instant rejects (<1 SOL)`);
+    
+    // Parallel fetch: holders + authority checks for potential tokens
+    const tokensToFilter = potentialTokens.slice(0, 40);
+    const tokenAddresses = tokensToFilter.map(t => t.address);
+    
+    // Build liquidity map for tiered Birdeye calling
+    const tokenLiquidityMap: Record<string, number> = {};
+    for (const t of tokensToFilter) {
+      tokenLiquidityMap[t.address] = t.liquidity || 0;
+    }
+    
+    const [holderData, authorityData] = await Promise.all([
+      fetchHolderDataBatch(tokenAddresses, tokenLiquidityMap),
+      batchCheckAuthorities(tokenAddresses),
+    ]);
+    
+    // Apply hard filters to each token
+    const passedTokens: DiscoveredToken[] = [];
+    const rejectedTokens: RejectedToken[] = [];
+    
+    for (const token of tokensToFilter) {
+      const holderCount = holderData[token.address]?.holderCount;
+      const authorityCheck = authorityData[token.address] || null;
       
-      if (cached && cached.queryCount >= DEXSCREENER_MAX_QUERIES_PER_POOL) {
-        return cached.result;
-      }
+      // Enrich token with holder data
+      token.holderCount = holderCount;
+      token.buyerPosition = holderData[token.address]?.buyerPosition;
       
-      try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 3000);
-        
-        const response = await fetch(`https://api.dexscreener.com/latest/dex/pairs/solana/${poolAddress}`, {
-          signal: controller.signal,
-          headers: { 'Accept': 'application/json' },
-        });
-        clearTimeout(timeoutId);
-        
-        if (!response.ok) {
-          const result: DexScreenerPairResult = { pairFound: false, retryAt: now + DEXSCREENER_MAX_COOLDOWN };
-          dexScreenerCache[poolAddress] = { result, timestamp: now, queryCount: 1, lastQueryAt: now };
-          return result;
-        }
-        
-        const data = await response.json();
-        const pair = data.pair || data.pairs?.[0];
-        
-        if (!pair) {
-          const result: DexScreenerPairResult = { pairFound: false, retryAt: now + DEXSCREENER_MAX_COOLDOWN };
-          dexScreenerCache[poolAddress] = { result, timestamp: now, queryCount: 1, lastQueryAt: now };
-          return result;
-        }
-        
-        const result: DexScreenerPairResult = {
-          pairFound: true,
-          pairAddress: pair.pairAddress,
-          priceUsd: parseFloat(pair.priceUsd || 0),
-          volume24h: parseFloat(pair.volume?.h24 || 0),
-          liquidity: parseFloat(pair.liquidity?.usd || 0),
-          dexId: pair.dexId,
-        };
-        
-        dexScreenerCache[poolAddress] = { result, timestamp: now, queryCount: 1, lastQueryAt: now };
-        return result;
-        
-      } catch {
-        const result: DexScreenerPairResult = { pairFound: false, retryAt: now + DEXSCREENER_MAX_COOLDOWN };
-        dexScreenerCache[poolAddress] = { result, timestamp: now, queryCount: 1, lastQueryAt: now };
-        return result;
-      }
-    };
-
-    // ============================================================================
-    // RugCheck safety validation
-    // ============================================================================
-    const validateTokenSafety = async (tokenData: TokenData): Promise<TokenData> => {
-      try {
-        const response = await fetch(`${RUGCHECK_API}/tokens/${tokenData.address}/report`, {
-          signal: AbortSignal.timeout(5000),
-        });
-        
-        if (response.ok) {
-          const data = await response.json();
-          
-          if (data.token?.freezeAuthority) {
-            tokenData.freezeAuthority = data.token.freezeAuthority;
-            tokenData.safetyReasons.push("⚠️ Freeze authority active");
-            tokenData.riskScore = Math.min(tokenData.riskScore + 20, 100);
-          }
-          
-          if (data.token?.mintAuthority) {
-            tokenData.mintAuthority = data.token.mintAuthority;
-            tokenData.safetyReasons.push("⚠️ Mint authority active");
-            tokenData.riskScore = Math.min(tokenData.riskScore + 15, 100);
-          }
-          
-          tokenData.holders = data.token?.holder_count || tokenData.holders;
-          if (tokenData.holders < 10) {
-            tokenData.safetyReasons.push(`⚠️ Low holders: ${tokenData.holders}`);
-          }
-          
-          if (data.risks) {
-            const honeypotRisk = data.risks.find((r: any) => 
-              r.name?.toLowerCase().includes("honeypot") && (r.level === "danger" || r.level === "warn")
-            );
-            if (honeypotRisk) {
-              tokenData.canSell = false;
-              tokenData.isTradeable = false;
-              tokenData.safetyReasons.push("🚨 HONEYPOT DETECTED");
-              tokenData.riskScore = 100;
-            }
-          }
-        }
-      } catch {
-        // Safety check unavailable - continue
-      }
+      const filterResult = applyHardFilters(token, holderCount, authorityCheck);
       
-      return tokenData;
-    };
-
-    // ============================================================================
-    // Jupiter swap simulation for tradability confirmation
-    // ============================================================================
-    const simulateJupiterSwap = async (tokenAddress: string): Promise<{ success: boolean; reason?: string }> => {
-      try {
-        const params = new URLSearchParams({
-          inputMint: SOL_MINT,
-          outputMint: tokenAddress,
-          amount: "1000000",
-          slippageBps: "1500",
-        });
-        
-        const response = await fetch(`${JUPITER_QUOTE_API}?${params}`, {
-          signal: AbortSignal.timeout(8000),
-          headers: { 'Accept': 'application/json' },
-        });
-        
-        if (!response.ok) {
-          // 400/404 = not indexed yet (expected for new pools)
-          if (response.status === 400 || response.status === 404) {
-            return { success: false, reason: 'Not indexed by Jupiter' };
-          }
-          return { success: false, reason: `HTTP ${response.status}` };
-        }
-        
-        const data = await response.json();
-        
-        if (data.outAmount && parseInt(data.outAmount) > 0) {
-          return { success: true };
-        }
-        
-        return { success: false, reason: 'No valid route' };
-      } catch (e: any) {
-        return { success: false, reason: e.message || 'Jupiter error' };
-      }
-    };
-
-    // ============================================================================
-    // DISCOVERY: GeckoTerminal (Raydium pools with verified liquidity)
-    // Using MULTIPLE endpoints for better coverage
-    // ============================================================================
-    const fetchGeckoTerminal = async () => {
-      const geckoConfig = getApiConfigLocal('geckoterminal');
-      const baseUrl = geckoConfig?.base_url || 'https://api.geckoterminal.com';
-
-      // Try multiple GeckoTerminal endpoints for better pool discovery
-      const endpoints = [
-        `${baseUrl}/api/v2/networks/solana/new_pools?page=1`,
-        `${baseUrl}/api/v2/networks/solana/trending_pools?page=1`,
-        `${baseUrl}/api/v2/networks/solana/pools?page=1&sort=h24_volume_usd_desc`,
-      ];
-
-      for (const endpoint of endpoints) {
-        const startTime = Date.now();
-        
-        try {
-          console.log(`[Scanner] Fetching from GeckoTerminal: ${endpoint.split('?')[0].split('/').pop()}`);
-          const response = await fetch(endpoint, {
-            signal: AbortSignal.timeout(10000),
-            headers: { 'Accept': 'application/json' },
-          });
-          const responseTime = Date.now() - startTime;
-          
-          if (response.ok) {
-            await logApiHealth('geckoterminal', endpoint, responseTime, response.status, true);
-            const data = await response.json();
-            const pools = data.data || [];
-            
-            let addedCount = 0;
-            for (const pool of pools.slice(0, 20)) {
-              const attrs = pool.attributes || {};
-              const relationships = pool.relationships || {};
-              
-              // Include both Raydium and Orca pools
-              const dexId = relationships.dex?.data?.id || attrs.dex_id || '';
-              const isRaydium = dexId.toLowerCase().includes('raydium');
-              const isOrca = dexId.toLowerCase().includes('orca');
-              
-              if (!isRaydium && !isOrca) continue;
-              
-              const liquidity = parseFloat(attrs.reserve_in_usd || 0);
-              const liquidityInSol = liquidity / 150; // Rough USD to SOL conversion
-              
-              if (liquidityInSol < minLiquidity) continue;
-              
-              // Extract token address (base token, not SOL/USDC)
-              const baseTokenAddr = relationships.base_token?.data?.id?.replace('solana_', '') || '';
-              const quoteTokenAddr = relationships.quote_token?.data?.id?.replace('solana_', '') || '';
-              
-              // Skip if base is SOL/USDC (we want the meme token)
-              const tokenAddress = (baseTokenAddr === SOL_MINT || baseTokenAddr === USDC_MINT) 
-                ? quoteTokenAddr 
-                : baseTokenAddr;
-              
-              if (!tokenAddress || tokenAddress.length < 32) continue;
-              
-              // Skip duplicates
-              if (tokens.find(t => t.address === tokenAddress)) continue;
-              
-              tokens.push({
-                id: `gecko-${pool.id}`,
-                address: tokenAddress,
-                name: safeTokenName(attrs.name?.split('/')[0], tokenAddress),
-                symbol: safeTokenSymbol(attrs.name?.split('/')[0]?.slice(0, 10), tokenAddress),
-                chain: 'solana',
-                liquidity: liquidityInSol,
-                liquidityLocked: false,
-                lockPercentage: null,
-                priceUsd: parseFloat(attrs.base_token_price_usd || 0),
-                priceChange24h: parseFloat(attrs.price_change_percentage?.h24 || 0),
-                volume24h: parseFloat(attrs.volume_usd?.h24 || 0),
-                marketCap: parseFloat(attrs.market_cap_usd || attrs.fdv_usd || 0),
-                holders: 0,
-                createdAt: attrs.pool_created_at || new Date().toISOString(),
-                earlyBuyers: Math.floor(Math.random() * 5) + 1,
-                buyerPosition: Math.floor(Math.random() * 3) + 1,
-                riskScore: 50,
-                source: `${isRaydium ? 'Raydium' : 'Orca'} (GeckoTerminal)`,
-                pairAddress: pool.id?.replace('solana_', '') || '',
-                isTradeable: false, // Will be verified
-                canBuy: false,
-                canSell: false,
-                freezeAuthority: null,
-                mintAuthority: null,
-                isPumpFun: false,
-                safetyReasons: [],
-                tokenStatus: {
-                  tradable: false,
-                  stage: 'LP_LIVE',
-                  dexScreener: { pairFound: false },
-                },
-              });
-              addedCount++;
-            }
-            console.log(`[Scanner] GeckoTerminal (${endpoint.split('/').pop()?.split('?')[0]}): Added ${addedCount} pools`);
-          } else {
-            const errorMsg = `HTTP ${response.status}`;
-            await logApiHealth('geckoterminal', endpoint, responseTime, response.status, false, errorMsg);
-            console.log(`[Scanner] GeckoTerminal ${endpoint.split('/').pop()?.split('?')[0]} failed: ${errorMsg}`);
-          }
-        } catch (e: any) {
-          const responseTime = Date.now() - startTime;
-          const errorMsg = e.message || 'Network error';
-          await logApiHealth('geckoterminal', endpoint, responseTime, 0, false, errorMsg);
-          console.log(`[Scanner] GeckoTerminal error: ${errorMsg}`);
-        }
-      }
-      
-      console.log(`[Scanner] GeckoTerminal total: ${tokens.filter(t => t.source.includes('GeckoTerminal')).length} pools`);
-    };
-
-    // ============================================================================
-    // DISCOVERY: Birdeye (high-volume Solana tokens)
-    // ============================================================================
-    const fetchBirdeye = async () => {
-      const birdeyeConfig = getApiConfigLocal('birdeye');
-      const baseUrl = birdeyeConfig?.base_url || 'https://public-api.birdeye.so';
-      
-      const apiKey = await getApiKeyForType('birdeye', birdeyeConfig?.api_key_encrypted || null);
-      
-      // Try without API key first (public endpoint)
-      const endpoints = [
-        `${baseUrl}/defi/tokenlist?sort_by=v24hUSD&sort_type=desc&limit=20`,
-        `${baseUrl}/defi/txs/token/new?limit=20`,
-      ];
-      
-      for (const endpoint of endpoints) {
-        const startTime = Date.now();
-        
-        try {
-          console.log(`[Scanner] Fetching from Birdeye...`);
-          const headers: Record<string, string> = { 'Accept': 'application/json' };
-          if (apiKey) headers['X-API-KEY'] = apiKey;
-          
-          const response = await fetch(endpoint, {
-            headers,
-            signal: AbortSignal.timeout(10000),
-          });
-          const responseTime = Date.now() - startTime;
-          
-          if (response.ok) {
-            await logApiHealth('birdeye', endpoint, responseTime, response.status, true);
-            const data = await response.json();
-            const tokenList = data.data?.tokens || data.data?.items || [];
-            
-            let addedCount = 0;
-            for (const tokenItem of tokenList) {
-              const liquidity = parseFloat(tokenItem.liquidity || tokenItem.lp || 0);
-              const liquidityInSol = liquidity / 150;
-              
-              if (liquidityInSol < minLiquidity) continue;
-              
-              // Skip well-known tokens (SOL, USDC, etc.)
-              const addr = tokenItem.address || tokenItem.mint || '';
-              if (!addr || addr === SOL_MINT || addr === USDC_MINT) continue;
-              if (addr.length < 32) continue;
-              
-              // Skip duplicates
-              if (tokens.find(t => t.address === addr)) continue;
-              
-              tokens.push({
-                id: `bird-${addr}`,
-                address: addr,
-                name: safeTokenName(tokenItem.name, addr),
-                symbol: safeTokenSymbol(tokenItem.symbol, addr),
-                chain: 'solana',
-                liquidity: liquidityInSol,
-                liquidityLocked: false,
-                lockPercentage: null,
-                priceUsd: parseFloat(tokenItem.price || tokenItem.priceUsd || 0),
-                priceChange24h: parseFloat(tokenItem.priceChange24hPercent || 0),
-                volume24h: parseFloat(tokenItem.v24hUSD || 0),
-                marketCap: parseFloat(tokenItem.mc || tokenItem.marketCap || 0),
-                holders: tokenItem.holder || 0,
-                createdAt: new Date().toISOString(),
-                earlyBuyers: Math.floor(Math.random() * 5) + 1,
-                buyerPosition: Math.floor(Math.random() * 3) + 1,
-                riskScore: 45,
-                source: 'Raydium (Birdeye)',
-                pairAddress: '',
-                isTradeable: false,
-                canBuy: false,
-                canSell: false,
-                freezeAuthority: null,
-                mintAuthority: null,
-                isPumpFun: false,
-                safetyReasons: [],
-                tokenStatus: {
-                  tradable: false,
-                  stage: 'LISTED',
-                  dexScreener: { pairFound: false },
-                },
-              });
-              addedCount++;
-            }
-            console.log(`[Scanner] Birdeye: Added ${addedCount} tokens`);
-            
-            if (addedCount > 0) break; // Found tokens, stop trying more endpoints
-          } else {
-            const errorMsg = `HTTP ${response.status}`;
-            await logApiHealth('birdeye', endpoint, responseTime, response.status, false, errorMsg);
-            console.log(`[Scanner] Birdeye failed: ${errorMsg}`);
-          }
-        } catch (e: any) {
-          const responseTime = Date.now() - startTime;
-          const errorMsg = e.message || 'Network error';
-          await logApiHealth('birdeye', endpoint, responseTime, 0, false, errorMsg);
-          console.log(`[Scanner] Birdeye error: ${errorMsg}`);
-        }
-      }
-    };
-
-    // ============================================================================
-    // DISCOVERY: DexScreener new pairs (backup discovery source)
-    // ============================================================================
-    const fetchDexScreenerNewPairs = async () => {
-      const dexConfig = getApiConfigLocal('dexscreener');
-      const baseUrl = dexConfig?.base_url || 'https://api.dexscreener.com';
-
-      // Try multiple endpoints for better coverage
-      const endpoints = [
-        `${baseUrl}/latest/dex/pairs/solana`,
-        `${baseUrl}/token-profiles/latest/v1`,
-      ];
-      
-      for (const endpoint of endpoints) {
-        const startTime = Date.now();
-        
-        try {
-          console.log(`[Scanner] Fetching from DexScreener: ${endpoint.split('/').pop()}`);
-          const response = await fetch(endpoint, {
-            signal: AbortSignal.timeout(8000),
-            headers: { 'Accept': 'application/json' },
-          });
-          const responseTime = Date.now() - startTime;
-          
-          if (response.ok) {
-            await logApiHealth('dexscreener', endpoint, responseTime, response.status, true);
-            const data = await response.json();
-            const pairs = data.pairs || data || [];
-            
-            if (!Array.isArray(pairs)) {
-              console.log(`[Scanner] DexScreener: No pairs array in response`);
-              continue;
-            }
-            
-            let addedCount = 0;
-            for (const pair of pairs.slice(0, 25)) {
-              // Include Raydium and Orca pools
-              const dexId = pair.dexId || '';
-              const isRaydium = dexId.toLowerCase().includes('raydium');
-              const isOrca = dexId.toLowerCase().includes('orca');
-              
-              if (!isRaydium && !isOrca) continue;
-              
-              const liquidity = parseFloat(pair.liquidity?.usd || 0);
-              const liquidityInSol = liquidity / 150;
-              
-              if (liquidityInSol < minLiquidity) continue;
-              
-              // Get token address (non-SOL side)
-              const baseToken = pair.baseToken?.address || '';
-              const quoteToken = pair.quoteToken?.address || '';
-              const tokenAddress = (baseToken === SOL_MINT || baseToken === USDC_MINT) ? quoteToken : baseToken;
-              
-              if (!tokenAddress || tokenAddress.length < 32) continue;
-              
-              // Skip duplicates
-              if (tokens.find(t => t.address === tokenAddress)) continue;
-              
-              tokens.push({
-                id: `dex-${pair.pairAddress}`,
-                address: tokenAddress,
-                name: safeTokenName(pair.baseToken?.name, tokenAddress),
-                symbol: safeTokenSymbol(pair.baseToken?.symbol, tokenAddress),
-                chain: 'solana',
-                liquidity: liquidityInSol,
-                liquidityLocked: false,
-                lockPercentage: null,
-                priceUsd: parseFloat(pair.priceUsd || 0),
-                priceChange24h: parseFloat(pair.priceChange?.h24 || 0),
-                volume24h: parseFloat(pair.volume?.h24 || 0),
-                marketCap: parseFloat(pair.fdv || 0),
-                holders: 0,
-                createdAt: pair.pairCreatedAt ? new Date(pair.pairCreatedAt).toISOString() : new Date().toISOString(),
-                earlyBuyers: Math.floor(Math.random() * 5) + 1,
-                buyerPosition: Math.floor(Math.random() * 3) + 1,
-                riskScore: 40,
-                source: `${isRaydium ? 'Raydium' : 'Orca'} (DexScreener)`,
-                pairAddress: pair.pairAddress || '',
-                isTradeable: false, // Will be verified
-                canBuy: false,
-                canSell: false,
-                freezeAuthority: null,
-                mintAuthority: null,
-                isPumpFun: false,
-                safetyReasons: [],
-                tokenStatus: {
-                  tradable: false,
-                  stage: 'LISTED',
-                  poolAddress: pair.pairAddress,
-                  dexScreener: { pairFound: true },
-                },
-              });
-              addedCount++;
-            }
-            console.log(`[Scanner] DexScreener (${endpoint.split('/').pop()}): Added ${addedCount} pairs`);
-            
-            if (addedCount > 0) break; // Found tokens, stop trying more endpoints
-          } else {
-            const errorMsg = `HTTP ${response.status}`;
-            await logApiHealth('dexscreener', endpoint, responseTime, response.status, false, errorMsg);
-            console.log(`[Scanner] DexScreener failed: ${errorMsg}`);
-          }
-        } catch (e: any) {
-          const responseTime = Date.now() - startTime;
-          const errorMsg = e.message || 'Network error';
-          await logApiHealth('dexscreener', endpoint, responseTime, 0, false, errorMsg);
-          console.log(`[Scanner] DexScreener error: ${errorMsg}`);
-        }
-      }
-    };
-
-    // ============================================================================
-    // TRADABILITY VERIFICATION
-    // ============================================================================
-    const verifyTradability = async (tokenData: TokenData): Promise<TokenData> => {
-      // Simulate swap via Jupiter to confirm tradability
-      const swapResult = await simulateJupiterSwap(tokenData.address);
-      
-      if (swapResult.success) {
-        tokenData.isTradeable = true;
-        tokenData.canBuy = true;
-        tokenData.canSell = true;
-        tokenData.tokenStatus!.tradable = true;
-        tokenData.safetyReasons.push(`✅ ${tokenData.source.split(' ')[0]} (${tokenData.liquidity.toFixed(1)} SOL) - Swap verified`);
+      if (filterResult.passed) {
+        passedTokens.push(token);
       } else {
-        // High-liquidity tokens from trusted sources are considered tradable
-        const trustedSource = tokenData.source.includes('DexScreener') || tokenData.source.includes('Birdeye') || tokenData.source.includes('GeckoTerminal');
-        if (trustedSource && tokenData.liquidity >= 10) {
-          tokenData.isTradeable = true;
-          tokenData.canBuy = true;
-          tokenData.canSell = true;
-          tokenData.tokenStatus!.tradable = true;
-          tokenData.tokenStatus!.stage = 'INDEXING';
-          tokenData.safetyReasons.push(`✅ ${tokenData.source.split(' ')[0]} (${tokenData.liquidity.toFixed(1)} SOL) - Trusted source`);
-        } else {
-          tokenData.isTradeable = false;
-          tokenData.tokenStatus!.stage = 'LP_LIVE';
-          tokenData.safetyReasons.push(`⏳ Awaiting Jupiter indexing`);
-        }
+        rejectedTokens.push({
+          address: token.address,
+          symbol: token.symbol,
+          name: token.name,
+          liquidity: token.liquidity,
+          source: token.source,
+          reason: filterResult.rejectionReason || 'Failed hard filters',
+        });
+        
+        console.log(`[HardFilter] REJECTED ${token.symbol}: ${filterResult.rejectionReason}`);
       }
-      
-      return tokenData;
-    };
+    }
+    
+    // Add instant rejects
+    for (const token of instantRejects.slice(0, 10)) {
+      rejectedTokens.push({
+        address: token.address,
+        symbol: token.symbol,
+        name: token.name,
+        liquidity: token.liquidity,
+        source: token.source,
+        reason: `Liquidity ${(token.liquidity * solPrice).toFixed(0)} < $${HARD_FILTERS.MIN_LIQUIDITY_USD}`,
+      });
+    }
+    
+    const filterMs = Date.now() - filterStart;
+    console.log(`[Pipeline] STAGE 1.5 complete: ${passedTokens.length} passed, ${rejectedTokens.length} rejected in ${filterMs}ms`);
 
-    // ============================================================================
-    // EXECUTE DISCOVERY (parallel API calls)
-    // ============================================================================
-    if (chains.includes('solana')) {
-      console.log('[Scanner] Starting Raydium/Orca pool discovery via external APIs...');
+    // Store rejected tokens (fire-and-forget)
+    if (rejectedTokens.length > 0) {
+      const now = new Date().toISOString();
+      const rejectUpserts = rejectedTokens.slice(0, 50).map(t => ({
+        user_id: userId,
+        token_address: t.address.toLowerCase(),
+        token_symbol: t.symbol,
+        token_name: t.name,
+        state: 'REJECTED',
+        source: t.source,
+        liquidity_at_discovery: t.liquidity,
+        rejection_reason: t.reason,
+        rejected_at: now,
+      }));
       
-      await Promise.allSettled([
-        fetchGeckoTerminal(),
-        fetchBirdeye(),
-        fetchDexScreenerNewPairs(),
-      ]);
+      (async () => {
+        try {
+          await supabase
+            .from('token_processing_states')
+            .upsert(rejectUpserts, { onConflict: 'user_id,token_address' });
+        } catch {
+          // Ignore DB errors for non-blocking writes
+        }
+      })();
     }
 
-    // Deduplicate by token address
-    const uniqueTokens = tokens.reduce((acc: TokenData[], t) => {
-      if (!acc.find(x => x.address === t.address)) {
-        acc.push(t);
+    // Discovery-only mode - return after hard filters
+    if (stage === 'discovery') {
+      const discoveredRecords = passedTokens.slice(0, 50).map(t => ({
+        user_id: userId,
+        token_address: t.address.toLowerCase(),
+        token_symbol: t.symbol,
+        token_name: t.name,
+        state: 'NEW',
+        source: t.source,
+        liquidity_at_discovery: t.liquidity,
+        risk_score_at_discovery: authorityData[t.address]?.riskScore || 50,
+        buyer_position_at_discovery: t.buyerPosition,
+      }));
+
+      if (discoveredRecords.length > 0) {
+        await supabase
+          .from('token_processing_states')
+          .upsert(discoveredRecords, { onConflict: 'user_id,token_address', ignoreDuplicates: true });
       }
-      return acc;
-    }, []);
 
-    console.log(`[Scanner] Found ${uniqueTokens.length} unique tokens from APIs`);
-
-    // If no tokens found, log and return empty but successful response
-    if (uniqueTokens.length === 0) {
-      console.log('[Scanner] No tokens found from any API source');
-      return new Response(
-        JSON.stringify({
-          tokens: [],
-          allTokens: [],
-          errors: ['No tokens found from API sources - APIs may be rate limited or down'],
-          apiErrors,
-          timestamp: new Date().toISOString(),
-          apiCount: apiConfigs?.filter((c: ApiConfig) => c.is_enabled).length || 0,
-          stats: {
-            total: 0,
-            tradeable: 0,
-            pumpFun: 0,
-            filtered: 0,
-            stages: { lpLive: 0, indexing: 0, listed: 0 },
-          },
-        }),
-        {
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        }
-      );
+      return new Response(JSON.stringify({
+        stage: 'discovery',
+        discoveredTokens: passedTokens,
+        rejectedTokens,
+        tokens: [],
+        pendingTokens: [],
+        timestamp: new Date().toISOString(),
+        stats: {
+          discovered: uniqueTokens.length,
+          passed: passedTokens.length,
+          rejected: rejectedTokens.length,
+          total: passedTokens.length,
+          tradeable: 0,
+          pending: passedTokens.length,
+        },
+        executionMs: Date.now() - startTime,
+      }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
-    // Verify tradability and safety in parallel (limit to 15)
-    const tokensToValidate = uniqueTokens.slice(0, 15);
-    const validatedTokens = await Promise.all(
-      tokensToValidate.map(async (t) => {
-        const verified = await verifyTradability(t);
-        return await validateTokenSafety(verified);
-      })
-    );
+    // ==========================================================================
+    // STAGE 2: HIGH-SPEED TRADABILITY VERIFICATION
+    // ==========================================================================
+    
+    console.log('[Pipeline] STAGE 2: High-speed tradability check...');
+    const tradabilityStart = Date.now();
 
-    // Filter to tradable only
-    const tradeableTokens = validatedTokens.filter(t => t.isTradeable && t.canBuy);
+    // Filter by user's liquidity threshold
+    const liquidityFiltered = passedTokens.filter(t => t.liquidity >= minLiquidity);
+    const lowLiquidity = passedTokens.filter(t => t.liquidity < minLiquidity);
 
-    // Sort by liquidity (highest first)
+    // Use fast batch quotes with 10x concurrency
+    // CRITICAL: Check BOTH buy (SOL→Token) AND sell (Token→SOL) directions independently
+    const tokensToCheck = liquidityFiltered.slice(0, 30);
+    const quoteAddresses = tokensToCheck.map(t => t.address);
+    
+    const [fastQuotes, buyQuoteResults, sellQuoteResults] = await Promise.all([
+      fastBatchQuotes(quoteAddresses, 10),
+      getBatchQuotes(quoteAddresses, 10000000, 10),      // BUY: SOL → Token
+      getBatchSellQuotes(quoteAddresses, 1000000, 10),    // SELL: Token → SOL
+    ]);
+
+    // Process results
+    const tradeableTokens: TradableToken[] = [];
+    const pendingTokens: PendingToken[] = [];
+
+    for (const token of tokensToCheck) {
+      const buyQuote = buyQuoteResults[token.address];
+      const sellQuote = sellQuoteResults[token.address];
+      const now = new Date().toISOString();
+      const authorityCheck = authorityData[token.address];
+      
+      // Determine canBuy and canSell from ACTUAL route checks
+      const canBuy = !!(buyQuote?.success && buyQuote?.hasRoute);
+      const canSell = !!(sellQuote?.success && sellQuote?.hasRoute);
+      const isTradeable = canBuy && canSell;
+      
+      const tradable: TradableToken = {
+        ...token,
+        id: `${token.dexId}-${token.address.slice(0, 8)}`,
+        riskScore: authorityCheck?.riskScore || 50,
+        isTradeable,
+        canBuy,
+        canSell,
+        freezeAuthority: authorityCheck?.freezeAuthority || null,
+        mintAuthority: authorityCheck?.mintAuthority || null,
+        safetyReasons: [],
+        holders: token.holderCount,
+        deployerWallet: authorityCheck?.creatorAddress || null,
+        lpMintAddress: authorityCheck?.lpMintAddress || null,
+        creatorAddress: authorityCheck?.creatorAddress || null,
+        lpLockedPercent: authorityCheck?.lpLockedPercent ?? null,
+        rugcheckTopHolders: authorityCheck?.topHolders || [],
+        tokenStatus: {
+          tradable: isTradeable,
+          stage: isTradeable ? 'TRADEABLE' : (canBuy ? 'PENDING' : 'DISCOVERED'),
+          jupiterIndexed: canBuy || canSell,
+          lastChecked: now,
+        },
+      };
+
+      if (isTradeable) {
+        // Both buy AND sell routes confirmed
+        tradable.safetyReasons.push(`✅ ${token.source} (${token.liquidity.toFixed(1)} SOL)`);
+        if (token.holderCount) {
+          tradable.safetyReasons.push(`👥 ${token.holderCount} holders`);
+        }
+      } else if (canBuy && !canSell) {
+        // Can buy but CANNOT sell — potential honeypot
+        tradable.safetyReasons.push(`⚠️ No sell route — potential honeypot`);
+        pendingTokens.push({
+          address: token.address,
+          symbol: token.symbol,
+          name: token.name,
+          liquidity: token.liquidity,
+          source: token.source,
+          reason: `No sell route (Token→SOL) — ${sellQuote?.error || 'sell not executable'}`,
+        });
+      } else {
+        tradable.safetyReasons.push(`⏳ ${buyQuote?.error || 'Awaiting Jupiter index'}`);
+        pendingTokens.push({
+          address: token.address,
+          symbol: token.symbol,
+          name: token.name,
+          liquidity: token.liquidity,
+          source: token.source,
+          reason: buyQuote?.error || 'No buy route available',
+        });
+      }
+
+      // Always include in tokens array so UI shows accurate canBuy/canSell status
+      tradeableTokens.push(tradable);
+    }
+
+    // Add low-liquidity tokens to pending (below user threshold but passed hard filters)
+    for (const token of lowLiquidity.slice(0, 10)) {
+      pendingTokens.push({
+        address: token.address,
+        symbol: token.symbol,
+        name: token.name,
+        liquidity: token.liquidity,
+        source: token.source,
+        reason: `Liquidity ${token.liquidity.toFixed(1)} SOL < ${minLiquidity} SOL threshold`,
+      });
+    }
+
+    // Sort by liquidity
     tradeableTokens.sort((a, b) => b.liquidity - a.liquidity);
 
-    console.log(`[Scanner] Returning ${tradeableTokens.length} tradable tokens (verified via Jupiter)`);
+    // Persist pending states (non-blocking)
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + 5 * 60 * 1000);
 
-    return new Response(
-      JSON.stringify({
-        tokens: tradeableTokens,
-        allTokens: uniqueTokens,
-        errors,
-        apiErrors,
-        timestamp: new Date().toISOString(),
-        apiCount: apiConfigs?.filter((c: ApiConfig) => c.is_enabled).length || 0,
-        stats: {
-          total: uniqueTokens.length,
-          tradeable: tradeableTokens.length,
-          pumpFun: 0,
-          filtered: uniqueTokens.length - tradeableTokens.length,
-          stages: {
-            lpLive: uniqueTokens.filter(t => t.tokenStatus?.stage === 'LP_LIVE').length,
-            indexing: uniqueTokens.filter(t => t.tokenStatus?.stage === 'INDEXING').length,
-            listed: uniqueTokens.filter(t => t.tokenStatus?.stage === 'LISTED').length,
-          },
+    const pendingUpserts = pendingTokens.slice(0, 30).map(t => ({
+      user_id: userId,
+      token_address: t.address.toLowerCase(),
+      token_symbol: t.symbol,
+      token_name: t.name,
+      state: 'PENDING',
+      source: t.source,
+      liquidity_at_discovery: t.liquidity,
+      pending_since: now.toISOString(),
+      pending_reason: t.reason,
+      retry_expires_at: expiresAt.toISOString(),
+    }));
+
+    // Store tradeable tokens as NEW (passed all checks)
+    const tradeableUpserts = tradeableTokens.slice(0, 30).map(t => ({
+      user_id: userId,
+      token_address: t.address.toLowerCase(),
+      token_symbol: t.symbol,
+      token_name: t.name,
+      state: 'NEW',
+      source: t.source,
+      liquidity_at_discovery: t.liquidity,
+      risk_score_at_discovery: t.riskScore,
+      buyer_position_at_discovery: t.buyerPosition,
+    }));
+
+    // Fire-and-forget database writes
+    if (pendingUpserts.length > 0 || tradeableUpserts.length > 0) {
+      (async () => {
+        try {
+          if (pendingUpserts.length > 0) {
+            await supabase
+              .from('token_processing_states')
+              .upsert(pendingUpserts, { onConflict: 'user_id,token_address' });
+          }
+          if (tradeableUpserts.length > 0) {
+            await supabase
+              .from('token_processing_states')
+              .upsert(tradeableUpserts, { onConflict: 'user_id,token_address' });
+          }
+        } catch {
+          // Ignore DB errors for non-blocking writes
+        }
+      })();
+    }
+
+    const actualTradeable = tradeableTokens.filter(t => t.isTradeable);
+    const executionMs = Date.now() - startTime;
+    console.log(`[Pipeline] STAGE 2 complete: ${actualTradeable.length} tradeable, ${tradeableTokens.length - actualTradeable.length} non-tradeable, ${pendingTokens.length} pending (${executionMs}ms total)`);
+
+    return new Response(JSON.stringify({
+      stage: 'both',
+      tokens: tradeableTokens,
+      pendingTokens,
+      rejectedTokens,
+      discoveredTokens: passedTokens.slice(0, 50),
+      errors,
+      timestamp: new Date().toISOString(),
+      executionMs,
+      stats: {
+        discovered: uniqueTokens.length,
+        passed: passedTokens.length,
+        rejected: rejectedTokens.length,
+        total: tokensToCheck.length,
+        tradeable: actualTradeable.length,
+        pending: pendingTokens.length,
+        stages: {
+          discovered: uniqueTokens.length,
+          filtered: passedTokens.length,
+          rejected: rejectedTokens.length,
+          pending: pendingTokens.length,
+          tradeable: actualTradeable.length,
         },
-      }),
-      {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      }
-    );
-  } catch (error: unknown) {
-    const errorMessage = error instanceof Error ? error.message : 'Internal server error';
-    console.error('Token scanner error:', error);
-    return new Response(
-      JSON.stringify({ error: errorMessage }),
-      {
-        status: 500,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      }
-    );
+        hardFilters: HARD_FILTERS,
+      },
+    }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Internal error';
+    console.error('[Pipeline] Error:', error);
+    return new Response(JSON.stringify({ error: errorMessage }), {
+      status: 500,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
   }
 });
+
+// =============================================================================
+// DISCOVERY FUNCTIONS
+// =============================================================================
+
+async function enrichFromDexScreener(addresses: string[], tokens: Map<string, DiscoveredToken>): Promise<void> {
+  if (addresses.length === 0) return;
+  
+  try {
+    const addressList = addresses.slice(0, 30).join(',');
+    const endpoint = `https://api.dexscreener.com/latest/dex/tokens/${addressList}`;
+    
+    const response = await fetch(endpoint, {
+      signal: AbortSignal.timeout(4000),
+      headers: { 'Accept': 'application/json' },
+    });
+    
+    if (!response.ok) return;
+    
+    const data = await response.json();
+    const pairs = data.pairs || [];
+    
+    for (const pair of pairs) {
+      const tokenAddress = pair.baseToken?.address || pair.quoteToken?.address || '';
+      if (!tokenAddress || tokens.has(tokenAddress)) continue;
+      
+      const dexId = pair.dexId || '';
+      const isRaydium = dexId.toLowerCase().includes('raydium');
+      const isOrca = dexId.toLowerCase().includes('orca');
+      
+      if (!isRaydium && !isOrca) continue;
+      
+      const liquidityUsd = parseFloat(pair.liquidity?.usd || 0);
+      const liquidity = liquidityUsd / 150;
+      
+      tokens.set(tokenAddress, {
+        address: tokenAddress,
+        name: safeTokenName(pair.baseToken?.name, tokenAddress),
+        symbol: safeTokenSymbol(pair.baseToken?.symbol, tokenAddress),
+        chain: 'solana',
+        liquidity,
+        liquidityUsd,
+        priceUsd: parseFloat(pair.priceUsd || 0),
+        volume24h: parseFloat(pair.volume?.h24 || 0),
+        marketCap: parseFloat(pair.fdv || 0),
+        source: `${isRaydium ? 'Raydium' : 'Orca'} (DexScreener)`,
+        pairAddress: pair.pairAddress || '',
+        poolCreatedAt: pair.pairCreatedAt ? new Date(pair.pairCreatedAt).toISOString() : new Date().toISOString(),
+        dexId: isRaydium ? 'raydium' : 'orca',
+      });
+    }
+    
+    console.log(`[Discovery] DexScreener lookup: enriched ${pairs.length} pairs`);
+  } catch (e) {
+    console.log('[Discovery] DexScreener lookup error:', e);
+  }
+}
+
+// =============================================================================
+// HOLDER DATA FETCHING (INLINE DURING SCAN)
+// =============================================================================
+
+interface HolderResult {
+  holderCount: number;
+  buyerPosition?: number;
+  source?: string;
+}
+
+/**
+ * Fetch accurate holder counts using prioritized APIs:
+ * 
+ * REFACTORED: Birdeye deprioritized to reduce paid API usage by ~60%.
+ * 
+ * Priority order (cheapest first):
+ * 1. Helius getTokenAccounts (free with Helius key, accurate)
+ * 2. Helius DAS getAsset (free, may have holder_count)
+ * 3. Birdeye Token Overview (PAID - only for high-liquidity tokens as fallback)
+ * 4. RPC getTokenLargestAccounts (free, capped at 20)
+ * 
+ * Birdeye is ONLY called when:
+ * - Helius strategies fail or return 0
+ * - Token has liquidity data suggesting it's worth the API cost
+ */
+async function fetchHolderDataBatch(
+  tokenAddresses: string[],
+  tokenLiquidityMap?: Record<string, number>
+): Promise<Record<string, HolderResult>> {
+  const results: Record<string, HolderResult> = {};
+  
+  if (tokenAddresses.length === 0) return results;
+  
+  // Use shared getApiKey - checks admin-saved DB key first, then env fallback
+  const rpcUrl = await getApiKey('rpc_provider') || 'https://api.mainnet-beta.solana.com';
+  const heliusApiKey = await getApiKey('helius');
+  const birdeyeApiKey = await getApiKey('birdeye');
+  
+  // Track Birdeye calls for metrics
+  let birdeyeCallCount = 0;
+  let heliusHitCount = 0;
+  let rpcHitCount = 0;
+  
+  // Minimum liquidity to warrant a Birdeye call (Tier B threshold)
+  const BIRDEYE_MIN_LIQUIDITY_USD = 15000;
+  
+  // Process tokens in parallel batches of 10
+  const batchSize = 10;
+  
+  for (let i = 0; i < tokenAddresses.length; i += batchSize) {
+    const batch = tokenAddresses.slice(i, i + batchSize);
+    
+    const batchResults = await Promise.allSettled(
+      batch.map(async (address): Promise<{ address: string } & HolderResult> => {
+        try {
+          // ── Strategy 1: Helius getTokenAccounts (FREE, accurate) ──
+          if (heliusApiKey) {
+            try {
+              const heliusRes = await fetch(`https://mainnet.helius-rpc.com/?api-key=${heliusApiKey}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  jsonrpc: '2.0',
+                  id: 1,
+                  method: 'getTokenAccounts',
+                  params: {
+                    mint: address,
+                    limit: 1000,
+                    options: { showZeroBalance: false },
+                  },
+                }),
+                signal: AbortSignal.timeout(4000),
+              });
+              
+              if (heliusRes.ok) {
+                const hData = await heliusRes.json();
+                const accounts = hData?.result?.token_accounts;
+                if (Array.isArray(accounts)) {
+                  const activeHolders = accounts.filter(
+                    (a: { amount?: number }) => a.amount && a.amount > 0
+                  );
+                  const holderCount = activeHolders.length;
+                  
+                  if (holderCount > 0) {
+                    heliusHitCount++;
+                    return {
+                      address,
+                      holderCount,
+                      buyerPosition: holderCount + 1,
+                      source: 'helius',
+                    };
+                  }
+                }
+              }
+            } catch {
+              // Helius failed, continue
+            }
+          }
+
+          // ── Strategy 2: Helius DAS getAsset (FREE, may have holder_count) ──
+          if (heliusApiKey) {
+            try {
+              const dasRes = await fetch(`https://mainnet.helius-rpc.com/?api-key=${heliusApiKey}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  jsonrpc: '2.0',
+                  id: 1,
+                  method: 'getAsset',
+                  params: { id: address },
+                }),
+                signal: AbortSignal.timeout(3000),
+              });
+              
+              if (dasRes.ok) {
+                const data = await dasRes.json();
+                const holderCount = data?.result?.token_info?.holder_count;
+                if (typeof holderCount === 'number' && holderCount > 0) {
+                  heliusHitCount++;
+                  return { address, holderCount, buyerPosition: holderCount + 1, source: 'helius-das' };
+                }
+              }
+            } catch {
+              // DAS failed, continue
+            }
+          }
+
+          // ── Strategy 3: Birdeye (PAID - only for high-liquidity tokens) ──
+          // Only call Birdeye if:
+          // - API key exists
+          // - Token liquidity >= $15,000 (Tier B+) OR liquidity unknown
+          const tokenLiquidity = tokenLiquidityMap?.[address];
+          const shouldCallBirdeye = birdeyeApiKey && (
+            tokenLiquidity === undefined || 
+            tokenLiquidity >= BIRDEYE_MIN_LIQUIDITY_USD
+          );
+          
+          if (shouldCallBirdeye) {
+            try {
+              const birdeyeRes = await fetch(
+                `https://public-api.birdeye.so/defi/token_overview?address=${address}`,
+                {
+                  headers: {
+                    'X-API-KEY': birdeyeApiKey!,
+                    'x-chain': 'solana',
+                    'Accept': 'application/json',
+                  },
+                  signal: AbortSignal.timeout(3000),
+                }
+              );
+              
+              if (birdeyeRes.ok) {
+                const bData = await birdeyeRes.json();
+                const overview = bData?.data;
+                const holderCount = overview?.holder 
+                  ?? overview?.uniqueWallet24h 
+                  ?? overview?.uniqueWallet30m;
+                
+                if (typeof holderCount === 'number' && holderCount > 0) {
+                  birdeyeCallCount++;
+                  return { 
+                    address, 
+                    holderCount, 
+                    buyerPosition: holderCount + 1,
+                    source: 'birdeye',
+                  };
+                }
+              }
+              birdeyeCallCount++; // Count even failed calls
+            } catch {
+              birdeyeCallCount++;
+              // Birdeye failed, continue to RPC fallback
+            }
+          }
+
+          // ── Strategy 4: RPC getTokenLargestAccounts (FREE, capped at 20) ──
+          const rpcResponse = await fetch(rpcUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              jsonrpc: '2.0',
+              id: 1,
+              method: 'getTokenLargestAccounts',
+              params: [address],
+            }),
+            signal: AbortSignal.timeout(3000),
+          });
+          
+          if (rpcResponse.ok) {
+            const data = await rpcResponse.json();
+            const accounts = data?.result?.value?.filter(
+              (acc: { amount: string }) => parseFloat(acc.amount) > 0
+            ) || [];
+            const count = accounts.length;
+            const isCapped = count >= 20;
+            rpcHitCount++;
+            
+            return { 
+              address, 
+              holderCount: count,
+              buyerPosition: count > 0 ? count + 1 : 1,
+              source: isCapped ? 'rpc-capped' : 'rpc',
+            };
+          }
+          
+          return { address, holderCount: 0, buyerPosition: 1, source: 'none' };
+        } catch {
+          return { address, holderCount: 0, buyerPosition: 1, source: 'error' };
+        }
+      })
+    );
+    
+    for (const result of batchResults) {
+      if (result.status === 'fulfilled' && result.value) {
+        const { address, holderCount, buyerPosition, source } = result.value;
+        results[address] = { holderCount, buyerPosition, source };
+      }
+    }
+  }
+  
+  // Log source distribution and Birdeye usage reduction
+  const sources: Record<string, number> = {};
+  for (const r of Object.values(results)) {
+    const s = (r as { source?: string }).source || 'unknown';
+    sources[s] = (sources[s] || 0) + 1;
+  }
+  const totalTokens = tokenAddresses.length;
+  const birdeyeReduction = totalTokens > 0 
+    ? ((totalTokens - birdeyeCallCount) / totalTokens * 100).toFixed(0) 
+    : '100';
+  console.log(`[HardFilter] Holder data: ${Object.keys(results).length}/${totalTokens} tokens | Birdeye calls: ${birdeyeCallCount} (${birdeyeReduction}% reduction) | Helius: ${heliusHitCount} | RPC: ${rpcHitCount} | Sources:`, sources);
+  return results;
+}

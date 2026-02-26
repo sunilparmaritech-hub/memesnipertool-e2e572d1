@@ -1,9 +1,12 @@
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useCallback, useRef, useEffect } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 import { useAppMode } from '@/contexts/AppModeContext';
+import { useScannerStore } from '@/stores/scannerStore';
 import { fetchDexScreenerPrices, isLikelyRealSolanaMint } from '@/lib/dexscreener';
 import { getFunctionErrorMessage } from '@/lib/functionErrors';
+import { useUsageTracking } from '@/hooks/useUsageTracking';
+import { useCredits } from '@/hooks/useCredits';
 
 // Token lifecycle stages (Raydium-only - no bonding curve tokens)
 export type TokenStage = 'LP_LIVE' | 'INDEXING' | 'LISTED';
@@ -39,16 +42,22 @@ export interface ScannedToken {
   riskScore: number;
   source: string;
   pairAddress: string;
-  // Safety validation fields from token-scanner - CRITICAL for trade execution
-  isPumpFun?: boolean;       // True if on Pump.fun bonding curve
-  isTradeable?: boolean;     // True if scanner verified tradability  
-  canBuy?: boolean;          // True if buy is possible
-  canSell?: boolean;         // True if sell is possible
+  // Safety validation fields from token-scanner
+  isPumpFun?: boolean;
+  isTradeable?: boolean;
+  canBuy?: boolean;
+  canSell?: boolean;
   freezeAuthority?: string | null;
   mintAuthority?: string | null;
-  safetyReasons?: string[];  // Array of safety check results
-  // NEW: Token lifecycle status
+  safetyReasons?: string[];
   tokenStatus?: TokenStatus;
+  // Deployer & LP enrichment from RugCheck
+  deployerWallet?: string | null;
+  lpMintAddress?: string | null;
+  creatorAddress?: string | null;
+  lpLockedPercent?: number | null;
+  rugcheckTopHolders?: { address: string; pct: number }[];
+  imageUrl?: string | null;
 }
 
 export interface ApiError {
@@ -60,23 +69,23 @@ export interface ApiError {
 }
 
 interface ScanResult {
+  stage?: 'discovery' | 'tradability' | 'both';
   tokens: ScannedToken[];
   allTokens?: ScannedToken[];
+  discoveredTokens?: ScannedToken[];
+  pendingTokens?: Array<{
+    address: string;
+    symbol: string;
+    name: string;
+    liquidity: number;
+    source: string;
+    reason: string;
+  }>;
   errors: string[];
   apiErrors: ApiError[];
   timestamp: string;
   apiCount: number;
-  stats?: {
-    total: number;
-    tradeable: number;
-    pumpFun: number;
-    filtered: number;
-    stages?: {
-      lpLive: number;
-      indexing: number;
-      listed: number;
-    };
-  };
+  stats?: ScanStats;
 }
 
 export interface RateLimitState {
@@ -86,7 +95,26 @@ export interface RateLimitState {
   countdown: number;
 }
 
-// Demo tokens for testing without real API calls - uses REAL token addresses for realistic testing
+export interface ScanStats {
+  discovered?: number;
+  total: number;
+  tradeable: number;
+  pending?: number;
+  rejected?: number;
+  pumpFun?: number;
+  filtered: number;
+  stages?: {
+    discovered?: number;
+    pending?: number;
+    tradeable?: number;
+    rejected?: number;
+    lpLive?: number;
+    indexing?: number;
+    listed?: number;
+  };
+}
+
+// Demo token configs for testing
 const demoTokenConfigs = [
   { name: 'DogeMoon', symbol: 'DOGEM', address: 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263' },
   { name: 'ShibaRocket', symbol: 'SHIBR', address: 'So11111111111111111111111111111111111111112' },
@@ -103,16 +131,20 @@ const demoTokenConfigs = [
 const MAX_SCANS_PER_MINUTE = 10;
 const RATE_LIMIT_WINDOW_MS = 60000;
 
-// Generate a realistic demo token with valid Solana-like address
+function generateDemoAddress(seed: number): string {
+  const chars = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+  const random = new Array(44).fill(0).map((_, i) => chars[(seed * 31 + i * 17 + Date.now()) % chars.length]);
+  return random.join('');
+}
+
 const generateSingleDemoToken = (idx: number): ScannedToken => {
   const config = demoTokenConfigs[idx % demoTokenConfigs.length];
-  const liquidity = Math.floor(Math.random() * 50) + 5; // 5-55 SOL liquidity
+  const liquidity = Math.floor(Math.random() * 50) + 5;
   const stage: TokenStage = Math.random() > 0.5 ? 'LISTED' : 'LP_LIVE';
   const uniqueId = `demo-${idx}-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
   
   return {
     id: uniqueId,
-    // Use a generated realistic address format for demo tokens
     address: generateDemoAddress(idx),
     name: config.name,
     symbol: config.symbol,
@@ -131,11 +163,10 @@ const generateSingleDemoToken = (idx: number): ScannedToken => {
     riskScore: Math.floor(Math.random() * 60) + 20,
     source: 'Raydium AMM',
     pairAddress: `DemoPair${idx}`,
-    // All demo tokens are Raydium-verified tradeable
     isPumpFun: false,
-    isTradeable: true,
-    canBuy: true,
-    canSell: true,
+    isTradeable: false,
+    canBuy: false,
+    canSell: false,
     freezeAuthority: null,
     mintAuthority: null,
     safetyReasons: [`✅ Raydium V4 (${liquidity.toFixed(1)} SOL) - ${stage === 'LISTED' ? 'Listed' : 'Live LP'}`],
@@ -148,55 +179,39 @@ const generateSingleDemoToken = (idx: number): ScannedToken => {
   };
 };
 
-// Generate a valid-looking Solana address for demo tokens
-function generateDemoAddress(seed: number): string {
-  const chars = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
-  let address = '';
-  // Generate a 44-character base58-like address
-  const random = new Array(44).fill(0).map((_, i) => chars[(seed * 31 + i * 17 + Date.now()) % chars.length]);
-  address = random.join('');
-  return address;
-}
-
-export interface ScanStats {
-  total: number;
-  tradeable: number;
-  pumpFun: number;
-  filtered: number;
-  stages: {
-    lpLive: number;
-    indexing: number;
-    listed: number;
-  };
-}
-
 export function useTokenScanner() {
-  const [tokens, setTokens] = useState<ScannedToken[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [isInitialLoad, setIsInitialLoad] = useState(true); // Track first load
-  const [lastScan, setLastScan] = useState<string | null>(null);
-  const [apiCount, setApiCount] = useState(0);
-  const [errors, setErrors] = useState<string[]>([]);
-  const [apiErrors, setApiErrors] = useState<ApiError[]>([]);
-  const [lastScanStats, setLastScanStats] = useState<ScanStats | null>(null);
-  const [rateLimit, setRateLimit] = useState<RateLimitState>({
-    isLimited: false,
-    remainingScans: MAX_SCANS_PER_MINUTE,
-    resetTime: null,
-    countdown: 0,
-  });
+  // Use Zustand store for persistent state
+  const {
+    tokens,
+    lastScan,
+    apiCount,
+    errors,
+    apiErrors,
+    lastScanStats,
+    rateLimit,
+    isInitialLoad,
+    setTokens,
+    mergeTokens,
+    setLastScan,
+    setApiCount,
+    setErrors,
+    setApiErrors,
+    setLastScanStats,
+    setRateLimit,
+    setIsInitialLoad,
+    clearTokens,
+  } = useScannerStore();
+
   const { toast } = useToast();
   const { isDemo, isLive } = useAppMode();
+  const { incrementUsage, canUse } = useUsageTracking();
+  const { deductCredits, canAfford } = useCredits();
   
-  // Ref to track if a scan is in progress
+  // Loading state (local - not persisted)
+  const loadingRef = useRef(false);
   const scanInProgress = useRef(false);
-  // Ref to track if a background price update is in progress
   const priceUpdateInProgress = useRef(false);
-  // Ref to store interval for tick-by-tick loading
-  const tickIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  // Ref for background price update interval
   const priceUpdateIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  // Rate limiting
   const scanTimestampsRef = useRef<number[]>([]);
   const countdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -208,7 +223,6 @@ export function useTokenScanner() {
         const remaining = Math.max(0, Math.ceil((rateLimit.resetTime! - now) / 1000));
         
         if (remaining <= 0) {
-          // Reset rate limit
           setRateLimit({
             isLimited: false,
             remainingScans: MAX_SCANS_PER_MINUTE,
@@ -220,7 +234,7 @@ export function useTokenScanner() {
             clearInterval(countdownIntervalRef.current);
           }
         } else {
-          setRateLimit(prev => ({ ...prev, countdown: remaining }));
+          setRateLimit({ ...rateLimit, countdown: remaining });
         }
       }, 1000);
     }
@@ -230,106 +244,14 @@ export function useTokenScanner() {
         clearInterval(countdownIntervalRef.current);
       }
     };
-  }, [rateLimit.isLimited, rateLimit.resetTime]);
+  }, [rateLimit.isLimited, rateLimit.resetTime, setRateLimit, rateLimit]);
 
-  // Track seen token addresses to prevent duplicates across scans
-  const seenAddressesRef = useRef<Set<string>>(new Set());
-  
-  // Clear seen addresses periodically to allow re-discovery
-  useEffect(() => {
-    const interval = setInterval(() => {
-      // Only keep addresses from current tokens list
-      const currentAddresses = new Set(tokens.map(t => t.address));
-      seenAddressesRef.current = currentAddresses;
-    }, 120000); // Clear every 2 minutes
-    
-    return () => clearInterval(interval);
-  }, [tokens]);
-
-  // Merge new tokens seamlessly - with strict deduplication
-  const mergeTokens = useCallback((newTokens: ScannedToken[], onComplete?: () => void) => {
-    setTokens(prev => {
-      const tokenMap = new Map<string, ScannedToken>();
-      const processedAddresses = new Set<string>();
-      
-      // Add existing tokens to map (dedupe by address)
-      prev.forEach(t => {
-        if (!processedAddresses.has(t.address)) {
-          tokenMap.set(t.address, t);
-          processedAddresses.add(t.address);
-        }
-      });
-      
-      // Merge new tokens - update existing or add new (dedupe by address)
-      newTokens.forEach(newToken => {
-        // Skip if we've already processed this address in THIS batch
-        if (processedAddresses.has(newToken.address) && !tokenMap.has(newToken.address)) {
-          return;
-        }
-        
-        const existing = tokenMap.get(newToken.address);
-        if (existing) {
-          // Update existing token's price data only (keep position stable)
-          tokenMap.set(newToken.address, {
-            ...existing,
-            priceUsd: newToken.priceUsd,
-            priceChange24h: newToken.priceChange24h,
-            volume24h: newToken.volume24h,
-            liquidity: newToken.liquidity,
-            marketCap: newToken.marketCap,
-            holders: newToken.holders,
-            riskScore: newToken.riskScore,
-          });
-        } else {
-          // New token - add to map (will be placed at top)
-          tokenMap.set(newToken.address, newToken);
-          processedAddresses.add(newToken.address);
-        }
-      });
-      
-      // Convert back to array, new tokens first
-      const existingAddresses = prev.map(t => t.address);
-      
-      // Build ordered array: new tokens first, then existing in their order
-      const orderedTokens: ScannedToken[] = [];
-      const addedAddresses = new Set<string>();
-      
-      // Add genuinely new tokens at top
-      newTokens.forEach(t => {
-        if (!existingAddresses.includes(t.address) && !addedAddresses.has(t.address)) {
-          const token = tokenMap.get(t.address);
-          if (token) {
-            orderedTokens.push(token);
-            addedAddresses.add(t.address);
-          }
-        }
-      });
-      
-      // Add existing tokens (updated) in their original order
-      existingAddresses.forEach(addr => {
-        if (!addedAddresses.has(addr)) {
-          const token = tokenMap.get(addr);
-          if (token) {
-            orderedTokens.push(token);
-            addedAddresses.add(addr);
-          }
-        }
-      });
-      
-      return orderedTokens.slice(0, 100); // Keep max 100 tokens
-    });
-    
-    onComplete?.();
-  }, []);
-
-  // Check and update rate limit status
+  // Check rate limit status
   const checkRateLimit = useCallback((): { allowed: boolean; remaining: number; resetIn: number } => {
     const now = Date.now();
     const windowStart = now - RATE_LIMIT_WINDOW_MS;
     
-    // Remove expired timestamps
     scanTimestampsRef.current = scanTimestampsRef.current.filter(ts => ts > windowStart);
-    
     const currentCount = scanTimestampsRef.current.length;
     const remaining = MAX_SCANS_PER_MINUTE - currentCount;
     
@@ -337,7 +259,6 @@ export function useTokenScanner() {
       const oldestTimestamp = scanTimestampsRef.current[0];
       const resetTime = oldestTimestamp + RATE_LIMIT_WINDOW_MS;
       const resetIn = Math.ceil((resetTime - now) / 1000);
-      
       return { allowed: false, remaining: 0, resetIn };
     }
     
@@ -345,9 +266,8 @@ export function useTokenScanner() {
   }, []);
 
   const scanTokens = useCallback(async (minLiquidity: number = 300, chains: string[] = ['solana']): Promise<ScanResult | null> => {
-    // Prevent concurrent scans
     if (scanInProgress.current) {
-      console.log('Scan already in progress, skipping...');
+      console.log('[Scanner] Scan already in progress, skipping...');
       return null;
     }
 
@@ -366,36 +286,28 @@ export function useTokenScanner() {
         
         toast({
           title: 'Rate Limited',
-          description: `Too many scans. Please wait ${resetIn} seconds before scanning again.`,
+          description: `Too many scans. Please wait ${resetIn} seconds.`,
           variant: 'destructive',
         });
         return null;
       }
       
-      // Add current timestamp
       scanTimestampsRef.current.push(Date.now());
-      
-      // Update remaining scans
-      setRateLimit(prev => ({
-        ...prev,
+      setRateLimit({
+        ...rateLimit,
         remainingScans: remaining - 1,
         isLimited: false,
-      }));
+      });
     }
 
     scanInProgress.current = true;
-    
-    // Only show loading spinner on initial load - subsequent scans are background
-    if (isInitialLoad) {
-      setLoading(true);
-    }
+    loadingRef.current = true;
     setErrors([]);
     setApiErrors([]);
 
     try {
       // Demo mode: return simulated data
       if (isDemo) {
-        // Generate 3-5 new demo tokens per scan
         const numNewTokens = Math.floor(Math.random() * 3) + 3;
         const newDemoTokens: ScannedToken[] = [];
         
@@ -406,16 +318,13 @@ export function useTokenScanner() {
           }
         }
 
-        // Merge tokens seamlessly (no flicker)
-        mergeTokens(newDemoTokens, () => {
-          setLoading(false);
-          setIsInitialLoad(false);
-          scanInProgress.current = false;
-        });
-
+        mergeTokens(newDemoTokens);
         setLastScan(new Date().toISOString());
         setApiCount(3);
-        
+        setIsInitialLoad(false);
+        scanInProgress.current = false;
+        loadingRef.current = false;
+
         return { 
           tokens: newDemoTokens, 
           errors: [], 
@@ -425,60 +334,128 @@ export function useTokenScanner() {
         };
       }
 
-      // Live mode: call real API
-      const { data, error } = await supabase.functions.invoke('token-scanner', {
-        body: { minLiquidity, chains },
-      });
+      // Live mode: check usage limits before calling API
+      if (!canUse('token_validation')) {
+        toast({
+          title: 'Daily Limit Reached',
+          description: 'You have used all your token validation credits for today. Upgrade for more.',
+          variant: 'destructive',
+        });
+        scanInProgress.current = false;
+        loadingRef.current = false;
+        return null;
+      }
 
-      if (error) {
-        const message = await getFunctionErrorMessage(error);
-        throw new Error(message);
+      // Live mode: call real API with session refresh retry
+      let data: any;
+      let invokeError: any;
+      
+      const invokeScanner = async () => {
+        const result = await supabase.functions.invoke('token-scanner', {
+          body: { minLiquidity, chains, stage: 'both' },
+        });
+        return result;
+      };
+      
+      const firstAttempt = await invokeScanner();
+      data = firstAttempt.data;
+      invokeError = firstAttempt.error;
+      
+      // PRODUCTION FIX: If auth error (401/expired), refresh session and retry once
+      if (invokeError) {
+        // Extract the REAL error message from the response body, not just the generic SDK message
+        const detailedMsg = await getFunctionErrorMessage(invokeError);
+        const errMsg = detailedMsg.toLowerCase();
+        
+        // Handle server-side rate limiting (429)
+        const isRateLimited = errMsg.includes('429') || errMsg.includes('rate limit');
+        if (isRateLimited) {
+          const retryAfter = 30;
+          setRateLimit({
+            isLimited: true,
+            remainingScans: 0,
+            resetTime: Date.now() + retryAfter * 1000,
+            countdown: retryAfter,
+          });
+          toast({
+            title: 'Rate Limited',
+            description: `Server rate limit reached. Please wait ${retryAfter}s.`,
+            variant: 'destructive',
+          });
+          scanInProgress.current = false;
+          loadingRef.current = false;
+          return null;
+        }
+        
+        // FIX: Check detailed message for JWT/auth errors — the SDK's invokeError.message 
+        // is often just "Edge Function returned a non-2xx status code" and misses "JWT has expired"
+        const isAuthError = errMsg.includes('expired') || errMsg.includes('401') || errMsg.includes('unauthorized') || errMsg.includes('jwt');
+        
+        if (isAuthError) {
+          console.log('[Scanner] Auth error detected:', detailedMsg, '— refreshing session and retrying...');
+          try {
+            const { error: refreshErr } = await supabase.auth.refreshSession();
+            if (!refreshErr) {
+              const retryAttempt = await invokeScanner();
+              data = retryAttempt.data;
+              invokeError = retryAttempt.error;
+            } else {
+              console.warn('[Scanner] Session refresh returned error:', refreshErr.message);
+            }
+          } catch (refreshEx) {
+            console.warn('[Scanner] Session refresh failed:', refreshEx);
+          }
+        }
+        
+        if (invokeError) {
+          const retryMsg = await getFunctionErrorMessage(invokeError);
+          throw new Error(retryMsg);
+        }
       }
 
       const result = data as ScanResult;
+
+      // Track usage after successful scan
+      incrementUsage('token_validation');
+      incrementUsage('api_check');
       
-      // Merge tokens seamlessly (background update, no flicker)
+      // Deduct credits for the scan
+      if (canAfford('token_validation')) {
+        deductCredits({ actionType: 'token_validation' });
+      }
+      
       if (result.tokens && result.tokens.length > 0) {
-        mergeTokens(result.tokens, () => {
-          setLoading(false);
-          setIsInitialLoad(false);
-          scanInProgress.current = false;
-        });
-      } else {
-        setLoading(false);
-        setIsInitialLoad(false);
-        scanInProgress.current = false;
+        mergeTokens(result.tokens);
       }
 
       setLastScan(result.timestamp);
       setApiCount(result.apiCount);
       setApiErrors(result.apiErrors || []);
+      setIsInitialLoad(false);
       
-      // Save scan stats for display
       if (result.stats) {
         setLastScanStats({
+          discovered: result.stats.discovered || 0,
           total: result.stats.total,
           tradeable: result.stats.tradeable,
-          pumpFun: 0, // No Pump.fun tokens in Raydium-only pipeline
+          pending: result.stats.pending || 0,
+          rejected: result.stats.rejected || 0,
           filtered: result.stats.filtered,
           stages: result.stats.stages || {
-            lpLive: 0,
-            indexing: 0,
-            listed: 0,
+            discovered: result.stats.discovered || 0,
+            pending: result.stats.pending || 0,
+            tradeable: result.stats.tradeable || 0,
+            rejected: result.stats.rejected || 0,
           },
         });
       }
       
       if (result.errors && result.errors.length > 0) {
         setErrors(result.errors);
-        // Build a clean list of failed APIs, filtering empty/undefined names
         const failedApiNames = result.apiErrors
           ?.map(e => e.apiName || e.apiType)
-          .filter(name => name && name.trim() !== '')
-          || [];
+          .filter(name => name && name.trim() !== '') || [];
         
-        // Only show destructive toast if ALL sources failed (no tokens returned)
-        // Otherwise just log - partial failures are normal for decentralized APIs
         const hasTokens = result.tokens && result.tokens.length > 0;
         if (!hasTokens && failedApiNames.length > 0) {
           toast({
@@ -486,26 +463,25 @@ export function useTokenScanner() {
             description: `No tokens found. APIs with issues: ${failedApiNames.join(', ')}`,
             variant: 'destructive',
           });
-        } else if (failedApiNames.length > 0) {
-          // Partial success - just log, don't show destructive toast
-          console.log(`Scan completed with ${result.tokens?.length || 0} tokens. Some APIs had issues: ${failedApiNames.join(', ')}`);
         }
       }
 
+      scanInProgress.current = false;
+      loadingRef.current = false;
       return result;
     } catch (error: any) {
-      console.error('Scan error:', error);
+      console.error('[Scanner] Scan error:', error);
       toast({
         title: 'Scan failed',
         description: error.message || 'Failed to scan for tokens',
         variant: 'destructive',
       });
-      setLoading(false);
       setIsInitialLoad(false);
       scanInProgress.current = false;
+      loadingRef.current = false;
       return null;
     }
-  }, [toast, isDemo, isLive, mergeTokens, checkRateLimit, isInitialLoad]);
+  }, [toast, isDemo, isLive, mergeTokens, checkRateLimit, setErrors, setApiErrors, setLastScan, setApiCount, setLastScanStats, setIsInitialLoad, setRateLimit, rateLimit]);
 
   const getTopOpportunities = useCallback((limit: number = 5) => {
     return tokens
@@ -521,13 +497,8 @@ export function useTokenScanner() {
     return tokens.filter(t => t.riskScore <= maxRisk);
   }, [tokens]);
 
-  /**
-   * Silent background price update for all tokens.
-   * Uses deep comparison to only update tokens whose prices actually changed.
-   * This prevents UI flickering by avoiding unnecessary state updates.
-   */
+  // Silent background price update
   const updateTokenPrices = useCallback(async () => {
-    // Skip if already updating or no tokens
     if (priceUpdateInProgress.current || tokens.length === 0) return;
     
     const addresses = tokens
@@ -549,52 +520,47 @@ export function useTokenScanner() {
         return;
       }
       
-      // Use functional update with deep comparison
-      setTokens(prev => {
-        let hasChanges = false;
+      // Build update map
+      const updates = new Map<string, Partial<ScannedToken>>();
+      
+      tokens.forEach(token => {
+        const priceData = priceMap.get(token.address);
+        if (!priceData || priceData.priceUsd <= 0) return;
         
-        const updated = prev.map(token => {
-          const priceData = priceMap.get(token.address);
-          if (!priceData || priceData.priceUsd <= 0) return token;
-          
-          // DEEP COMPARISON: Only update if price changed by more than 0.05%
-          const oldPrice = token.priceUsd || 0;
-          const priceChangePercent = oldPrice > 0 
-            ? Math.abs((priceData.priceUsd - oldPrice) / oldPrice) * 100 
-            : 100;
-          
-          if (priceChangePercent < 0.05) return token; // No meaningful change
-          
-          hasChanges = true;
-          
-          return {
-            ...token,
+        const oldPrice = token.priceUsd || 0;
+        const priceChangePercent = oldPrice > 0 
+          ? Math.abs((priceData.priceUsd - oldPrice) / oldPrice) * 100 
+          : 100;
+        
+        if (priceChangePercent >= 0.05) {
+          updates.set(token.address, {
             priceUsd: priceData.priceUsd,
             priceChange24h: priceData.priceChange24h,
             volume24h: priceData.volume24h,
             liquidity: priceData.liquidity,
-          };
-        });
-        
-        // Return same reference if no changes to prevent re-render
-        return hasChanges ? updated : prev;
+          });
+        }
       });
+      
+      if (updates.size > 0) {
+        // Update tokens in store
+        setTokens(tokens.map(token => {
+          const update = updates.get(token.address);
+          return update ? { ...token, ...update } : token;
+        }));
+      }
     } catch (err) {
-      // Silent failure - don't log to avoid console spam
+      // Silent failure
     } finally {
       priceUpdateInProgress.current = false;
     }
-  }, [tokens]);
+  }, [tokens, setTokens]);
 
   // Set up background price updates (every 10 seconds)
   useEffect(() => {
-    // Only start background updates if we have tokens
     if (tokens.length === 0) return;
     
-    // Initial update after 2 seconds
     const initialTimeout = setTimeout(updateTokenPrices, 2000);
-    
-    // Regular interval every 10 seconds
     priceUpdateIntervalRef.current = setInterval(updateTokenPrices, 10000);
     
     return () => {
@@ -607,9 +573,6 @@ export function useTokenScanner() {
 
   // Cleanup on unmount
   const cleanup = useCallback(() => {
-    if (tickIntervalRef.current) {
-      clearInterval(tickIntervalRef.current);
-    }
     if (countdownIntervalRef.current) {
       clearInterval(countdownIntervalRef.current);
     }
@@ -620,7 +583,7 @@ export function useTokenScanner() {
 
   return {
     tokens,
-    loading,
+    loading: isInitialLoad && loadingRef.current,
     lastScan,
     apiCount,
     errors,
@@ -635,5 +598,6 @@ export function useTokenScanner() {
     isLive,
     cleanup,
     updateTokenPrices,
+    clearTokens,
   };
 }

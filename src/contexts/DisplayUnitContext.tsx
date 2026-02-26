@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useCallback, useMemo } from 'react';
 import { useSolPrice } from '@/hooks/useSolPrice';
+import { formatPreciseUsd, formatPreciseSol } from '@/lib/precision';
 
 export type DisplayUnit = 'SOL' | 'USD';
 
@@ -37,57 +38,23 @@ export function DisplayUnitProvider({ children }: { children: React.ReactNode })
 
   const usdToSol = useCallback((usd: number): number => {
     if (!solPrice || solPrice <= 0) return 0;
+    if (!Number.isFinite(usd)) return 0;
     return usd / solPrice;
   }, [solPrice]);
 
   const solToUsd = useCallback((sol: number): number => {
+    if (!Number.isFinite(sol)) return 0;
     return sol * solPrice;
   }, [solPrice]);
 
-  // Format SOL value with appropriate precision
+  // Format SOL value with financial-grade precision
   const formatSolValue = useCallback((sol: number, showSign = false): string => {
-    const sign = showSign && sol >= 0 ? '+' : '';
-    const absVal = Math.abs(sol);
-    
-    if (absVal >= 1000) {
-      return `${sign}${sol.toFixed(1)} SOL`;
-    }
-    if (absVal >= 100) {
-      return `${sign}${sol.toFixed(2)} SOL`;
-    }
-    if (absVal >= 1) {
-      return `${sign}${sol.toFixed(3)} SOL`;
-    }
-    if (absVal >= 0.001) {
-      return `${sign}${sol.toFixed(4)} SOL`;
-    }
-    if (absVal > 0) {
-      return `${sign}${sol.toFixed(6)} SOL`;
-    }
-    return showSign ? '+0.00 SOL' : '0.00 SOL';
+    return formatPreciseSol(sol, { showSign });
   }, []);
 
-  // Format USD value with appropriate precision
+  // Format USD value with financial-grade precision
   const formatUsdValue = useCallback((usd: number, showSign = false): string => {
-    const sign = showSign && usd >= 0 ? '+' : '';
-    const absVal = Math.abs(usd);
-    
-    if (absVal >= 1000000) {
-      return `${sign}$${(usd / 1000000).toFixed(2)}M`;
-    }
-    if (absVal >= 1000) {
-      return `${sign}$${(usd / 1000).toFixed(2)}K`;
-    }
-    if (absVal >= 1) {
-      return `${sign}$${usd.toFixed(2)}`;
-    }
-    if (absVal >= 0.01) {
-      return `${sign}$${usd.toFixed(3)}`;
-    }
-    if (absVal > 0) {
-      return `${sign}$${usd.toFixed(4)}`;
-    }
-    return showSign ? '+$0.00' : '$0.00';
+    return formatPreciseUsd(usd, { showSign });
   }, []);
 
   // Primary value based on current display unit

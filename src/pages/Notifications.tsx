@@ -76,7 +76,7 @@ const Notifications = forwardRef<HTMLDivElement, object>(function Notifications(
 
   return (
     <AppLayout>
-      <div className="container mx-auto max-w-4xl px-4">
+      <div className="container mx-auto max-w-[1600px] px-2 sm:px-3 md:px-5 py-2 sm:py-3">
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-3">
@@ -84,7 +84,7 @@ const Notifications = forwardRef<HTMLDivElement, object>(function Notifications(
               <Bell className="w-6 h-6 text-primary" />
             </div>
             <div>
-              <h1 className="text-2xl font-bold">Notifications</h1>
+              <h1 className="text-display text-foreground">Notifications</h1>
               <p className="text-sm text-muted-foreground">
                 {unreadCount > 0 ? `${unreadCount} unread notifications` : "All caught up!"}
               </p>

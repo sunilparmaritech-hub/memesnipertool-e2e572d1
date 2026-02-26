@@ -4,11 +4,14 @@ import { Badge } from "@/components/ui/badge";
 import { Activity, Loader2, TrendingUp, TrendingDown, ArrowRight, Sparkles } from "lucide-react";
 import { Link } from "react-router-dom";
 import { formatDistanceToNow } from "date-fns";
+import { formatPreciseUsd } from "@/lib/precision";
+import TokenImage from "@/components/ui/TokenImage";
 
 interface Position {
   id: string;
   token_symbol: string;
   token_name?: string;
+  token_address?: string;
   created_at: string;
   profit_loss_percent: number | null;
   current_value: number;
@@ -20,128 +23,92 @@ interface ActiveTradesCardProps {
   onStartSnipping?: () => void;
 }
 
-const formatCurrency = (value: number) => {
-  if (Math.abs(value) >= 1000000) return `$${(value / 1000000).toFixed(2)}M`;
-  if (Math.abs(value) >= 1000) return `$${(value / 1000).toFixed(1)}K`;
-  return `$${value.toFixed(2)}`;
-};
-
-const avatarColors = [
-  'from-primary/30 to-primary/10 text-primary border-primary/20',
-  'from-blue-500/30 to-blue-500/10 text-blue-400 border-blue-500/20',
-  'from-purple-500/30 to-purple-500/10 text-purple-400 border-purple-500/20',
-  'from-orange-500/30 to-orange-500/10 text-orange-400 border-orange-500/20',
-  'from-pink-500/30 to-pink-500/10 text-pink-400 border-pink-500/20',
-  'from-cyan-500/30 to-cyan-500/10 text-cyan-400 border-cyan-500/20',
-];
+const formatCurrency = (value: number) => formatPreciseUsd(value);
 
 export default function ActiveTradesCard({ positions, loading, onStartSnipping }: ActiveTradesCardProps) {
   return (
-    <Card className="relative overflow-hidden border-0 bg-gradient-to-br from-card/90 to-card/60 backdrop-blur-xl animate-fade-in">
-      {/* Subtle background pattern */}
-      <div className="absolute inset-0 opacity-30">
-        <div className="absolute top-0 right-0 w-64 h-64 bg-primary/5 rounded-full blur-3xl" />
-        <div className="absolute bottom-0 left-0 w-48 h-48 bg-accent/5 rounded-full blur-3xl" />
-      </div>
-      
-      <CardHeader className="relative pb-2 flex flex-row items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="p-2.5 rounded-xl bg-gradient-to-br from-primary/20 to-primary/5 border border-primary/10">
-            <Activity className="w-4 h-4 text-primary" />
-          </div>
-          <div>
-            <CardTitle className="text-base font-semibold">Active Trades</CardTitle>
-            <p className="text-xs text-muted-foreground">{positions.length} open positions</p>
-          </div>
+    <div className="rounded-xl border border-border/50 bg-card/80 backdrop-blur-xl overflow-hidden animate-fade-in">
+      {/* Header */}
+      <div className="px-5 py-3 flex items-center justify-between border-b border-border/30">
+        <div className="flex items-center gap-2.5">
+          <Activity className="w-4 h-4 text-primary" />
+          <h3 className="text-sm font-bold uppercase tracking-wide">Snipe History</h3>
+          <Badge variant="outline" className="text-[10px] px-1.5 py-0 bg-primary/10 text-primary border-primary/30">
+            {positions.length} active
+          </Badge>
         </div>
         <Link to="/portfolio">
-          <Button variant="ghost" size="sm" className="text-xs gap-1.5 text-muted-foreground hover:text-primary group">
+          <Button variant="ghost" size="sm" className="text-xs gap-1.5 text-muted-foreground hover:text-primary group h-7">
             View All 
-            <ArrowRight className="w-3.5 h-3.5 transition-transform group-hover:translate-x-0.5" />
+            <ArrowRight className="w-3 h-3 transition-transform group-hover:translate-x-0.5" />
           </Button>
         </Link>
-      </CardHeader>
+      </div>
       
-      <CardContent className="relative pt-2">
+      {/* Content */}
+      <div className="p-3">
         {loading && positions.length === 0 ? (
-          <div className="flex items-center justify-center py-12">
-            <div className="relative">
-              <div className="absolute inset-0 bg-primary/20 rounded-full blur-xl animate-pulse" />
-              <Loader2 className="w-8 h-8 animate-spin text-primary relative" />
-            </div>
+          <div className="flex items-center justify-center py-10">
+            <Loader2 className="w-6 h-6 animate-spin text-primary" />
           </div>
         ) : positions.length === 0 ? (
-          <div className="text-center py-10">
-            <div className="relative inline-flex mb-4">
-              <div className="absolute inset-0 bg-muted/30 rounded-2xl blur-xl" />
-              <div className="relative p-4 rounded-2xl bg-gradient-to-br from-muted/20 to-muted/5 border border-border/50">
-                <Sparkles className="w-8 h-8 text-muted-foreground/50" />
-              </div>
-            </div>
-            <p className="text-sm font-medium text-muted-foreground mb-1">No active trades</p>
-            <p className="text-xs text-muted-foreground/70 mb-4">Start trading to see your positions here</p>
+          <div className="text-center py-8">
+            <Sparkles className="w-8 h-8 text-muted-foreground/30 mx-auto mb-2" />
+            <p className="text-sm text-muted-foreground mb-1">No active trades</p>
+            <p className="text-xs text-muted-foreground/70 mb-3">Start trading to see positions here</p>
             {onStartSnipping && (
-              <Button 
-                variant="outline" 
-                size="sm" 
-                onClick={onStartSnipping} 
-                className="gap-2 border-primary/30 text-primary hover:bg-primary/10"
-              >
-                <TrendingUp className="w-4 h-4" />
+              <Button variant="outline" size="sm" onClick={onStartSnipping} className="gap-2 border-primary/30 text-primary hover:bg-primary/10 h-7 text-xs">
+                <TrendingUp className="w-3 h-3" />
                 Start Trading
               </Button>
             )}
           </div>
         ) : (
-          <div className="space-y-2">
-            {positions.slice(0, 4).map((position, index) => {
+          <div className="space-y-0">
+            {/* Table Header */}
+            <div className="grid grid-cols-[1fr_auto_auto] gap-3 px-3 py-2 text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
+              <span>Token</span>
+              <span className="text-right w-20">P&L</span>
+              <span className="text-right w-16">Value</span>
+            </div>
+            {positions.slice(0, 5).map((position, index) => {
               const isProfit = (position.profit_loss_percent || 0) >= 0;
               const pnlPercent = position.profit_loss_percent || 0;
-              const colorClass = avatarColors[index % avatarColors.length];
               
               return (
                 <div 
                   key={position.id} 
-                  className="group flex items-center justify-between p-3.5 bg-secondary/30 hover:bg-secondary/50 rounded-xl border border-transparent hover:border-border/50 transition-all duration-300 animate-fade-in"
-                  style={{ animationDelay: `${index * 50}ms` }}
+                  className="grid grid-cols-[1fr_auto_auto] gap-3 items-center px-3 py-2.5 hover:bg-secondary/30 rounded-lg transition-colors animate-fade-in"
+                  style={{ animationDelay: `${index * 30}ms` }}
                 >
-                  <div className="flex items-center gap-3">
-                    {/* Token Avatar */}
-                    <div className={`w-10 h-10 rounded-xl bg-gradient-to-br ${colorClass} border flex items-center justify-center font-bold text-sm transition-transform group-hover:scale-105`}>
-                      {position.token_symbol.slice(0, 2).toUpperCase()}
-                    </div>
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <p className="font-semibold text-sm text-foreground">{position.token_symbol}</p>
-                        <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 bg-secondary/50">
-                          SOL
-                        </Badge>
-                      </div>
-                      <p className="text-xs text-muted-foreground">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <TokenImage
+                      symbol={position.token_symbol}
+                      address={position.token_address}
+                      size="sm"
+                    />
+                    <div className="min-w-0">
+                      <p className="font-semibold text-sm text-foreground truncate">{position.token_symbol}</p>
+                      <p className="text-[10px] text-muted-foreground">
                         {formatDistanceToNow(new Date(position.created_at), { addSuffix: true })}
                       </p>
                     </div>
                   </div>
                   
-                  <div className="text-right">
-                    <div className={`flex items-center justify-end gap-1 font-bold text-sm ${isProfit ? 'text-success' : 'text-destructive'}`}>
-                      {isProfit ? (
-                        <TrendingUp className="w-3.5 h-3.5" />
-                      ) : (
-                        <TrendingDown className="w-3.5 h-3.5" />
-                      )}
-                      {isProfit ? '+' : ''}{pnlPercent.toFixed(2)}%
-                    </div>
-                    <p className="text-xs text-muted-foreground font-medium">
-                      {formatCurrency(position.current_value)}
-                    </p>
+                  <div className={`flex items-center justify-end gap-1 font-bold text-sm w-20 ${isProfit ? 'text-success' : 'text-destructive'}`}>
+                    {isProfit ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
+                    {isProfit ? '+' : ''}{pnlPercent.toFixed(2)}%
                   </div>
+                  
+                  <p className="text-xs text-muted-foreground font-medium text-right w-16 tabular-nums">
+                    {formatCurrency(position.current_value)}
+                  </p>
                 </div>
               );
             })}
           </div>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }

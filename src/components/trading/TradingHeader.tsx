@@ -1,5 +1,7 @@
 import React, { forwardRef } from "react";
 import { Button } from "@/components/ui/button";
+import logoImg from "@/assets/logo.png";
+import headerLogoImg from "@/assets/header_logo.png";
 import { Badge } from "@/components/ui/badge";
 import { 
   User, 
@@ -12,9 +14,9 @@ import {
   Settings,
   Crown,
   BarChart3,
-  Coins,
+  Bot,
+  BookOpen,
 } from "lucide-react";
-import headerLogo from "@/assets/header-logo.png";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import {
@@ -27,7 +29,9 @@ import {
 import NotificationBell from "@/components/notifications/NotificationBell";
 import WalletConnectionModal from "@/components/wallet/WalletConnectionModal";
 import ModeSwitcher from "@/components/mode/ModeSwitcher";
-import { useCredits } from "@/contexts/CreditContext";
+import { useBotContext } from "@/contexts/BotContext";
+import SubscriptionBadge from "@/components/dashboard/SubscriptionBadge";
+import { useDisplayUnit } from "@/contexts/DisplayUnitContext";
 
 interface TradingHeaderProps {
   walletConnected?: boolean;
@@ -49,9 +53,10 @@ const TradingHeader = forwardRef<HTMLElement, TradingHeaderProps>(function Tradi
   onConnectWallet,
 }, ref) {
   const { user, isAdmin, signOut } = useAuth();
-  const { credits } = useCredits();
   const navigate = useNavigate();
   const location = useLocation();
+  const { botState } = useBotContext();
+  const { solPrice, solPriceLoading } = useDisplayUnit();
 
   const handleSignOut = async () => {
     await signOut();
@@ -65,16 +70,16 @@ const TradingHeader = forwardRef<HTMLElement, TradingHeaderProps>(function Tradi
   // Navigation items with icons
   const getNavItems = (): NavItem[] => {
     const baseItems: NavItem[] = [
-      { label: "Dashboard", path: "/", icon: LayoutDashboard },
-      { label: "Token Scanner", path: "/scanner", icon: Zap },
+      { label: "Dashboard", path: "/dashboard", icon: LayoutDashboard },
+      { label: "Scanner", path: "/scanner", icon: Zap },
       { label: "Portfolio", path: "/portfolio", icon: Briefcase },
       { label: "Risk", path: "/risk", icon: Shield },
       { label: "Settings", path: "/sniper-settings", icon: Settings },
+      { label: "Guide", path: "/basics", icon: BookOpen },
     ];
 
     if (isAdmin) {
       baseItems.push({ label: "Admin", path: "/admin", icon: Crown });
-      baseItems.push({ label: "Analytics", path: "/admin/analytics", icon: BarChart3 });
     }
 
     return baseItems;
@@ -83,16 +88,16 @@ const TradingHeader = forwardRef<HTMLElement, TradingHeaderProps>(function Tradi
   const navItems = getNavItems();
 
   return (
-    <header ref={ref} className="fixed top-0 left-0 right-0 z-50 bg-background/98 backdrop-blur-xl border-b border-border/40">
-      <div className="container mx-auto px-4">
-        <div className="flex items-center justify-between h-14">
+    <header ref={ref} className="fixed top-0 left-0 right-0 z-50 bg-background/95 backdrop-blur-xl border-b border-border/40 safe-area-top">
+      <div className="container mx-auto px-2 sm:px-3 lg:px-4 max-w-[1600px]">
+        <div className="flex items-center justify-between h-12 sm:h-14">
           {/* Logo */}
-          <Link to="/" className="flex items-center shrink-0">
-            <img src={headerLogo} alt="MemeSniper AI" className="h-[42px] sm:h-[54px] w-auto max-w-[270px] sm:max-w-[330px] object-contain" />
+          <Link to="/dashboard" className="flex items-center shrink-0">
+            <img src={headerLogoImg} alt="Alpha Meme Sniper AI" className="h-8 sm:h-10 object-contain" />
           </Link>
 
           {/* Desktop Navigation */}
-          <nav className="hidden lg:flex items-center gap-0.5 mx-4">
+          <nav className="hidden lg:flex items-center gap-0.5 mx-4 overflow-x-auto scrollbar-none">
             {navItems.map((item) => {
               const Icon = item.icon;
               const isActive = location.pathname === item.path;
@@ -100,10 +105,10 @@ const TradingHeader = forwardRef<HTMLElement, TradingHeaderProps>(function Tradi
                 <Link
                   key={item.path}
                   to={item.path}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition-all whitespace-nowrap shrink-0 ${
                     isActive
-                      ? "bg-primary/15 text-primary"
-                      : "text-muted-foreground hover:text-foreground hover:bg-secondary/60"
+                      ? "bg-primary/12 text-primary"
+                      : "text-muted-foreground hover:text-foreground hover:bg-secondary/50"
                   }`}
                 >
                   <Icon className="w-3.5 h-3.5" />
@@ -114,14 +119,20 @@ const TradingHeader = forwardRef<HTMLElement, TradingHeaderProps>(function Tradi
           </nav>
           
           {/* Right Side Actions */}
-          <div className="flex items-center gap-2">
-            {/* Credit Balance */}
-            <Link to="/pricing" className="hidden sm:flex">
-              <Badge variant="outline" className="items-center gap-1.5 px-2.5 py-1 bg-primary/5 border-primary/20 hover:bg-primary/10 transition-colors cursor-pointer">
-                <Coins className="w-3 h-3 text-primary" />
-                <span className="text-xs font-bold text-primary">{credits.credit_balance.toLocaleString()}</span>
-              </Badge>
-            </Link>
+          <div className="flex items-center gap-1 sm:gap-1.5">
+            {/* SOL Price - compact */}
+            <Badge variant="outline" className="hidden md:flex items-center gap-1 px-1.5 py-0.5 bg-secondary/20 border-border/30 text-[10px]">
+              <span className="text-muted-foreground">SOL</span>
+              <span className="font-mono font-medium text-foreground">
+                {solPriceLoading ? '…' : `$${solPrice.toFixed(2)}`}
+              </span>
+            </Badge>
+
+            {/* Subscription Badge */}
+            <div className="hidden md:flex">
+              <SubscriptionBadge />
+            </div>
+            
             {/* Mode Switcher */}
             <ModeSwitcher />
             
@@ -130,11 +141,28 @@ const TradingHeader = forwardRef<HTMLElement, TradingHeaderProps>(function Tradi
               <NotificationBell />
             </Link>
             
-            {/* Network Badge */}
-            <Badge variant="outline" className="hidden md:flex items-center gap-1.5 px-2.5 py-1 bg-secondary/50">
-              <span className="w-2 h-2 rounded-full bg-success animate-pulse" />
-              <span className="text-xs font-medium">{network}</span>
-            </Badge>
+            {/* Bot Status Indicator */}
+            <Link to="/scanner" className="hidden md:flex">
+              <Badge 
+                variant="outline" 
+                className={`flex items-center gap-1 px-2 py-0.5 cursor-pointer transition-colors text-[10px] ${
+                  botState.isBotActive 
+                    ? 'bg-success/8 border-success/25 hover:bg-success/15' 
+                    : 'bg-secondary/40 hover:bg-secondary/60'
+                }`}
+              >
+                <Bot className={`w-3 h-3 ${botState.isBotActive ? 'text-success' : 'text-muted-foreground'}`} />
+                {botState.isBotActive && (
+                  <span className="relative flex h-1.5 w-1.5">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-success opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-success"></span>
+                  </span>
+                )}
+                <span className={`font-medium ${botState.isBotActive ? 'text-success' : 'text-muted-foreground'}`}>
+                  {botState.isBotActive ? (botState.isPaused ? 'Paused' : 'Active') : 'Off'}
+                </span>
+              </Badge>
+            </Link>
             
             {/* Connect Wallet Button */}
             <WalletConnectionModal />
@@ -143,11 +171,11 @@ const TradingHeader = forwardRef<HTMLElement, TradingHeaderProps>(function Tradi
             {user && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" size="sm" className="hidden sm:flex items-center gap-2 px-2 hover:bg-secondary/60">
-                    <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary/30 to-primary/10 flex items-center justify-center border border-primary/20">
-                      <User className="w-4 h-4 text-primary" />
+                  <Button variant="ghost" size="xs" className="flex items-center gap-1 px-1.5 hover:bg-secondary/50">
+                    <div className="w-7 h-7 rounded-full bg-gradient-to-br from-primary/25 to-primary/10 flex items-center justify-center border border-primary/15">
+                      <User className="w-3.5 h-3.5 text-primary" />
                     </div>
-                    <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" />
+                    <ChevronDown className="w-3 h-3 text-muted-foreground hidden sm:block" />
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-52 bg-card border-border">

@@ -1,5 +1,4 @@
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.90.1";
 import {
   API_SECRET_MAPPING,
   encryptKey,
@@ -11,10 +10,10 @@ import {
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-internal-token',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-internal-token, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version',
 };
 
-serve(async (req) => {
+Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
   }
@@ -88,17 +87,18 @@ serve(async (req) => {
       });
     }
 
-    // Use anon key client for JWT claims verification (works with signing-keys on custom domains)
+    // Use anon key client for user verification
     const anonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
     const authClient = createClient(supabaseUrl, anonKey, {
       global: { headers: { Authorization: authHeader } },
     });
 
-    const token = authHeader.slice('Bearer '.length);
-    const { data: claimsData, error: claimsError } = await authClient.auth.getClaims(token);
-    const userId = claimsData?.claims?.sub;
+    // Use getUser() instead of getClaims() for proper JWT validation
+    const { data: { user }, error: authError } = await authClient.auth.getUser();
+    const userId = user?.id;
 
-    if (claimsError || !userId) {
+    if (authError || !userId) {
+      console.error('[api-secrets] Auth error:', authError?.message);
       return new Response(JSON.stringify({ error: 'Invalid or expired token' }), {
         status: 401,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -394,10 +394,9 @@ serve(async (req) => {
 });
 
 // Helper to get default base URLs for API types
+// NOTE: Birdeye REMOVED - replaced by free alternatives
 function getDefaultBaseUrl(apiType: string): string {
   const defaults: Record<string, string> = {
-    birdeye: 'https://public-api.birdeye.so',
-    dextools: 'https://public-api.dextools.io',
     dexscreener: 'https://api.dexscreener.com',
     geckoterminal: 'https://api.geckoterminal.com',
     honeypot_rugcheck: 'https://api.rugcheck.xyz',
@@ -405,7 +404,8 @@ function getDefaultBaseUrl(apiType: string): string {
     raydium: 'https://transaction-v1.raydium.io',
     pumpfun: 'https://frontend-api.pump.fun',
     rpc_provider: 'https://api.mainnet-beta.solana.com',
-    liquidity_lock: 'https://api.team.finance',
+    helius: 'https://mainnet.helius-rpc.com',
+    birdeye: 'https://public-api.birdeye.so',
   };
   return defaults[apiType] || '';
 }

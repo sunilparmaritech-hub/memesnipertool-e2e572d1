@@ -3,10 +3,12 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Loader2, Clock, RefreshCw, ArrowLeft, Zap, Wallet, ChevronDown, ChevronUp, ExternalLink, Check, X, AlertCircle, TrendingUp, TrendingDown } from "lucide-react";
 import { cn } from "@/lib/utils";
+import TokenImage from "@/components/ui/TokenImage";
 import { formatDistanceToNow } from "date-fns";
 import type { WaitingPosition } from "@/hooks/useLiquidityRetryWorker";
 import type { WalletToken } from "@/hooks/useWalletTokens";
 import { fetchDexScreenerTokenMetadata, fetchDexScreenerPrices, isPlaceholderTokenText } from "@/lib/dexscreener";
+import { formatPreciseUsd } from "@/lib/precision";
 
 export interface CombinedWaitingItem {
   id: string;
@@ -61,10 +63,7 @@ const formatPrice = (value: number) => {
 
 const formatValue = (value: number | null) => {
   if (value === null) return '-';
-  if (value < 0.01) return '<$0.01';
-  if (value < 1) return `$${value.toFixed(2)}`;
-  if (value < 1000) return `$${value.toFixed(2)}`;
-  return `$${(value / 1000).toFixed(1)}K`;
+  return formatPreciseUsd(value);
 };
 
 const formatAmount = (value: number) => {
@@ -193,23 +192,23 @@ const WaitingPositionRow = memo(({
     <div className="border-b border-border/20">
       <div 
         className={cn(
-          "grid grid-cols-[40px_1fr_auto] items-center gap-3 px-3 py-3 hover:bg-secondary/30 transition-colors cursor-pointer",
+          "flex items-center gap-3.5 px-4 py-3.5 hover:bg-secondary/30 transition-colors cursor-pointer",
           expanded && "bg-secondary/20"
         )}
         onClick={() => setExpanded(!expanded)}
       >
-        {/* Avatar */}
-        <div className={cn(
-          "w-9 h-9 rounded-lg flex items-center justify-center font-bold text-xs border border-white/5",
-          avatarClass
-        )}>
-          {initials}
-        </div>
+        {/* Token Image */}
+        <TokenImage
+          symbol={displaySymbol}
+          address={item.token_address}
+          size="lg"
+          className="shrink-0"
+        />
         
         {/* Token Info */}
-        <div className="min-w-0 space-y-1">
+        <div className="min-w-0 flex-1 space-y-1.5">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="font-semibold text-foreground text-sm truncate max-w-[180px]">{displayName}</span>
+            <span className="font-semibold text-foreground text-sm truncate max-w-[160px]">{displayName}</span>
             {hasRealSymbol && displayName !== displaySymbol && (
               <span className="text-muted-foreground text-xs">${displaySymbol}</span>
             )}
@@ -236,7 +235,7 @@ const WaitingPositionRow = memo(({
             )}
           </div>
           
-          <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs text-muted-foreground">
             <span>{formatAmount(item.amount)} tokens</span>
             {item.current_price > 0 && (
               <>
@@ -244,7 +243,7 @@ const WaitingPositionRow = memo(({
                 <span>{formatPrice(item.current_price)}</span>
               </>
             )}
-            {/* 24h Price Change - show accurate data like Phantom */}
+            {/* 24h Price Change */}
             {item.priceChange24h !== null && (
               <>
                 <span className="text-muted-foreground/40">•</span>
@@ -606,6 +605,10 @@ export default function WaitingLiquidityTab({
       });
   }, [combinedItems, isTabActive, enrichedMetadata]);
 
+  // State for batch route checking
+  const [isCheckingAllRoutes, setIsCheckingAllRoutes] = useState(false);
+  const [checkingProgress, setCheckingProgress] = useState(0);
+
   // Check routes for a specific token
   const checkRoutesForToken = useCallback(async (tokenAddress: string) => {
     setRouteStatuses(prev => ({
@@ -625,7 +628,60 @@ export default function WaitingLiquidityTab({
         raydium: raydiumAvailable ? 'available' : 'unavailable',
       },
     }));
+    
+    return { jupiter: jupiterAvailable, raydium: raydiumAvailable };
   }, []);
+
+  // CRITICAL: Check routes for ALL tokens in the waiting list
+  const checkAllRoutes = useCallback(async () => {
+    if (isCheckingAllRoutes || combinedItems.length === 0) return;
+    
+    setIsCheckingAllRoutes(true);
+    setCheckingProgress(0);
+    
+    // Set all to checking status first
+    const initialStatuses: Record<string, RouteStatus> = {};
+    combinedItems.forEach(item => {
+      initialStatuses[item.token_address] = { jupiter: 'checking', raydium: 'checking' };
+    });
+    setRouteStatuses(prev => ({ ...prev, ...initialStatuses }));
+    
+    // Process tokens in batches of 3 to avoid rate limiting
+    const batchSize = 3;
+    let processed = 0;
+    
+    for (let i = 0; i < combinedItems.length; i += batchSize) {
+      const batch = combinedItems.slice(i, i + batchSize);
+      
+      await Promise.all(batch.map(async (item) => {
+        const [jupiterAvailable, raydiumAvailable] = await Promise.all([
+          checkJupiterRoute(item.token_address),
+          checkRaydiumRoute(item.token_address),
+        ]);
+        
+        setRouteStatuses(prev => ({
+          ...prev,
+          [item.token_address]: {
+            jupiter: jupiterAvailable ? 'available' : 'unavailable',
+            raydium: raydiumAvailable ? 'available' : 'unavailable',
+          },
+        }));
+        
+        processed++;
+        setCheckingProgress(processed);
+      }));
+      
+      // Small delay between batches to avoid rate limiting
+      if (i + batchSize < combinedItems.length) {
+        await new Promise(r => setTimeout(r, 500));
+      }
+    }
+    
+    setIsCheckingAllRoutes(false);
+    
+    // Also trigger the parent's retry check for any additional logic
+    onRetryCheck();
+  }, [combinedItems, isCheckingAllRoutes, onRetryCheck]);
 
   // Auto-refresh wallet tokens when tab becomes active
   useEffect(() => {
@@ -634,16 +690,8 @@ export default function WaitingLiquidityTab({
     }
   }, [isTabActive, onRefreshWalletTokens]);
 
-  // Auto-check routes for items that don't have status yet
-  useEffect(() => {
-    if (!isTabActive) return;
-    
-    for (const item of combinedItems) {
-      if (!routeStatuses[item.token_address]) {
-        checkRoutesForToken(item.token_address);
-      }
-    }
-  }, [combinedItems, routeStatuses, checkRoutesForToken, isTabActive]);
+  // REMOVED: Auto-check routes - now only checks on user action (button click)
+  // Route status starts as 'unknown' until user clicks "Check" button
 
   const waitingCount = positions.filter(p => !activeTokenAddresses.has(p.token_address.toLowerCase())).length;
   const walletCount = combinedItems.filter(i => i.isWalletToken).length;
@@ -719,15 +767,15 @@ export default function WaitingLiquidityTab({
             variant="outline"
             size="sm"
             className="h-7 text-xs gap-1.5 border-warning/30 text-warning hover:bg-warning/10"
-            onClick={onRetryCheck}
-            disabled={checking}
+            onClick={() => checkAllRoutes()}
+            disabled={isCheckingAllRoutes}
           >
-            {checking ? (
+            {isCheckingAllRoutes ? (
               <Loader2 className="w-3 h-3 animate-spin" />
             ) : (
               <RefreshCw className="w-3 h-3" />
             )}
-            {checking ? 'Checking...' : 'Check Routes'}
+            {isCheckingAllRoutes ? `Checking (${checkingProgress}/${combinedItems.length})...` : 'Check All Routes'}
           </Button>
         </div>
       </div>
@@ -750,7 +798,7 @@ export default function WaitingLiquidityTab({
       {/* Info footer */}
       <div className="px-4 py-3 bg-muted/30 border-t border-border/30">
         <p className="text-xs text-muted-foreground">
-          💡 Click a token to expand details. Exit attempts Jupiter first, then Raydium fallback. Auto-checks routes every 30s.
+          💡 Click a token to expand details and use "Check" button to verify swap routes. Exit attempts Jupiter first, then Raydium fallback.
         </p>
       </div>
     </div>

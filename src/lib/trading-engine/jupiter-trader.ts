@@ -252,9 +252,17 @@ export async function checkJupiterIndex(tokenAddress: string): Promise<JupiterIn
       }
     }
     
-    // Calculate price
-    const inAmount = parseInt(quote.inAmount) / 1e9;
-    const outAmount = parseInt(quote.outAmount) / 1e9;
+    // Calculate price - use proper decimals (SOL = 9, token = variable)
+    // For this check, we're buying tokens with SOL: input=SOL(9), output=token(variable)
+    const inAmount = parseInt(quote.inAmount) / 1e9; // SOL is always 9 decimals
+    // Output token decimals - fetch from Jupiter if available
+    let tokenDecimals = 9; // Default
+    try {
+      tokenDecimals = await getTokenDecimals(tokenAddress);
+    } catch {
+      // Fallback to 9 decimals
+    }
+    const outAmount = parseInt(quote.outAmount) / Math.pow(10, tokenDecimals);
     const price = outAmount > 0 ? inAmount / outAmount : null;
     
     return {
@@ -322,12 +330,15 @@ async function getJupiterQuote(
 ): Promise<any | null> {
   const slippageBps = Math.floor(slippage * 10000);
 
+  // Sells (token→SOL) are critical and bypass circuit breaker
+  const isSell = outputMint === 'So11111111111111111111111111111111111111112';
   const quoteResult = await fetchJupiterQuote({
     inputMint,
     outputMint,
     amount: amount.toString(),
     slippageBps,
     timeoutMs: 15000,
+    critical: isSell,
   });
 
   if (quoteResult.ok === false) {
@@ -421,7 +432,9 @@ export async function getJupiterRouteInfo(
   expectedOutput: number | null;
   dexes: string[];
 } | null> {
-  const amountInSmallestUnit = Math.floor(amount * 1e9);
+  // Get input token decimals (SOL = 9, otherwise fetch)
+  const inputDecimals = inputMint === SOL_MINT ? 9 : await getTokenDecimals(inputMint);
+  const amountInSmallestUnit = Math.floor(amount * Math.pow(10, inputDecimals));
   const quote = await getJupiterQuote(inputMint, outputMint, amountInSmallestUnit, slippage);
   
   if (!quote) return null;
@@ -436,10 +449,13 @@ export async function getJupiterRouteInfo(
     }
   }
   
+  // Get output token decimals for proper conversion
+  const outputDecimals = outputMint === SOL_MINT ? 9 : await getTokenDecimals(outputMint);
+  
   return {
     route: dexes.join(' → '),
     priceImpact: parseFloat(quote.priceImpactPct || '0'),
-    expectedOutput: parseInt(quote.outAmount) / 1e9,
+    expectedOutput: parseInt(quote.outAmount) / Math.pow(10, outputDecimals),
     dexes,
   };
 }

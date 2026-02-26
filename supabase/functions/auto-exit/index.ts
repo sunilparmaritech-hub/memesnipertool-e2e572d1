@@ -1,11 +1,11 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.90.1";
 import { validateAutoExitInput } from "../_shared/validation.ts";
 import { fetchJupiterQuoteWithRetry } from "../_shared/jupiter-retry.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version',
 };
 
 interface ApiConfig {
@@ -195,6 +195,7 @@ async function checkOnChainBalance(
 }
 
 // Fetch current price from external APIs
+// Using DexScreener as primary with GeckoTerminal as fallback (NO CoinGecko)
 async function fetchCurrentPrice(
   tokenAddress: string,
   chain: string,
@@ -222,13 +223,15 @@ async function fetchCurrentPrice(
     console.error('DexScreener price fetch error:', e);
   }
 
-  // Try GeckoTerminal
+  // Try GeckoTerminal as secondary fallback
   const geckoConfig = apiConfigs.find(c => c.api_type === 'geckoterminal' && c.is_enabled);
-  if (geckoConfig) {
+  if (geckoConfig || chain === 'solana') {
     try {
       const networkId = chain === 'solana' ? 'solana' : chain === 'bsc' ? 'bsc' : 'eth';
-      const response = await fetch(`${geckoConfig.base_url}/api/v2/networks/${networkId}/tokens/${tokenAddress}`, {
+      const baseUrl = geckoConfig?.base_url || 'https://api.geckoterminal.com';
+      const response = await fetch(`${baseUrl}/api/v2/networks/${networkId}/tokens/${tokenAddress}`, {
         signal: AbortSignal.timeout(5000),
+        headers: { 'Accept': 'application/json' },
       });
       if (response.ok) {
         const data = await response.json();
@@ -241,26 +244,23 @@ async function fetchCurrentPrice(
     }
   }
 
-  // Try Birdeye (Solana) - uses secure API key retrieval
-  const birdeyeConfig = apiConfigs.find(c => c.api_type === 'birdeye' && c.is_enabled);
-  if (birdeyeConfig && chain === 'solana') {
-    const apiKey = getApiKey('birdeye', birdeyeConfig.api_key_encrypted);
-    if (apiKey) {
-      try {
-        const response = await fetch(`${birdeyeConfig.base_url}/defi/price?address=${tokenAddress}`, {
-          headers: { 'X-API-KEY': apiKey },
-          signal: AbortSignal.timeout(5000),
-        });
-        if (response.ok) {
-          const data = await response.json();
-          if (data.data?.value) {
-            return parseFloat(data.data.value);
-          }
-        }
-      } catch (e) {
-        console.error('Birdeye price fetch error:', e);
+  // Try DexScreener pairs endpoint as last resort (different structure)
+  try {
+    const response = await fetch(`https://api.dexscreener.com/latest/dex/search?q=${tokenAddress}`, {
+      signal: AbortSignal.timeout(3000),
+    });
+    if (response.ok) {
+      const data = await response.json();
+      const pairs = data.pairs?.filter((p: any) => 
+        p.chainId === 'solana' && 
+        (p.baseToken?.address === tokenAddress || p.quoteToken?.address === tokenAddress)
+      ) || [];
+      if (pairs.length > 0 && pairs[0]?.priceUsd) {
+        return parseFloat(pairs[0].priceUsd);
       }
     }
+  } catch (e) {
+    console.error('DexScreener search fallback error:', e);
   }
 
   return null;
@@ -459,11 +459,11 @@ serve(async (req) => {
       global: { headers: { Authorization: authHeader } },
     });
 
-    const token = authHeader.slice('Bearer '.length);
-    const { data: claimsData, error: claimsError } = await authClient.auth.getClaims(token);
-    const userId = claimsData?.claims?.sub;
+    const token = authHeader.replace('Bearer ', '');
+    const { data: claimsData, error: authError } = await authClient.auth.getClaims(token);
+    const userId = claimsData?.claims?.sub as string | undefined;
 
-    if (claimsError || !userId) {
+    if (authError || !userId) {
       return new Response(JSON.stringify({ error: 'Invalid or expired token' }), {
         status: 401,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -547,45 +547,98 @@ serve(async (req) => {
         
         // Only mark as sold externally if NOT skipped (position old enough) AND balance is zero
         if (!skipped && (!hasBalance || balance < position.amount * 0.01)) {
-          // Token was sold externally (Phantom wallet or elsewhere)
-          console.log(`[AutoExit] Position ${position.token_symbol} sold externally - closing stale position`);
+          // CRITICAL: Distinguish between "user sold externally" and "rug/LP removal"
+          // Check if the token still has liquidity — if not, it's a rug pull, not an external sale
+          let isRugPull = false;
+          let currentLiquidity = 0;
+          try {
+            const dexRes = await fetch(
+              `https://api.dexscreener.com/latest/dex/tokens/${position.token_address}`,
+              { signal: AbortSignal.timeout(5000) }
+            );
+            if (dexRes.ok) {
+              const dexData = await dexRes.json();
+              const solanaPair = dexData.pairs?.find((p: any) => p.chainId === 'solana');
+              currentLiquidity = solanaPair?.liquidity?.usd || 0;
+              // If liquidity is < $50 the pool was drained/removed → rug
+              if (currentLiquidity < 50) {
+                isRugPull = true;
+              }
+            } else {
+              // If DexScreener can't find the token at all, it's likely a rug
+              isRugPull = true;
+            }
+          } catch {
+            // Network error — assume rug if balance is zero
+            isRugPull = true;
+          }
+
+          const exitReason = isRugPull ? 'rug_detected' : 'sold_externally';
+          const exitPrice = isRugPull ? 0 : (position.current_price || position.entry_price);
+          const closedAt = new Date().toISOString();
+
+          // For rugs: mark SOL as lost (-100% P&L)
+          const entryPriceForCalc = position.entry_price_usd ?? position.entry_price;
+          const entryValueForCalc = position.entry_value ?? (position.amount * entryPriceForCalc);
+          const rugPnlPercent = isRugPull ? -100 : (position.profit_loss_percent || 0);
+          const rugPnlValue = isRugPull ? -entryValueForCalc : (position.profit_loss_value || 0);
+          
+          console.log(`[AutoExit] Position ${position.token_symbol} ${isRugPull ? 'RUG DETECTED (liquidity: $' + currentLiquidity.toFixed(0) + ')' : 'sold externally'} - closing`);
           
           await supabase
             .from('positions')
             .update({
               status: 'closed',
-              exit_reason: 'sold_externally',
-              exit_price: position.current_price || position.entry_price,
+              exit_reason: exitReason,
+              exit_price: exitPrice,
               exit_tx_id: null,
-              closed_at: new Date().toISOString(),
-              profit_loss_percent: position.profit_loss_percent,
-              profit_loss_value: position.profit_loss_value,
+              closed_at: closedAt,
+              profit_loss_percent: rugPnlPercent,
+              profit_loss_value: rugPnlValue,
+              current_price: exitPrice,
+              current_value: isRugPull ? 0 : (position.current_value || 0),
             })
             .eq('id', position.id);
           
-          // Log the external sale detection
+          // Log to system_logs
           await supabase.from('system_logs').insert({
             user_id: user.id,
-            event_type: 'position_sold_externally',
+            event_type: isRugPull ? 'rug_detected' : 'position_sold_externally',
             event_category: 'trading',
-            message: `Detected external sale: ${position.token_symbol} - position closed`,
+            message: isRugPull 
+              ? `🚨 RUG DETECTED: ${position.token_symbol} — liquidity removed ($${currentLiquidity.toFixed(0)}), SOL lost`
+              : `Detected external sale: ${position.token_symbol} - position closed`,
             metadata: {
               position_id: position.id,
               token_symbol: position.token_symbol,
               on_chain_balance: balance,
               expected_balance: position.amount,
+              current_liquidity: currentLiquidity,
+              is_rug_pull: isRugPull,
+              sol_lost: isRugPull ? entryValueForCalc : 0,
+              preventable_rules: isRugPull ? [
+                'LIQUIDITY_REALITY',
+                'LP_INTEGRITY',
+                'LIQUIDITY_AGING',
+                'DEPLOYER_REPUTATION',
+                'LIQUIDITY_STABILITY',
+              ] : [],
             },
-            severity: 'info',
+            severity: isRugPull ? 'error' : 'info',
           });
+          
+          console.log(`[AutoExit] Skipping trade_history insert for ${exitReason} (no tx_hash) - ${position.token_symbol}`);
           
           results.push({
             positionId: position.id,
             symbol: safeTokenSymbol(position.token_symbol, position.token_address),
             action: 'hold',
-            currentPrice: position.current_price || position.entry_price,
-            profitLossPercent: position.profit_loss_percent || 0,
+            currentPrice: exitPrice,
+            profitLossPercent: rugPnlPercent,
             executed: true,
-            error: 'Position closed - sold externally via wallet',
+            error: isRugPull 
+              ? `RUG DETECTED: Liquidity removed ($${currentLiquidity.toFixed(0)}). SOL lost. Enable LIQUIDITY_REALITY, LP_INTEGRITY, LIQUIDITY_AGING rules to prevent.`
+              : 'Position closed - sold externally via wallet',
           });
           
           continue; // Skip normal processing for this position
@@ -611,8 +664,9 @@ serve(async (req) => {
         : position.amount;
       const entryValueForCalc = position.entry_value ?? (effectiveAmountForValuation * entryPriceForCalc);
       const currentValue = effectiveAmountForValuation * currentPrice;
-      // Use entry_value for accurate P&L $ calculation
-      const profitLossValue = entryValueForCalc * (profitLossPercent / 100);
+      // FIXED: Calculate P&L as direct subtraction (currentValue - entryValue)
+      // This avoids the compounding error from percent-based calculation
+      const profitLossValue = currentValue - entryValueForCalc;
 
       // Update position with current price data
       positionUpdates.push({
@@ -663,21 +717,30 @@ serve(async (req) => {
                               jupiterResult.error?.includes('Route not found');
               
               if (noRoute) {
-                console.log(`[AutoExit] No Jupiter route for ${position.token_symbol} - ${reason} triggered but keeping position OPEN (illiquid)`);
+                console.log(`[AutoExit] No Jupiter route for ${position.token_symbol} - ${reason} triggered, moving to WAITING_FOR_LIQUIDITY`);
                 
-                // Log the warning but DO NOT close the position
+                // CRITICAL: Update position status to waiting_for_liquidity instead of keeping it open
+                // This ensures the UI shows the correct status and the retry worker will handle it
+                await supabase.from('positions').update({
+                  status: 'waiting_for_liquidity',
+                  waiting_for_liquidity_since: new Date().toISOString(),
+                  liquidity_last_checked_at: new Date().toISOString(),
+                  liquidity_check_count: (position as any).liquidity_check_count ? (position as any).liquidity_check_count + 1 : 1,
+                }).eq('id', position.id).eq('user_id', user.id);
+                
+                // Log the warning
                 await supabase.from('system_logs').insert({
                   user_id: user.id,
                   event_type: 'exit_blocked_no_route',
                   event_category: 'trading',
-                  message: `Exit blocked (no route): ${position.token_symbol} - ${reason} triggered at ${profitLossPercent.toFixed(2)}% but no swap available`,
+                  message: `Exit blocked (no route): ${position.token_symbol} - ${reason} triggered at ${profitLossPercent.toFixed(2)}%, moved to waiting for liquidity`,
                   metadata: {
                     position_id: position.id,
                     token_symbol: position.token_symbol,
                     entry_price: position.entry_price,
                     current_price: currentPrice,
                     profit_loss_percent: profitLossPercent,
-                    reason: `${reason} triggered but Jupiter has no route - position kept open, user must handle manually`,
+                    reason: `${reason} triggered but Jupiter has no route - moved to WAITING_FOR_LIQUIDITY`,
                     original_error: jupiterResult.error,
                   },
                   severity: 'warning',
@@ -686,7 +749,7 @@ serve(async (req) => {
               
               executed = false;
               error = noRoute 
-                ? `NO_ROUTE: ${reason} triggered but token has no liquidity - position kept open` 
+                ? `NO_ROUTE: ${reason} triggered but token has no liquidity - moved to Waiting tab` 
                 : (jupiterResult.error || 'Jupiter sell failed - waiting for route availability');
             }
           }

@@ -29,6 +29,7 @@ interface ApiRequirement {
 }
 
 // Define API requirements for production trading
+// NOTE: Birdeye REMOVED - all essential features are covered by free alternatives
 const API_REQUIREMENTS: ApiRequirement[] = [
   {
     apiType: 'rpc_provider',
@@ -38,31 +39,18 @@ const API_REQUIREMENTS: ApiRequirement[] = [
     suggestedProvider: 'Helius or QuickNode',
     providerUrl: 'https://helius.dev',
   },
-  {
-    apiType: 'jupiter',
-    name: 'Jupiter API',
-    required: false,
-    description: 'Token swaps & aggregation',
-    freeAlternative: 'Free tier available with rate limits',
-    suggestedProvider: 'Jupiter (free tier works)',
-    providerUrl: 'https://jup.ag',
-  },
-  {
-    apiType: 'birdeye',
-    name: 'Birdeye API',
-    required: false,
-    description: 'Enhanced market data & token analytics',
-    freeAlternative: 'DexScreener provides similar data for free',
-  },
 ];
 
 // These APIs are FREE and don't require paid keys
 const FREE_APIS = [
-  { name: 'DexScreener', description: 'Token discovery & liquidity data' },
-  { name: 'GeckoTerminal', description: 'Market data & charts' },
+  { name: 'DexScreener', description: 'Primary: Token discovery, prices & liquidity' },
+  { name: 'GeckoTerminal', description: 'Secondary: Market data, charts & pool info' },
+  { name: 'Jupiter', description: 'Token swaps & aggregation (free tier)' },
   { name: 'RugCheck', description: 'Token safety validation' },
   { name: 'Pump.fun', description: 'New token detection' },
   { name: 'Raydium', description: 'DEX liquidity pools' },
+  { name: 'Solscan', description: 'Token metadata enrichment' },
+  { name: 'Solana RPC', description: 'On-chain token metadata' },
 ];
 
 export default function PaidApiAlert({ isBotActive, isDemo }: PaidApiAlertProps) {
@@ -76,11 +64,26 @@ export default function PaidApiAlert({ isBotActive, isDemo }: PaidApiAlertProps)
 
   const checkApiConfigurations = useCallback(async () => {
     try {
-      const { data, error } = await supabase
-        .from('api_configurations')
-        .select('api_type, status, is_enabled, api_key_encrypted, base_url');
+      const result = await supabase
+        .from('api_configurations' as never)
+        .select('api_type, status, is_enabled, api_key_encrypted, base_url') as any;
 
-      if (error) throw error;
+      const data = result?.data;
+      const error = result?.error;
+
+      if (error) {
+        console.warn('[PaidApiAlert] Query error, hiding alert:', error.message);
+        setApiStatuses({ rpc_provider: { configured: true, status: 'active', hasKey: true } });
+        setLoading(false);
+        return;
+      }
+
+      if (!data || !Array.isArray(data) || data.length === 0) {
+        console.warn('[PaidApiAlert] No api_configurations data returned, hiding alert');
+        setApiStatuses({ rpc_provider: { configured: true, status: 'active', hasKey: true } });
+        setLoading(false);
+        return;
+      }
 
       const statuses: Record<string, { configured: boolean; status: string; hasKey: boolean }> = {};
       

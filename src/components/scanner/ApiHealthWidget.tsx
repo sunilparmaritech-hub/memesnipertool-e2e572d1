@@ -92,17 +92,17 @@ export default function ApiHealthWidget({ isDemo = false }: ApiHealthWidgetProps
         : 'online';
 
   return (
-    <Card className="bg-card/80 backdrop-blur-sm border-border/40">
-      <CardHeader className="pb-2 pt-3 px-3">
-        <CardTitle className="text-xs font-medium flex items-center justify-between">
+    <Card className="bg-card/80 backdrop-blur-sm border-border/50">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm font-medium flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <Wifi className={`w-3.5 h-3.5 ${overallStatus === 'online' ? 'text-success' : overallStatus === 'unknown' ? 'text-muted-foreground' : 'text-warning'}`} />
-            <span className="text-muted-foreground">API HEALTH</span>
+            <Wifi className={`w-4 h-4 ${overallStatus === 'online' ? 'text-success' : overallStatus === 'unknown' ? 'text-muted-foreground' : 'text-warning'}`} />
+            API Health
           </div>
           <Button
             variant="ghost"
             size="icon"
-            className="h-5 w-5"
+            className="h-6 w-6"
             onClick={checkHealth}
             disabled={checking}
           >
@@ -110,37 +110,48 @@ export default function ApiHealthWidget({ isDemo = false }: ApiHealthWidgetProps
           </Button>
         </CardTitle>
       </CardHeader>
-      <CardContent className="px-3 pb-3 pt-0">
+      <CardContent className="pt-0">
         {error && (
-          <div className="flex items-center gap-1 text-[9px] text-warning mb-2 p-1.5 bg-warning/10 rounded">
-            <AlertTriangle className="w-2.5 h-2.5 flex-shrink-0" />
+          <div className="flex items-center gap-1 text-[10px] text-warning mb-2 p-1.5 bg-warning/10 rounded">
+            <AlertTriangle className="w-3 h-3 flex-shrink-0" />
             <span className="truncate">{error}</span>
           </div>
         )}
         
-        <div className="grid grid-cols-2 gap-1.5">
+        <div className="grid grid-cols-2 gap-2">
           {statuses.map((api) => {
             const config = statusConfig[api.status];
+            const Icon = config.icon;
             
             return (
               <div
                 key={api.name}
-                className="flex items-center justify-between p-2 rounded-lg bg-secondary/30 border border-border/30"
+                className={`p-2 rounded-lg ${config.bg} border border-transparent`}
               >
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className="text-[10px] font-medium truncate">{api.name}</span>
-                  <div className={`w-1.5 h-1.5 rounded-full ${api.status === 'online' ? 'bg-success' : api.status === 'offline' ? 'bg-destructive' : 'bg-warning'}`} />
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-xs font-medium">{api.name}</span>
+                  <Icon className={`w-3 h-3 ${config.color}`} />
                 </div>
-                <span className={`text-[9px] ${config.color}`}>
-                  {api.latency !== null ? `${api.latency}ms` : api.status}
-                </span>
+                <div className="flex items-center justify-between text-[10px]">
+                  <span className={config.color}>
+                    {api.status === 'unknown' ? 'Checking...' : api.status}
+                  </span>
+                  {api.latency !== null && (
+                    <span className="text-muted-foreground">{api.latency}ms</span>
+                  )}
+                </div>
+                {api.lastError && api.status !== 'online' && (
+                  <p className="text-[9px] text-destructive/80 mt-0.5 truncate">
+                    {api.lastError}
+                  </p>
+                )}
               </div>
             );
           })}
         </div>
         
         {statuses[0]?.lastCheck && (
-          <p className="text-[9px] text-muted-foreground text-right mt-2">
+          <p className="text-[9px] text-muted-foreground text-center mt-2">
             Last check: {statuses[0].lastCheck.toLocaleTimeString()}
           </p>
         )}

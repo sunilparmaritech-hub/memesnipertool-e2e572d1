@@ -4,6 +4,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/hooks/use-toast';
 import { fetchDexScreenerPrices, fetchDexScreenerTokenMetadata, isLikelyRealSolanaMint } from '@/lib/dexscreener';
 import { isPlaceholderText } from '@/lib/formatters';
+import { calculateCurrentValue, calculatePnLPercent } from '@/lib/precision';
 export interface Position {
   id: string;
   user_id: string;
@@ -22,7 +23,7 @@ export interface Position {
   profit_take_percent: number;
   stop_loss_percent: number;
   pnl_percentage: number | null;
-  status: 'open' | 'closed' | 'pending';
+  status: 'open' | 'closed' | 'pending' | 'waiting_for_liquidity';
   exit_reason: string | null;
   exit_price: number | null;
   exit_tx_id: string | null;
@@ -212,6 +213,7 @@ export function usePositions() {
   }, [toast, user]);
 
   // Create a new position
+  // CRITICAL: entryPriceUsd is required for accurate P&L calculations
   const createPosition = useCallback(async (
     tokenAddress: string,
     tokenSymbol: string,
@@ -220,13 +222,16 @@ export function usePositions() {
     entryPrice: number,
     amount: number,
     profitTakePercent: number,
-    stopLossPercent: number
+    stopLossPercent: number,
+    entryPriceUsd?: number // Optional USD price for accurate P&L
   ): Promise<Position | null> => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('Not authenticated');
 
       const entryValue = amount * entryPrice;
+      // Use provided USD price, or fall back to entryPrice (assumes USD if not specified)
+      const usdPrice = entryPriceUsd ?? entryPrice;
 
       const { data, error } = await supabase
         .from('positions')
@@ -237,6 +242,7 @@ export function usePositions() {
           token_name: tokenName,
           chain,
           entry_price: entryPrice,
+          entry_price_usd: usdPrice, // CRITICAL: Store USD price for P&L
           current_price: entryPrice,
           amount,
           entry_value: entryValue,
@@ -469,10 +475,13 @@ export function usePositions() {
       setPositions(previousPositions);
 
       const err = error as Error;
+      const isRateLimit = err.message?.includes('RATE_LIMITED') || err.message?.includes('rate limit');
       toast({
-        title: 'Error closing position',
-        description: err.message,
-        variant: 'destructive',
+        title: isRateLimit ? '⏳ Temporarily busy' : 'Error closing position',
+        description: isRateLimit 
+          ? 'The trading API is busy. Please wait a moment and try again.' 
+          : err.message,
+        variant: isRateLimit ? undefined : 'destructive',
       });
       return false;
     }
@@ -483,7 +492,7 @@ export function usePositions() {
   // Uses deep comparison to only update positions whose prices have actually changed
   const updatePricesFromDexScreener = useCallback(async () => {
     const snapshot = positionsRef.current;
-    const openPositions = snapshot.filter((p) => p.status === 'open' || p.status === 'pending');
+    const openPositions = snapshot.filter((p) => p.status === 'open' || p.status === 'pending' || p.status === 'waiting_for_liquidity');
     
     const openAddresses = openPositions.map((p) => p.token_address).filter((addr) => isLikelyRealSolanaMint(addr));
 
@@ -499,7 +508,7 @@ export function usePositions() {
         let hasChanges = false;
         
         const updated = prev.map((p) => {
-          if (p.status !== 'open' && p.status !== 'pending') return p;
+          if (p.status !== 'open' && p.status !== 'pending' && p.status !== 'waiting_for_liquidity') return p;
           
           const priceData = priceMap.get(p.token_address);
           if (!priceData || priceData.priceUsd <= 0) return p;
@@ -516,24 +525,35 @@ export function usePositions() {
           
           hasChanges = true;
           
-          const currentValue = p.amount * currentPriceUsd;
+          // CRITICAL: Use precision utilities - no manual scaling
+          const currentValue = calculateCurrentValue(p.amount, currentPriceUsd);
           
-          // CRITICAL: Use entry_price_usd for P&L if available, otherwise use entry_price
-          // This ensures unit consistency (USD vs USD)
-          const entryPriceForCalc = p.entry_price_usd ?? p.entry_price;
+          // CRITICAL FIX: Use entry_price_usd for P&L calculations
+          // entry_price_usd is stored in USD (same unit as DexScreener's current_price)
+          // entry_price is in SOL (for backwards compatibility) - DO NOT use for P&L
+          //
+          // If entry_price_usd is missing (legacy positions), we need to detect and handle:
+          // - If entry_price < 0.0001, it's likely a SOL-denominated price (needs conversion)
+          // - We mark it for backfill but use current_value / entry_value ratio for P&L
+          const hasValidEntryPriceUsd = p.entry_price_usd !== null && p.entry_price_usd > 0;
           
-          // Use entry_value (actual SOL invested) for P&L dollar value calculation
-          // This is more accurate than amount * entry_price for tiny token amounts
-          const entryValueForCalc = p.entry_value ?? (p.amount * entryPriceForCalc);
+          // For positions WITHOUT entry_price_usd, calculate P&L from value ratio
+          // This is more accurate than mixing SOL prices with USD prices
+          let profitLossPercent: number;
           
-          // If we didn't have entry_price_usd, try to backfill it from current price structure
-          // This handles legacy positions that were stored with SOL entry prices
-          const needsBackfill = p.entry_price_usd === null && p.entry_price < 0.0001;
-          
-          // P&L % is based on price change
-          let profitLossPercent = entryPriceForCalc > 0 
-            ? ((currentPriceUsd - entryPriceForCalc) / entryPriceForCalc) * 100 
-            : 0;
+          if (hasValidEntryPriceUsd) {
+            // CORRECT: Use precision utility for P&L calculation
+            profitLossPercent = calculatePnLPercent(p.entry_price_usd!, currentPriceUsd);
+          } else {
+            // FALLBACK: Use value-based P&L for legacy positions
+            // entry_value and current_value are both in their original units
+            const entryValueForCalc = p.entry_value ?? (p.amount * p.entry_price);
+            if (entryValueForCalc > 0) {
+              profitLossPercent = ((currentValue - entryValueForCalc) / entryValueForCalc) * 100;
+            } else {
+              profitLossPercent = 0;
+            }
+          }
           
           // SANITY CHECK: Clamp P&L to reasonable bounds (-100% to +10000%)
           // Prevents UI from showing absurd values due to data errors
@@ -541,10 +561,9 @@ export function usePositions() {
           const MAX_REASONABLE_LOSS = -99.99;
           profitLossPercent = Math.max(MAX_REASONABLE_LOSS, Math.min(MAX_REASONABLE_GAIN, profitLossPercent));
           
-          // P&L $ value uses entry_value (SOL invested) as baseline for accuracy
-          // Formula: entryValue * (1 + profitLossPercent/100) - entryValue
-          // Which simplifies to: entryValue * profitLossPercent/100
-          const profitLossValue = entryValueForCalc * (profitLossPercent / 100);
+          // CRITICAL: Calculate P&L value using precision - no manual scaling
+          const correctEntryValueUsd = calculateCurrentValue(p.amount, p.entry_price_usd ?? p.entry_price);
+          const profitLossValue = currentValue - correctEntryValueUsd;
 
           // Check if metadata needs enrichment (name/symbol are placeholders)
           const needsMetadataEnrichment = isPlaceholderText(p.token_name) || isPlaceholderText(p.token_symbol);
@@ -591,9 +610,6 @@ export function usePositions() {
             // Enrich token metadata from DexScreener
             token_name: enrichedName,
             token_symbol: enrichedSymbol,
-            // Backfill entry_price_usd if we detected a unit mismatch
-            // (entry was in SOL but current is in USD)
-            entry_price_usd: needsBackfill ? null : (p.entry_price_usd ?? entryPriceForCalc),
           };
         });
         
@@ -685,17 +701,25 @@ export function usePositions() {
     };
   }, [updatePricesFromDexScreener]);
 
-  // CRITICAL: Include both 'open' and 'pending' statuses for active trades display
-  // This ensures newly opened positions (pending) and active positions (open) show correctly
-  const openPositions = positions.filter(p => p.status === 'open' || p.status === 'pending');
+  // CRITICAL: Include 'open', 'pending', AND 'waiting_for_liquidity' for active trades display
+  // This ensures newly opened positions (pending), active positions (open), and those awaiting liquidity show correctly
+  // The 'waiting_for_liquidity' status means the position was bought but awaiting route for sell
+  const openPositions = positions.filter(p => 
+    p.status === 'open' || p.status === 'pending' || p.status === 'waiting_for_liquidity'
+  );
   const closedPositions = positions.filter(p => p.status === 'closed');
   const pendingPositions = positions.filter(p => p.status === 'pending');
+  
+  // All non-closed positions - includes open, pending, AND waiting_for_liquidity
+  // Used by LiquidityMonitor to exclude wallet tokens that are already tracked as positions
+  const allActivePositions = positions.filter(p => p.status !== 'closed');
 
   return {
     positions,
     openPositions,
     closedPositions,
     pendingPositions,
+    allActivePositions, // NEW: All non-closed positions for proper exclusion in Waiting tab
     loading,
     refreshing,
     checkingExits,

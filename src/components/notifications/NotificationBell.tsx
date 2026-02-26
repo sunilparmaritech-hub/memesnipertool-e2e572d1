@@ -20,11 +20,11 @@ const notificationIcons = {
 };
 
 const notificationColors = {
-  info: "text-blue-400 bg-blue-500/20",
+  info: "text-primary bg-primary/20",
   success: "text-success bg-success/20",
   warning: "text-warning bg-warning/20",
   error: "text-destructive bg-destructive/20",
-  trade: "text-primary bg-primary/20",
+  trade: "text-accent bg-accent/20",
 };
 
 interface NotificationItemProps {

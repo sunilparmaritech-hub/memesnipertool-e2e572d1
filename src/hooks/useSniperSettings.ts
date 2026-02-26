@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/hooks/use-toast';
+import { DEFAULT_VALIDATION_TOGGLES, type ValidationRuleToggles } from '@/lib/validationRuleConfig';
 
 export type SnipingPriority = 'normal' | 'fast' | 'turbo';
 
@@ -22,10 +23,12 @@ export interface SniperSettings {
   slippage_tolerance?: number;
   // Optional max risk score threshold (0-100)
   max_risk_score?: number;
+  // Validation rule enable/disable toggles
+  validation_rule_toggles: ValidationRuleToggles;
 }
 
 const defaultSettings: Omit<SniperSettings, 'user_id'> = {
-  min_liquidity: 5, // Lowered from 300 to allow more tokens - 5 SOL minimum
+  min_liquidity: 5,
   profit_take_percentage: 100,
   stop_loss_percentage: 20,
   trade_amount: 0.1,
@@ -34,9 +37,10 @@ const defaultSettings: Omit<SniperSettings, 'user_id'> = {
   category_filters: ['animals', 'parody', 'trend', 'utility'],
   token_blacklist: [],
   token_whitelist: [],
-  target_buyer_positions: [1, 2, 3, 4, 5], // Allow all buyer positions 1-5
-  slippage_tolerance: 15, // 15% default for meme coins
-  max_risk_score: 70, // Default max risk score
+  target_buyer_positions: [1, 2, 3, 4, 5],
+  slippage_tolerance: 15,
+  max_risk_score: 70,
+  validation_rule_toggles: { ...DEFAULT_VALIDATION_TOGGLES },
 };
 
 export function useSniperSettings() {
@@ -79,6 +83,10 @@ export function useSniperSettings() {
           target_buyer_positions: (typedData.target_buyer_positions as number[]) || [2, 3],
           slippage_tolerance: (typedData.slippage_tolerance as number) ?? defaultSettings.slippage_tolerance,
           max_risk_score: (typedData.max_risk_score as number) ?? defaultSettings.max_risk_score,
+          validation_rule_toggles: {
+            ...DEFAULT_VALIDATION_TOGGLES,
+            ...((typedData.validation_rule_toggles as ValidationRuleToggles) || {}),
+          },
         });
       } else {
         // Return default settings for new users
@@ -134,6 +142,10 @@ export function useSniperSettings() {
         target_buyer_positions: (typedData.target_buyer_positions as number[]) || [2, 3],
         slippage_tolerance: (typedData.slippage_tolerance as number) ?? defaultSettings.slippage_tolerance,
         max_risk_score: (typedData.max_risk_score as number) ?? defaultSettings.max_risk_score,
+        validation_rule_toggles: {
+          ...DEFAULT_VALIDATION_TOGGLES,
+          ...((typedData.validation_rule_toggles as ValidationRuleToggles) || {}),
+        },
       });
 
       toast({ title: 'Settings saved successfully' });

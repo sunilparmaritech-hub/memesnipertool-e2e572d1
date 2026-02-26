@@ -1,4 +1,4 @@
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.90.1";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -101,14 +101,16 @@ Deno.serve(async (req) => {
       global: { headers: { Authorization: authHeader } },
     });
 
-    const token = authHeader.replace("Bearer ", "");
-    const { data, error: authError } = await supabase.auth.getClaims(token);
-    if (authError || !data?.claims?.sub) {
+    const token = authHeader.replace('Bearer ', '');
+    const { data: claimsData, error: authError } = await supabase.auth.getClaims(token);
+    const userId = claimsData?.claims?.sub as string | undefined;
+    if (authError || !userId) {
       return new Response(JSON.stringify({ error: "Invalid authentication" }), {
         status: 401,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
+    const user = { id: userId };
 
     const body = await req.json().catch(() => ({}));
     const owner = body?.owner;
@@ -138,7 +140,9 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Parse token accounts
+    // Parse token accounts with proper decimal handling
+    // CRITICAL: Token balances are already normalized by RPC (uiAmount)
+    // Do NOT apply additional scaling
     const rawTokens: { mint: string; balance: number; decimals: number }[] = [];
     
     for (const account of accounts) {
@@ -148,10 +152,12 @@ Deno.serve(async (req) => {
       
       if (!mint || mint === SOL_MINT) continue;
       
+      // uiAmount is already normalized (raw / 10^decimals)
       const uiAmount = tokenAmount?.uiAmount;
       const decimals = tokenAmount?.decimals ?? 0;
       
-      if (typeof uiAmount === "number" && uiAmount > 0) {
+      // CRITICAL: Do NOT apply any manual scaling - uiAmount is the true balance
+      if (typeof uiAmount === "number" && uiAmount > 0 && Number.isFinite(uiAmount)) {
         rawTokens.push({ mint, balance: uiAmount, decimals });
       }
     }
@@ -168,13 +174,19 @@ Deno.serve(async (req) => {
     const prices = await getTokenPrices(mints);
 
     // Build token list with metadata and prices
+    // CRITICAL: Use full precision for value calculations - no rounding
     const tokens: WalletToken[] = [];
     
     for (const t of rawTokens) {
       const priceUsd = prices.get(t.mint) ?? null;
-      const valueUsd = priceUsd !== null ? priceUsd * t.balance : null;
       
-      // Skip dust tokens
+      // CRITICAL: Calculate value with full precision
+      // valueUsd = balance × priceUsd (no manual scaling)
+      const valueUsd = (priceUsd !== null && Number.isFinite(priceUsd)) 
+        ? priceUsd * t.balance 
+        : null;
+      
+      // Skip dust tokens (but only if we have a valid price)
       if (valueUsd !== null && valueUsd < minValueUsd) continue;
       
       // Get metadata (symbol, name) - do in parallel for efficiency but limit concurrency
@@ -184,7 +196,7 @@ Deno.serve(async (req) => {
         mint: t.mint,
         symbol: metadata.symbol,
         name: metadata.name,
-        balance: t.balance,
+        balance: t.balance, // Already normalized by RPC
         decimals: t.decimals,
         priceUsd,
         valueUsd,

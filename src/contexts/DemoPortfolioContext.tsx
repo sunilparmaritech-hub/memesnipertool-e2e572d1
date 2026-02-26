@@ -18,7 +18,7 @@ export interface DemoPosition {
   profit_loss_value: number;
   profit_take_percent: number;
   stop_loss_percent: number;
-  status: 'open' | 'closed' | 'pending';
+  status: 'open' | 'closed' | 'pending' | 'waiting_for_liquidity';
   exit_reason: string | null;
   exit_price: number | null;
   exit_tx_id: string | null;

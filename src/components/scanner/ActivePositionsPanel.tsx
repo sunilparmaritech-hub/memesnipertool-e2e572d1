@@ -1,7 +1,8 @@
 import { memo, useMemo, useCallback, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { TrendingUp, MoreVertical, ExternalLink, RefreshCw, ChevronDown, ChevronUp, Trash2 } from "lucide-react";
+import { TrendingUp, TrendingDown, MoreVertical, ExternalLink, RefreshCw, ChevronDown, ChevronUp, Trash2, Clock, ArrowUpRight, ArrowDownRight, DollarSign } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DropdownMenu,
@@ -11,11 +12,13 @@ import {
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
+import TokenImage from "@/components/ui/TokenImage";
 import { 
   formatPrice as formatPriceUtil,
   getTokenDisplayName,
   getTokenDisplaySymbol 
 } from "@/lib/formatters";
+import { formatDistanceToNow } from "date-fns";
 
 interface Position {
   id: string;
@@ -24,6 +27,7 @@ interface Position {
   token_address?: string;
   amount: number;
   entry_price: number;
+  entry_price_usd?: number;
   entry_value?: number;
   current_price: number;
   current_value?: number;
@@ -31,6 +35,7 @@ interface Position {
   profit_loss_value: number | null;
   profit_take_percent?: number;
   stop_loss_percent?: number;
+  created_at?: string;
 }
 
 interface ActivePositionsPanelProps {
@@ -38,16 +43,17 @@ interface ActivePositionsPanelProps {
   loading?: boolean;
   onClosePosition?: (positionId: string, currentPrice: number) => void;
   onForceClose?: (positionId: string) => void;
+  onMoveToWaiting?: (positionId: string) => void;
   onRefresh?: () => void;
 }
 
 const avatarColors = [
-  'bg-gradient-to-br from-success/30 to-success/10 text-success',
-  'bg-gradient-to-br from-blue-500/30 to-blue-500/10 text-blue-400',
-  'bg-gradient-to-br from-purple-500/30 to-purple-500/10 text-purple-400',
-  'bg-gradient-to-br from-orange-500/30 to-orange-500/10 text-orange-400',
-  'bg-gradient-to-br from-pink-500/30 to-pink-500/10 text-pink-400',
-  'bg-gradient-to-br from-cyan-500/30 to-cyan-500/10 text-cyan-400',
+  'bg-gradient-to-br from-success/30 to-success/10 text-success border-success/20',
+  'bg-gradient-to-br from-blue-500/30 to-blue-500/10 text-blue-400 border-blue-500/20',
+  'bg-gradient-to-br from-purple-500/30 to-purple-500/10 text-purple-400 border-purple-500/20',
+  'bg-gradient-to-br from-orange-500/30 to-orange-500/10 text-orange-400 border-orange-500/20',
+  'bg-gradient-to-br from-pink-500/30 to-pink-500/10 text-pink-400 border-pink-500/20',
+  'bg-gradient-to-br from-cyan-500/30 to-cyan-500/10 text-cyan-400 border-cyan-500/20',
 ];
 
 const formatPrice = (value: number) => formatPriceUtil(value);
@@ -61,38 +67,56 @@ const formatTokenAmount = (amount: number) => {
   return amount.toFixed(8);
 };
 
-// Memoized position row - shows accurate USD values like Phantom wallet
+// Format USD value with appropriate precision
+const formatUsdCompact = (val: number) => {
+  const absVal = Math.abs(val);
+  if (absVal >= 1000) return `$${val.toFixed(0)}`;
+  if (absVal >= 1) return `$${val.toFixed(2)}`;
+  if (absVal >= 0.01) return `$${val.toFixed(3)}`;
+  return `$${val.toFixed(4)}`;
+};
+
+// Format P&L value with sign
+const formatPnLValue = (val: number) => {
+  const sign = val >= 0 ? '+' : '';
+  return `${sign}${formatUsdCompact(val)}`;
+};
+
+// Memoized position row - Enhanced with more user-friendly info
 const PositionRow = memo(({ 
   position, 
   colorIndex, 
   onClosePosition,
-  onForceClose
+  onForceClose,
+  onMoveToWaiting
 }: { 
   position: Position; 
   colorIndex: number;
   onClosePosition?: (positionId: string, currentPrice: number) => void;
   onForceClose?: (positionId: string) => void;
+  onMoveToWaiting?: (positionId: string) => void;
 }) => {
-  const pnlPercent = position.profit_loss_percent || 0;
+  // Calculate values accurately from amount × prices
+  const entryPriceUsd = position.entry_price_usd ?? position.entry_price;
+  const currentPriceUsd = position.current_price ?? entryPriceUsd;
+  
+  // Calculate P&L from prices (not stored values which may be inconsistent)
+  const entryValueUsd = position.amount * entryPriceUsd;
+  const currentValueUsd = position.amount * currentPriceUsd;
+  const pnlValueUsd = currentValueUsd - entryValueUsd;
+  const pnlPercent = entryValueUsd > 0 ? ((currentValueUsd - entryValueUsd) / entryValueUsd) * 100 : 0;
+  
   const isPositive = pnlPercent >= 0;
   const progressWidth = Math.min(Math.abs(pnlPercent), 100);
-
-  // CRITICAL: Use current_value from DB directly (it's already correct)
-  // Fall back to entry_value based calculation if current_value not available
-  const currentUsdValue = position.current_value || (
-    position.entry_value && position.entry_value > 0 && position.current_price > 0
-      ? (position.entry_value / position.entry_price) * position.current_price
-      : position.amount * position.current_price
-  );
-  
-  // Calculate actual token amount from current_value or entry_value
-  const actualTokenAmount = position.current_price > 0 
-    ? currentUsdValue / position.current_price 
-    : position.amount;
 
   // Use actual token name/symbol, fallback to formatted address
   const displaySymbol = getTokenDisplaySymbol(position.token_symbol, position.token_address || '');
   const displayName = getTokenDisplayName(position.token_name, position.token_address || '');
+  
+  // Time since entry
+  const timeHeld = position.created_at 
+    ? formatDistanceToNow(new Date(position.created_at), { addSuffix: false })
+    : 'N/A';
 
   const handleClose = useCallback(() => {
     onClosePosition?.(position.id, position.current_price);
@@ -102,65 +126,125 @@ const PositionRow = memo(({
     onForceClose?.(position.id);
   }, [onForceClose, position.id]);
 
+  const handleMoveToWaiting = useCallback(() => {
+    onMoveToWaiting?.(position.id);
+  }, [onMoveToWaiting, position.id]);
+
   return (
-    <div className="px-4 py-3 border-b border-border/20 hover:bg-secondary/20 transition-colors group">
+    <div className="px-4 py-3.5 border-b border-border/20 hover:bg-secondary/30 transition-all duration-200 group">
+      {/* Main Row */}
       <div className="flex items-center justify-between gap-3">
-        {/* Left: Avatar + Info */}
-        <div className="flex items-center gap-3 flex-1 min-w-0">
-          <div 
-            className={cn(
-              "w-10 h-10 rounded-lg flex items-center justify-center text-xs font-bold shrink-0 border border-white/5",
-              avatarColors[colorIndex % avatarColors.length]
-            )}
-          >
-            {displaySymbol.slice(0, 2).toUpperCase()}
-          </div>
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <span className="font-semibold text-sm text-foreground truncate">{displayName}</span>
-              <span className="text-xs text-muted-foreground">{displaySymbol}</span>
+        {/* Left: Avatar + Token Info */}
+        <div className="flex items-center gap-3.5 flex-1 min-w-0">
+          <TokenImage
+            symbol={displaySymbol}
+            address={position.token_address || ''}
+            size="lg"
+          />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2 mb-1">
+              <span className="font-semibold text-sm md:text-base text-foreground truncate max-w-[120px] md:max-w-[160px]">
+                {displayName}
+              </span>
+              <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 bg-secondary/50 shrink-0">
+                {displaySymbol}
+              </Badge>
             </div>
-            {/* Token quantity + current market price */}
-            <p className="text-xs text-muted-foreground tabular-nums">
-              {formatTokenAmount(actualTokenAmount)} {displaySymbol} • Now: {formatPrice(position.current_price)}
-            </p>
+            {/* Token amount + Time held */}
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <span className="tabular-nums">{formatTokenAmount(position.amount)} tokens</span>
+              <span className="text-border">•</span>
+              <span className="flex items-center gap-1">
+                <Clock className="w-3 h-3" />
+                {timeHeld}
+              </span>
+            </div>
           </div>
         </div>
         
-        {/* Right: Current Value + P&L like Phantom wallet */}
-        <div className="flex items-center gap-3">
+        {/* Right: P&L Display + Actions */}
+        <div className="flex items-center gap-2 md:gap-3 shrink-0">
+          {/* P&L Column */}
           <Tooltip>
             <TooltipTrigger asChild>
-              <div className="text-right cursor-help">
-                {/* Current USD value prominently */}
-                <div className="font-bold text-sm tabular-nums text-foreground">
-                  ${currentUsdValue >= 1000 ? currentUsdValue.toFixed(0) : currentUsdValue >= 1 ? currentUsdValue.toFixed(2) : currentUsdValue.toFixed(4)}
-                </div>
-                {/* Simple P&L percentage */}
-                <p className={cn(
-                  "text-xs tabular-nums font-medium transition-all duration-300",
+              <div className="text-right cursor-help min-w-[80px] md:min-w-[100px]">
+                {/* P&L Percentage - Main */}
+                <div className={cn(
+                  "flex items-center justify-end gap-1 font-bold text-sm md:text-base tabular-nums",
                   isPositive ? 'text-success' : 'text-destructive'
                 )}>
+                  {isPositive ? (
+                    <ArrowUpRight className="w-4 h-4" />
+                  ) : (
+                    <ArrowDownRight className="w-4 h-4" />
+                  )}
                   {isPositive ? '+' : ''}{pnlPercent.toFixed(2)}%
+                </div>
+                {/* P&L Value - Secondary */}
+                <p className={cn(
+                  "text-[11px] md:text-xs tabular-nums font-medium",
+                  isPositive ? 'text-success/80' : 'text-destructive/80'
+                )}>
+                  {formatPnLValue(pnlValueUsd)}
                 </p>
               </div>
             </TooltipTrigger>
-            <TooltipContent side="left" className="bg-popover border-border text-xs">
-              <div className="space-y-1">
-                <p className="tabular-nums">Tokens: {formatTokenAmount(actualTokenAmount)} {displaySymbol}</p>
-                <p className="tabular-nums">Entry: {formatPrice(position.entry_price)}</p>
-                <p className="tabular-nums">Current: {formatPrice(position.current_price)}</p>
-                <p className="tabular-nums">Value: ${currentUsdValue.toFixed(2)}</p>
+            <TooltipContent side="left" className="bg-popover border-border text-xs max-w-[220px]">
+              <div className="space-y-1.5 p-1">
+                <div className="flex justify-between gap-4">
+                  <span className="text-muted-foreground">Tokens:</span>
+                  <span className="tabular-nums font-medium">{formatTokenAmount(position.amount)}</span>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <span className="text-muted-foreground">Entry Price:</span>
+                  <span className="tabular-nums">{formatPrice(entryPriceUsd)}</span>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <span className="text-muted-foreground">Current Price:</span>
+                  <span className="tabular-nums">{formatPrice(currentPriceUsd)}</span>
+                </div>
+                <div className="border-t border-border/50 my-1.5" />
+                <div className="flex justify-between gap-4">
+                  <span className="text-muted-foreground">Entry Value:</span>
+                  <span className="tabular-nums">{formatUsdCompact(entryValueUsd)}</span>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <span className="text-muted-foreground">Current Value:</span>
+                  <span className="tabular-nums font-medium">{formatUsdCompact(currentValueUsd)}</span>
+                </div>
+                <div className={cn("flex justify-between gap-4 font-medium", isPositive ? 'text-success' : 'text-destructive')}>
+                  <span>P&L:</span>
+                  <span className="tabular-nums">{formatPnLValue(pnlValueUsd)} ({isPositive ? '+' : ''}{pnlPercent.toFixed(2)}%)</span>
+                </div>
                 {position.profit_take_percent && (
-                  <p className="text-success">TP: +{position.profit_take_percent}%</p>
+                  <div className="flex justify-between gap-4 text-success/70">
+                    <span>TP Target:</span>
+                    <span>+{position.profit_take_percent}%</span>
+                  </div>
                 )}
                 {position.stop_loss_percent && (
-                  <p className="text-destructive">SL: -{position.stop_loss_percent}%</p>
+                  <div className="flex justify-between gap-4 text-destructive/70">
+                    <span>SL Target:</span>
+                    <span>-{position.stop_loss_percent}%</span>
+                  </div>
                 )}
               </div>
             </TooltipContent>
           </Tooltip>
           
+          {/* Sell Button */}
+          {onClosePosition && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleClose}
+              className="h-8 px-3 text-xs font-medium border-destructive/30 text-destructive hover:bg-destructive/10 hover:border-destructive/50 opacity-0 group-hover:opacity-100 transition-opacity"
+            >
+              Sell
+            </Button>
+          )}
+          
+          {/* More Actions */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button 
@@ -177,8 +261,21 @@ const PositionRow = memo(({
                   onClick={handleClose}
                   className="cursor-pointer"
                 >
+                  <DollarSign className="w-3.5 h-3.5 mr-2" />
                   Sell & Close
                 </DropdownMenuItem>
+              )}
+              {onMoveToWaiting && (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem 
+                    onClick={handleMoveToWaiting}
+                    className="text-warning focus:text-warning cursor-pointer"
+                  >
+                    <Clock className="w-3.5 h-3.5 mr-2" />
+                    Move to Waiting List
+                  </DropdownMenuItem>
+                </>
               )}
               {onForceClose && (
                 <>
@@ -213,38 +310,46 @@ const PositionRow = memo(({
         </div>
       </div>
       
-      {/* Progress Bar */}
-      <div className="mt-2.5 flex items-center gap-3 text-xs">
-        <span className="text-muted-foreground tabular-nums min-w-[85px]">
-          Entry: {formatPrice(position.entry_price)}
-        </span>
-        <div className="flex-1 h-2 bg-secondary rounded-full overflow-hidden">
+      {/* Price Progress Bar */}
+      <div className="mt-3.5 flex items-center gap-3 text-[11px] md:text-xs">
+        <div className="flex flex-col items-start min-w-[75px] md:min-w-[90px]">
+          <span className="text-muted-foreground/70 text-[9px] uppercase tracking-wide">Entry</span>
+          <span className="text-muted-foreground tabular-nums font-medium">
+            {formatPrice(entryPriceUsd)}
+          </span>
+        </div>
+        <div className="flex-1 h-2.5 bg-secondary rounded-full overflow-hidden relative">
           <div 
             className={cn(
               "h-full rounded-full transition-all duration-500 ease-out",
-              isPositive ? 'bg-success' : 'bg-destructive'
+              isPositive ? 'bg-gradient-to-r from-success/60 to-success' : 'bg-gradient-to-r from-destructive to-destructive/60'
             )}
             style={{ width: `${progressWidth}%` }}
           />
         </div>
-        <span className={cn(
-          "tabular-nums min-w-[85px] text-right font-medium transition-all duration-300",
-          isPositive ? 'text-success' : 'text-destructive'
-        )}>
-          Now: {formatPrice(position.current_price)}
-        </span>
+        <div className="flex flex-col items-end min-w-[75px] md:min-w-[90px]">
+          <span className="text-muted-foreground/70 text-[9px] uppercase tracking-wide">Current</span>
+          <span className={cn(
+            "tabular-nums font-medium",
+            isPositive ? 'text-success' : 'text-destructive'
+          )}>
+            {formatPrice(currentPriceUsd)}
+          </span>
+        </div>
       </div>
     </div>
   );
 }, (prevProps, nextProps) => {
+  // STABLE COMPARISON: Only re-render when source-of-truth values change
   return (
     prevProps.position.id === nextProps.position.id &&
+    prevProps.position.amount === nextProps.position.amount &&
     prevProps.position.current_price === nextProps.position.current_price &&
-    prevProps.position.current_value === nextProps.position.current_value &&
-    prevProps.position.profit_loss_percent === nextProps.position.profit_loss_percent &&
-    prevProps.position.profit_loss_value === nextProps.position.profit_loss_value &&
+    prevProps.position.entry_price === nextProps.position.entry_price &&
+    prevProps.position.entry_price_usd === nextProps.position.entry_price_usd &&
     prevProps.position.token_name === nextProps.position.token_name &&
     prevProps.position.token_symbol === nextProps.position.token_symbol &&
+    prevProps.position.created_at === nextProps.position.created_at &&
     prevProps.colorIndex === nextProps.colorIndex
   );
 });
@@ -278,6 +383,7 @@ export default function ActivePositionsPanel({
   loading = false,
   onClosePosition,
   onForceClose,
+  onMoveToWaiting,
   onRefresh,
 }: ActivePositionsPanelProps) {
   const [isExpanded, setIsExpanded] = useState(true);
@@ -291,11 +397,13 @@ export default function ActivePositionsPanel({
   
   const remainingCount = positions.length - 5;
 
-  // Total P&L in actual USD (amount × current_price - amount × entry_price)
+  // Total P&L in actual USD (amount × current_price - amount × entry_price_usd)
+  // CRITICAL: Always use entry_price_usd for consistent USD calculations
   const totalPnL = useMemo(() => 
     positions.reduce((sum, p) => {
+      const entryPriceUsd = p.entry_price_usd ?? p.entry_price;
       const currentVal = p.amount * p.current_price;
-      const entryVal = p.amount * p.entry_price;
+      const entryVal = p.amount * entryPriceUsd;
       return sum + (currentVal - entryVal);
     }, 0),
     [positions]
@@ -329,19 +437,19 @@ export default function ActivePositionsPanel({
 
   return (
     <Card className="bg-card/80 backdrop-blur-sm border-border/50">
-      <CardHeader className="pb-2 px-4 pt-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center border border-primary/20">
-              <TrendingUp className="w-5 h-5 text-primary" />
+      <CardHeader className="pb-2 px-3 md:px-4 pt-3 md:pt-4">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 md:gap-3 min-w-0 flex-1">
+            <div className="w-8 h-8 md:w-10 md:h-10 rounded-lg md:rounded-xl bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center border border-primary/20 shrink-0">
+              <TrendingUp className="w-4 h-4 md:w-5 md:h-5 text-primary" />
             </div>
-            <div>
-              <CardTitle className="text-base font-semibold">Active Positions</CardTitle>
-              <p className="text-xs text-muted-foreground tabular-nums">
+            <div className="min-w-0">
+              <CardTitle className="text-sm md:text-base font-semibold truncate">Active Positions</CardTitle>
+              <p className="text-[10px] md:text-xs text-muted-foreground tabular-nums">
                 {positions.length} open trades
                 {positions.length > 0 && (
                   <span className={cn(
-                    "ml-2 font-medium",
+                    "ml-1.5 md:ml-2 font-medium",
                     totalPnL >= 0 ? 'text-success' : 'text-destructive'
                   )}>
                     ({formatTotalPnL(totalPnL)})
@@ -350,7 +458,7 @@ export default function ActivePositionsPanel({
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-0.5 md:gap-1 shrink-0">
             {onRefresh && (
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -399,6 +507,7 @@ export default function ActivePositionsPanel({
                   colorIndex={index}
                   onClosePosition={onClosePosition}
                   onForceClose={onForceClose}
+                  onMoveToWaiting={onMoveToWaiting}
                 />
               ))}
               

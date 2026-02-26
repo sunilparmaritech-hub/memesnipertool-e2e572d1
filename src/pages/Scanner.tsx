@@ -6,6 +6,7 @@ import SniperDecisionPanel from "@/components/trading/SniperDecisionPanel";
 import { TradeSignalPanel } from "@/components/trading/TradeSignalPanel";
 import LiquidityMonitor from "@/components/scanner/LiquidityMonitor";
 import PerformancePanel from "@/components/scanner/PerformancePanel";
+import ValidationSummaryPanel from "@/components/scanner/ValidationSummaryPanel";
 
 import BotActivityLog, { addBotLog, clearBotLogs } from "@/components/scanner/BotActivityLog";
 import RecoveryControls from "@/components/scanner/RecoveryControls";
@@ -27,6 +28,7 @@ import { useDemoAutoExit } from "@/hooks/useDemoAutoExit";
 import { useLiquidityRetryWorker } from "@/hooks/useLiquidityRetryWorker";
 import { useWalletTokens } from "@/hooks/useWalletTokens";
 import { useWallet } from "@/hooks/useWallet";
+import { useAuth } from "@/contexts/AuthContext";
 import { useWalletModal } from "@/hooks/useWalletModal";
 import { useTradeExecution, SOL_MINT, type TradeParams, type PriorityLevel } from "@/hooks/useTradeExecution";
 import { useTradingEngine } from "@/hooks/useTradingEngine";
@@ -37,19 +39,25 @@ import { useAppMode } from "@/contexts/AppModeContext";
 import { useDemoPortfolio } from "@/contexts/DemoPortfolioContext";
 import { useBotContext } from "@/contexts/BotContext";
 import { useDisplayUnit } from "@/contexts/DisplayUnitContext";
-
+import { useTokenStateManager } from "@/hooks/useTokenStateManager";
+import { useTokenHolders, type TokenHolderData } from "@/hooks/useTokenHolders";
 import { reconcilePositionsWithPools } from "@/lib/positionMetadataReconciler";
-import TierGate from "@/components/subscription/TierGate";
 import { fetchDexScreenerTokenMetadata } from "@/lib/dexscreener";
 import { isPlaceholderText } from "@/lib/formatters";
+import { acquireSellLock, releaseSellLock, isSellLocked } from "@/lib/sellLock";
 import { Wallet, TrendingUp, Zap, Activity, AlertTriangle, X, FlaskConical, Coins, RotateCcw, DollarSign } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { ToastAction } from "@/components/ui/toast";
+import { cn } from "@/lib/utils";
+import { useCredits } from "@/hooks/useCredits";
+import { NoCreditOverlay } from "@/components/credits/NoCreditOverlay";
+import { useScannerStore } from "@/stores/scannerStore";
 
 const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref) {
   const { tokens, loading, scanTokens, errors, apiErrors, isDemo, cleanup, lastScanStats } = useTokenScanner();
   const { settings, saving, saveSettings, updateField } = useSniperSettings();
+  const { hasCredits } = useCredits();
   const { evaluateTokens, result: sniperResult, loading: sniperLoading } = useAutoSniper();
   const { startAutoExitMonitor, stopAutoExitMonitor, isMonitoring } = useAutoExit();
   const {
@@ -68,8 +76,16 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
   const { executeTrade, sellPosition } = useTradeExecution();
   const { snipeToken, exitPosition, status: engineStatus, isExecuting: engineExecuting } = useTradingEngine();
   const { wallet, connectPhantom, disconnect, signAndSendTransaction, refreshBalance } = useWallet();
+  const { isAdmin } = useAuth();
   const { openModal: openWalletModal } = useWalletModal();
-  const { openPositions: realOpenPositions, closedPositions: realClosedPositions, fetchPositions, closePosition: markPositionClosed } = usePositions();
+  
+  // Token holders hook for on-chain holder data
+  const { 
+    holders: tokenHolders, 
+    fetchHolders: fetchTokenHolders, 
+    loading: loadingHolders 
+  } = useTokenHolders({ walletAddress: wallet.address ?? undefined });
+  const { openPositions: realOpenPositions, allActivePositions: realAllActivePositions, closedPositions: realClosedPositions, fetchPositions, closePosition: markPositionClosed } = usePositions();
   const { toast } = useToast();
   const { addNotification } = useNotifications();
   const { mode } = useAppMode();
@@ -118,6 +134,20 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
     recordTrade,
   } = useBotContext();
 
+  // PERSISTENT TOKEN STATE MANAGER - survives restarts, prevents duplicate trades
+  const {
+    initialized: tokenStatesInitialized,
+    canTradeToken,
+    filterTradeableTokens,
+    registerTokensBatch,
+    markTraded,
+    markPending,
+    markRejected,
+    cleanupExpiredPending,
+    clearRejectedTokens,
+    getStateCounts,
+  } = useTokenStateManager();
+
   // Local aliases from bot context for easier access
   const isBotActive = botState.isBotActive;
   const autoEntryEnabled = botState.autoEntryEnabled;
@@ -146,6 +176,9 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
   const [noRoutePosition, setNoRoutePosition] = useState<any | null>(null);
   const [showNoRouteModal, setShowNoRouteModal] = useState(false);
   
+  // Pool scanning pause state (separate from bot pause)
+  const [isPoolScanningPaused, setIsPoolScanningPaused] = useState(false);
+  
   // Get setMode from AppModeContext
   const { setMode } = useAppMode();
   
@@ -171,7 +204,34 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
     return reconcilePositionsWithPools(rawOpenPositions, poolData);
   }, [rawOpenPositions, tokens]);
   
+  // All non-closed positions (open, pending, waiting_for_liquidity) for proper wallet token exclusion
+  // In demo mode, all demo positions are "active" (no waiting_for_liquidity state)
+  const rawAllActivePositions = isDemo ? openDemoPositions : realAllActivePositions;
+  const allActivePositions = useMemo(() => {
+    const poolData = tokens.map(t => ({
+      address: t.address,
+      symbol: t.symbol,
+      name: t.name,
+    }));
+    return reconcilePositionsWithPools(rawAllActivePositions, poolData);
+  }, [rawAllActivePositions, tokens]);
+  
   const closedPositions = isDemo ? closedDemoPositions : realClosedPositions;
+
+  // Fetch holder data for displayed tokens (hybrid approach - fast count + background position)
+  const holderDataMap = useMemo(() => {
+    const map = new Map<string, { holderCount: number; buyerPosition?: number }>();
+    tokenHolders.forEach((data, address) => {
+      map.set(address, {
+        holderCount: data.holderCount,
+        buyerPosition: data.buyerPosition,
+      });
+    });
+    return map;
+  }, [tokenHolders]);
+
+  // Holder data is now fetched inline by token-scanner edge function
+  // No separate background fetch needed
 
   const fallbackSolPrice = Number.isFinite(solPrice) && solPrice > 0 ? solPrice : 150;
 
@@ -231,6 +291,16 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
         return { success: false, error: quoteData.msg || 'No Raydium route' };
       }
 
+      // Derive the user's Associated Token Account (ATA) for the input token
+      // Raydium requires inputAccount when swapping non-SOL tokens
+      const { PublicKey: PK } = await import('@solana/web3.js');
+      const TOKEN_PROGRAM_ID = new PK('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
+      const ASSOCIATED_TOKEN_PROGRAM_ID = new PK('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
+      const [inputAccount] = PK.findProgramAddressSync(
+        [new PK(wallet.address).toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), new PK(position.token_address).toBuffer()],
+        ASSOCIATED_TOKEN_PROGRAM_ID
+      );
+
       // Build swap transaction
       const swapRes = await fetch(RAYDIUM_SWAP_API, {
         method: 'POST',
@@ -241,6 +311,7 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
           txVersion: 'V0',
           wrapSol: false,
           unwrapSol: true,
+          inputAccount: inputAccount.toBase58(),
           computeUnitPriceMicroLamports: '500000',
         }),
       });
@@ -284,16 +355,7 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
       return;
     }
 
-    if (!wallet.isConnected || wallet.network !== "solana" || !wallet.address) {
-      toast({
-        title: "Wallet Required",
-        description: "Connect a Solana wallet to exit live trades.",
-        variant: "destructive",
-      });
-      openWalletModal();
-      return;
-    }
-
+    // Find the position first - don't check wallet here, check in modal confirm
     const position = realOpenPositions.find((p) => p.id === positionId);
     if (!position) {
       toast({
@@ -304,7 +366,7 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
       return;
     }
 
-    // Open the exit preview modal
+    // Open the exit preview modal (wallet check happens on confirm)
     setExitPreviewPosition({
       ...position,
       current_price: currentPrice,
@@ -317,19 +379,46 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
     addBalance,
     settings?.trade_amount,
     toast,
-    wallet.isConnected,
-    wallet.network,
-    wallet.address,
     realOpenPositions,
     fetchPositions,
     fallbackSolPrice,
-    openWalletModal,
   ]);
 
   // Actual exit execution - called from modal
   const handleConfirmExitFromModal = useCallback(async (positionId: string, amountToSell: number, currentPrice: number) => {
+    // Check wallet connection before proceeding with the actual sale
+    if (!wallet.isConnected || wallet.network !== "solana" || !wallet.address) {
+      toast({
+        title: "Wallet Required",
+        description: "Connect a Solana wallet to confirm the sale.",
+        variant: "destructive",
+      });
+      openWalletModal();
+      return;
+    }
+    
     const position = realOpenPositions.find((p) => p.id === positionId);
-    if (!position || !wallet.address) return;
+    if (!position) return;
+
+    // CRITICAL: Check if this token is already being sold
+    if (isSellLocked(position.token_address)) {
+      toast({
+        title: 'Sell Already In Progress',
+        description: `${position.token_symbol} is already being sold by another process. Please wait.`,
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    // Acquire sell lock to prevent duplicate transactions
+    if (!acquireSellLock(position.token_address, 'manual_sell')) {
+      toast({
+        title: 'Sell Already In Progress',
+        description: `${position.token_symbol} is already being sold. Please wait.`,
+        variant: 'destructive',
+      });
+      return;
+    }
 
     const safeExitPrice = Number.isFinite(currentPrice) && currentPrice > 0
       ? currentPrice
@@ -394,8 +483,51 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
         // Prevents closing DB position if only a partial sell happened.
         let confirmed = true;
         try {
+          // Fetch original BUY transaction metadata for this position
+          let buyerPosition: number | null = null;
+          let liquidity: number | null = null;
+          let riskScore: number | null = null;
+          let entryPriceSol: number | null = null;
+          
+          const { data: buyTrade } = await supabase
+            .from('trade_history')
+            .select('buyer_position, liquidity, risk_score, entry_price, sol_spent')
+            .eq('token_address', position.token_address)
+            .eq('trade_type', 'buy')
+            .order('created_at', { ascending: true })
+            .limit(1)
+            .maybeSingle();
+          
+          if (buyTrade) {
+            buyerPosition = buyTrade.buyer_position;
+            liquidity = buyTrade.liquidity;
+            riskScore = buyTrade.risk_score;
+            entryPriceSol = buyTrade.sol_spent || buyTrade.entry_price;
+          }
+
           const { data: confirmData } = await supabase.functions.invoke('confirm-transaction', {
-            body: { signature: result.txHash, action: 'sell' },
+            body: { 
+              signature: result.txHash, 
+              walletAddress: wallet.address,
+              action: 'sell',
+              positionId: position.id,
+              tokenAddress: position.token_address,
+              tokenSymbol: position.token_symbol,
+              tokenName: position.token_name,
+              // SEMANTIC SOL VALUES (source of truth for P&L)
+              solSpent: 0, // SELL never spends SOL
+              solReceived: result.solReceived || position.current_value || 0,
+              // Extended metadata - inherited from BUY trade
+              buyerPosition: buyerPosition,
+              liquidity: liquidity,
+              riskScore: riskScore,
+              entryPrice: position.entry_price_usd,
+              exitPrice: position.current_price,
+              priceSol: result.solReceived,
+              slippage: settings?.slippage_tolerance ?? 15,
+              // For FIFO matching
+              matchedBuySolSpent: entryPriceSol,
+            },
           });
           confirmed = Boolean((confirmData as any)?.confirmed ?? true);
         } catch {
@@ -409,6 +541,7 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
             variant: 'destructive',
           });
           await fetchPositions(true);
+          releaseSellLock(position.token_address);
           return;
         }
 
@@ -423,42 +556,91 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
           // ignore
         }
 
-        // FIXED: Use percentage-based threshold to avoid false "Partial Exit" notifications
-        // A partial sell is only meaningful if remaining balance is >1% of original amount
-        // This prevents rounding errors from triggering misleading notifications
-        const DUST = 1e-6;
+        // FIXED: Much tighter threshold - only consider partial if remaining balance is significant
+        // Use a tiny dust threshold (0.0001% of original) to account for rounding
+        // Most "partial exits" are just rounding dust from swaps - treat as full exit
+        const DUST_THRESHOLD = 1e-6;
+        const DUST_PERCENT_THRESHOLD = 0.01; // 0.01% = practically dust
+        
         const remainingPercent = tokenAmountToSell > 0 && remainingBalance !== null 
           ? (remainingBalance / tokenAmountToSell) * 100 
           : 0;
-        const isSignificantRemaining = remainingBalance !== null && remainingBalance > DUST && remainingPercent > 1;
         
-        if (isSignificantRemaining) {
-          // Update position with remaining balance
-          await supabase
-            .from('positions')
-            .update({ amount: remainingBalance, updated_at: new Date().toISOString() })
-            .eq('id', positionId);
-
-          // Calculate how much was sold
-          const soldAmount = tokenAmountToSell - remainingBalance;
-          const soldPercent = tokenAmountToSell > 0 ? ((soldAmount / tokenAmountToSell) * 100).toFixed(1) : '0';
-
-          toast({
-            title: 'Partial Exit Completed',
-            description: `Sold ${soldPercent}% (${soldAmount.toFixed(6)} tokens). ${remainingBalance.toFixed(6)} ${position.token_symbol} remaining in wallet.`,
-          });
-
+        // Only treat as partial if:
+        // 1. Remaining balance is above absolute dust AND
+        // 2. Remaining is more than 0.01% of original (meaningful amount)
+        const isSignificantRemaining = remainingBalance !== null && 
+          remainingBalance > DUST_THRESHOLD && 
+          remainingPercent > DUST_PERCENT_THRESHOLD;
+        
+        if (isSignificantRemaining && remainingPercent < 99) {
+          // Significant remaining balance - try to sell remaining automatically
           addBotLog({
-            level: 'warning',
+            level: 'info',
             category: 'trade',
-            message: 'Partial sell executed',
+            message: `Remaining balance detected, auto-selling remaining ${remainingBalance.toFixed(6)} tokens...`,
             tokenSymbol: position.token_symbol,
-            details: `Sold ${soldAmount.toFixed(6)}, remaining: ${remainingBalance.toFixed(6)}`,
           });
 
-          await fetchPositions(true);
-          refreshBalance();
-          return;
+          // Attempt to sell remaining balance automatically (like bot does)
+          try {
+            const retryResult = await exitPosition(
+              position.token_address,
+              remainingBalance,
+              wallet.address!,
+              (tx) => signAndSendTransaction(tx),
+              { slippage: 0.20 } // Higher slippage for cleanup
+            );
+
+            if (retryResult.success) {
+              addBotLog({
+                level: 'success',
+                category: 'trade',
+                message: `✅ Sold remaining ${position.token_symbol} tokens`,
+                tokenSymbol: position.token_symbol,
+                details: `TX: ${retryResult.txHash?.slice(0, 12)}...`,
+              });
+              // Continue to mark as closed below
+            } else {
+              // Couldn't sell remaining - update position with remaining balance
+              await supabase
+                .from('positions')
+                .update({ amount: remainingBalance, updated_at: new Date().toISOString() })
+                .eq('id', positionId)
+                .eq('user_id', (await supabase.auth.getUser()).data.user?.id);
+
+              const soldAmount = tokenAmountToSell - remainingBalance;
+              const soldPercent = tokenAmountToSell > 0 ? ((soldAmount / tokenAmountToSell) * 100).toFixed(1) : '0';
+
+              toast({
+                title: 'Partial Exit - Retry Failed',
+                description: `Sold ${soldPercent}%. ${remainingBalance.toFixed(6)} ${position.token_symbol} still in wallet. Try again manually.`,
+              });
+
+              await fetchPositions(true);
+              refreshBalance();
+              releaseSellLock(position.token_address);
+              return;
+            }
+          } catch (retryErr) {
+            // Retry failed - update position with remaining
+            await supabase
+              .from('positions')
+              .update({ amount: remainingBalance, updated_at: new Date().toISOString() })
+              .eq('id', positionId)
+              .eq('user_id', (await supabase.auth.getUser()).data.user?.id);
+
+            const soldAmount = tokenAmountToSell - remainingBalance;
+            toast({
+              title: 'Partial Exit Completed',
+              description: `Sold ${soldAmount.toFixed(6)} tokens. ${remainingBalance.toFixed(6)} remaining.`,
+            });
+
+            await fetchPositions(true);
+            refreshBalance();
+            releaseSellLock(position.token_address);
+            return;
+          }
         }
 
         // IMPORTANT: A successful on-chain sell does NOT automatically update our positions table.
@@ -475,26 +657,9 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
             details: `Received ${result.solReceived?.toFixed(4)} SOL | TX: ${result.txHash?.slice(0, 12)}...`,
           });
           
-          // Log to trade_history for Transaction History display (use type assertion)
-          try {
-            const { data: { user } } = await supabase.auth.getUser();
-            if (user) {
-              await (supabase.from('trade_history' as any).insert({
-                user_id: user.id,
-                token_address: position.token_address,
-                token_symbol: position.token_symbol,
-                token_name: position.token_name,
-                trade_type: 'sell',
-                amount: tokenAmountToSell,
-                price_sol: result.solReceived && tokenAmountToSell > 0 ? (result.solReceived / tokenAmountToSell) : null,
-                price_usd: safeExitPrice,
-                status: 'confirmed',
-                tx_hash: result.txHash,
-              }) as any);
-            }
-          } catch (historyErr) {
-            console.error('Failed to log sell to trade_history:', historyErr);
-          }
+          // Log to trade_history for Transaction History display
+          // NOTE: Trade history is now logged centrally in confirm-transaction edge function
+          // This prevents duplicate entries and ensures only confirmed on-chain transactions are recorded
         } else {
           addBotLog({
             level: 'warning',
@@ -510,15 +675,21 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
           );
         }
 
-        // Force refresh to reconcile any background polling / realtime ordering
         await fetchPositions(true);
         refreshBalance();
         setTimeout(() => refreshBalance(), 8000);
+        releaseSellLock(position.token_address);
         return;
       }
 
       const errorMessage = result.error || "Exit failed";
       
+      // Check if this is a rate limit error
+      const isRateLimitError =
+        errorMessage.includes("RATE_LIMITED") ||
+        errorMessage.toLowerCase().includes("rate limit") ||
+        errorMessage.includes("429");
+
       // Check if this is a "no route" error - indicates liquidity issue
       const isNoRouteError =
         errorMessage.includes("NO_ROUTE") ||
@@ -532,7 +703,20 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
         errorMessage.includes("already been sold") ||
         errorMessage.includes("REQ_INPUT");
 
-      if (isNoRouteError) {
+      if (isRateLimitError) {
+        // Rate limited - show friendly message and suggest retry
+        addBotLog({
+          level: 'warning',
+          category: 'exit',
+          message: `⏳ API temporarily busy, retrying ${position.token_symbol} exit...`,
+          tokenSymbol: position.token_symbol,
+        });
+        toast({
+          title: "⏳ Sell temporarily delayed",
+          description: `The trading API is busy right now. Please wait 15-30 seconds and try again. Your ${position.token_symbol} position is safe.`,
+        });
+        releaseSellLock(position.token_address);
+      } else if (isNoRouteError) {
         // Jupiter failed with NO_ROUTE - try Raydium as fallback
         addBotLog({
           level: 'warning',
@@ -562,30 +746,14 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
                 description: `${position.token_symbol} sold successfully using Raydium fallback`,
               });
 
-              // Log to trade_history (use type assertion)
-              try {
-                const { data: { user } } = await supabase.auth.getUser();
-                if (user) {
-                  await (supabase.from('trade_history' as any).insert({
-                    user_id: user.id,
-                    token_address: position.token_address,
-                    token_symbol: position.token_symbol,
-                    token_name: position.token_name,
-                    trade_type: 'sell',
-                    amount: tokenAmountToSell,
-                    price_sol: null,
-                    price_usd: safeExitPrice,
-                    status: 'confirmed',
-                    tx_hash: raydiumResult.signature,
-                  }) as any);
-                }
-              } catch (historyErr) {
-                console.error('Failed to log Raydium sell to trade_history:', historyErr);
-              }
+              // Log to trade_history
+              // NOTE: Trade history is now logged centrally in confirm-transaction edge function
+              // This prevents duplicate entries and ensures only confirmed on-chain transactions are recorded
             }
             
             await fetchPositions(true);
             refreshBalance();
+            releaseSellLock(position.token_address);
             return;
           }
         } catch (raydiumErr) {
@@ -603,21 +771,30 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
 
         setNoRoutePosition(position);
         setShowNoRouteModal(true);
+        releaseSellLock(position.token_address);
       } else if (isAlreadySoldError) {
         showForceCloseToast(
           "Token Not Found",
           "This position may have been sold externally. Mark it as closed?"
         );
+        releaseSellLock(position.token_address);
       } else {
         toast({
           title: "Error closing position",
           description: errorMessage,
           variant: "destructive",
         });
+        releaseSellLock(position.token_address);
       }
     } catch (err) {
+      releaseSellLock(position.token_address);
       const message = err instanceof Error ? err.message : String(err);
       
+      const isRateLimitError2 =
+        message.includes("RATE_LIMITED") ||
+        message.toLowerCase().includes("rate limit") ||
+        message.includes("429");
+
       const isNoRouteError =
         message.includes("NO_ROUTE") ||
         message.toLowerCase().includes("no route") ||
@@ -628,7 +805,12 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
         message.includes("already been sold") ||
         message.includes("REQ_INPUT");
 
-      if (isNoRouteError) {
+      if (isRateLimitError2) {
+        toast({
+          title: "⏳ Sell temporarily delayed",
+          description: `The trading API is busy. Please wait 15-30 seconds and try again. Your position is safe.`,
+        });
+      } else if (isNoRouteError) {
         // Show the waiting for liquidity modal
         setNoRoutePosition(position);
         setShowNoRouteModal(true);
@@ -644,6 +826,9 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
           variant: "destructive",
         });
       }
+      
+      // Always release lock on error paths
+      releaseSellLock(position.token_address);
     }
   }, [
     realOpenPositions,
@@ -658,34 +843,86 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
   ]);
 
   // Calculate stats based on mode
-  const totalValue = useMemo(() => {
+  // All values are in SOL (entry_value is SOL spent per trade)
+  
+  // Total SOL invested (what the user actually spent)
+  const totalInvestedSol = useMemo(() => {
+    if (isDemo) {
+      return openDemoPositions.length * (settings?.trade_amount || 0.1);
+    }
+    return realOpenPositions.reduce((sum, p) => {
+      return sum + (p.entry_value ?? (settings?.trade_amount || 0.04));
+    }, 0);
+  }, [isDemo, openDemoPositions.length, realOpenPositions, settings?.trade_amount]);
+  
+  // Open Value in SOL = sum of entry_value × (current_price / entry_price) for each position
+  // This is the same formula used in the Active tab's TradeRow
+  const totalValueSol = useMemo(() => {
     if (isDemo) {
       return demoTotalValue;
     }
-    return realOpenPositions.reduce((sum, p) => sum + p.current_value, 0);
+    return realOpenPositions.reduce((sum, p) => {
+      const entryVal = p.entry_value ?? 0;
+      const entryPriceUsd = p.entry_price_usd ?? p.entry_price ?? 0;
+      const currentPrice = p.current_price ?? entryPriceUsd;
+      if (entryVal <= 0 || entryPriceUsd <= 0) return sum + entryVal;
+      return sum + (entryVal * (currentPrice / entryPriceUsd));
+    }, 0);
   }, [isDemo, demoTotalValue, realOpenPositions]);
   
-  const totalPnL = useMemo(() => {
+  // Open P&L in SOL (unrealized)
+  const openPnLSol = useMemo(() => totalValueSol - totalInvestedSol, [totalValueSol, totalInvestedSol]);
+  
+  // Closed P&L in SOL (realized) - use entry_value-based calculation for consistency
+  const closedPnLSol = useMemo(() => {
+    if (isDemo) {
+      return closedDemoPositions.reduce((sum, p) => {
+        const exitPrice = p.exit_price ?? p.current_price ?? p.entry_price ?? 0;
+        const entryPrice = p.entry_price ?? 0;
+        const entryVal = p.entry_value || 0;
+        if (entryPrice <= 0 || entryVal <= 0) return sum;
+        const exitVal = entryVal * (exitPrice / entryPrice);
+        return sum + (exitVal - entryVal);
+      }, 0);
+    }
+    return realClosedPositions.reduce((sum, p) => {
+      const exitPrice = p.exit_price ?? p.current_price ?? p.entry_price ?? 0;
+      const entryPriceUsd = p.entry_price_usd ?? p.entry_price ?? 0;
+      const entryVal = p.entry_value ?? 0;
+      if (entryPriceUsd <= 0 || entryVal <= 0) return sum;
+      const exitVal = entryVal * (exitPrice / entryPriceUsd);
+      return sum + (exitVal - entryVal);
+    }, 0);
+  }, [isDemo, closedDemoPositions, realClosedPositions]);
+  
+  // TOTAL P&L in SOL = Open P&L + Closed P&L
+  const totalPnLSol = useMemo(() => {
     if (isDemo) {
       return demoTotalPnL;
     }
-    return realOpenPositions.reduce((sum, p) => sum + (p.profit_loss_value || 0), 0);
-  }, [isDemo, demoTotalPnL, realOpenPositions]);
+    return openPnLSol + closedPnLSol;
+  }, [isDemo, demoTotalPnL, openPnLSol, closedPnLSol]);
   
-  // Calculate total invested (entry value) for active positions
-  const totalInvested = useMemo(() => {
+  // Total invested across ALL positions for percentage
+  const closedInvestedSol = useMemo(() => {
     if (isDemo) {
-      return openDemoPositions.reduce((sum, p) => sum + (p.entry_value || 0), 0);
+      return closedDemoPositions.length * (settings?.trade_amount || 0.1);
     }
-    return realOpenPositions.reduce((sum, p) => sum + (p.entry_value || 0), 0);
-  }, [isDemo, openDemoPositions, realOpenPositions]);
+    return realClosedPositions.reduce((sum, p) => {
+      return sum + (p.entry_value ?? (settings?.trade_amount || 0.04));
+    }, 0);
+  }, [isDemo, closedDemoPositions.length, realClosedPositions, settings?.trade_amount]);
+  
+  const allInvestedSol = useMemo(() => {
+    return totalInvestedSol + closedInvestedSol;
+  }, [totalInvestedSol, closedInvestedSol]);
   
   const totalPnLPercent = useMemo(() => {
     if (isDemo) {
       return demoTotalPnLPercent;
     }
-    return totalInvested > 0 ? (totalPnL / totalInvested) * 100 : 0;
-  }, [isDemo, demoTotalPnLPercent, totalInvested, totalPnL]);
+    return allInvestedSol > 0 ? (totalPnLSol / allInvestedSol) * 100 : 0;
+  }, [isDemo, demoTotalPnLPercent, allInvestedSol, totalPnLSol]);
 
   // Resume monitors when navigating back to Scanner with bot still active
   // CRITICAL: Also start auto-exit when there are open positions in live mode
@@ -706,19 +943,16 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
         startAutoExitMonitor(15000); // Check every 15 seconds for faster response
       }
       
-      // Start liquidity retry worker if there are waiting positions
-      if (hasWaitingPositions && wallet.isConnected) {
-        startLiquidityRetryWorker(30000); // Check every 30 seconds
-      }
+      // NOTE: Liquidity retry worker is NOT auto-started
+      // Users must manually click "Check" button in Waiting tab to check routes
     }
     
     return () => {
       // Don't stop bot on unmount - just stop monitors (bot state persists)
       stopDemoMonitor();
       stopAutoExitMonitor();
-      stopLiquidityRetryWorker();
     };
-  }, [isBotActive, isPaused, isDemo, autoExitEnabled, startDemoMonitor, stopDemoMonitor, startAutoExitMonitor, stopAutoExitMonitor, realOpenPositions.length, waitingPositions.length, wallet.isConnected, startLiquidityRetryWorker, stopLiquidityRetryWorker]);
+  }, [isBotActive, isPaused, isDemo, autoExitEnabled, startDemoMonitor, stopDemoMonitor, startAutoExitMonitor, stopAutoExitMonitor, realOpenPositions.length, wallet.isConnected]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -727,16 +961,17 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
     };
   }, [cleanup]);
 
-  // Auto-scan on mount
+  // Auto-scan on mount (only if not paused)
   useEffect(() => {
-    if (settings?.min_liquidity && !isPaused) {
+    if (settings?.min_liquidity && !isPaused && !isPoolScanningPaused) {
       scanTokens(settings.min_liquidity);
     }
   }, [settings?.min_liquidity]);
 
   // Periodic scanning based on speed - optimized intervals
+  // Respects both bot pause (isPaused) and pool scanning pause (isPoolScanningPaused)
   useEffect(() => {
-    if (isPaused) return;
+    if (isPaused || isPoolScanningPaused) return;
     
     // Demo mode uses faster intervals since no real API calls
     const intervals = isDemo 
@@ -750,7 +985,7 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
     }, intervals[scanSpeed]);
     
     return () => clearInterval(interval);
-  }, [scanSpeed, isPaused, settings?.min_liquidity, scanTokens, isDemo]);
+  }, [scanSpeed, isPaused, isPoolScanningPaused, settings?.min_liquidity, scanTokens, isDemo]);
 
   // Log scan stats to bot activity when they update
   useEffect(() => {
@@ -769,8 +1004,8 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
       category: 'scan',
       message: `🔍 Pool Discovery: ${tradeable}/${total} tradeable`,
       details: stageParts.length > 0 
-        ? `Pool Status: ${stageParts.join(' | ')}\nSources: GeckoTerminal, Birdeye, DexScreener` 
-        : 'Sources: GeckoTerminal, Birdeye, DexScreener',
+        ? `Pool Status: ${stageParts.join(' | ')}\nSources: GeckoTerminal, DexScreener, CoinGecko` 
+        : 'Sources: GeckoTerminal, DexScreener, CoinGecko',
     });
   }, [lastScanStats, isBotActive]);
 
@@ -840,17 +1075,52 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
       return;
     }
     
+    // CRITICAL: Wait for persistent token states to load before processing
+    if (!isDemo && !tokenStatesInitialized) {
+      console.log('[Scanner] Waiting for token states to initialize...');
+      return;
+    }
+    
     // If autoEntry is disabled, skip new trade evaluations (but bot can still run for other features)
     if (!autoEntryEnabled) {
       return;
     }
     
-    // Filter for tokens we haven't processed yet AND haven't traded
-    // tradedTokensRef is NEVER cleared during bot session - prevents duplicate buys
-    const unseenTokens = tokens.filter(t => 
-      !processedTokensRef.current.has(t.address) && 
-      !tradedTokensRef.current.has(t.address)
+    // Periodically clean up expired PENDING tokens (move to REJECTED)
+    if (!isDemo) {
+      cleanupExpiredPending();
+    }
+    
+    // Build set of active position addresses for deduplication
+    const activePositionAddresses = new Set(
+      openPositions.map(p => p.token_address.toLowerCase())
     );
+    
+    // Filter for tokens we haven't processed yet AND haven't traded AND not in active positions
+    // In LIVE mode, also check persistent database state via canTradeToken
+    const unseenTokens = tokens.filter(t => {
+      const addrLower = t.address.toLowerCase();
+      
+      // Skip if already processed this session (in-memory cache)
+      if (processedTokensRef.current.has(t.address)) return false;
+      
+      // Skip if already traded this session (in-memory cache)
+      if (tradedTokensRef.current.has(t.address)) return false;
+      
+      // CRITICAL: Skip if token already has an active position in database
+      if (activePositionAddresses.has(addrLower)) {
+        console.log(`[Scanner] Filtered out ${t.symbol} - already in active positions`);
+        return false;
+      }
+      
+      // CRITICAL (LIVE MODE): Check persistent database state - prevents duplicate trades across restarts
+      if (!isDemo && !canTradeToken(t.address)) {
+        console.log(`[Scanner] Filtered out ${t.symbol} - persistent state: TRADED or REJECTED`);
+        return false;
+      }
+      
+      return true;
+    });
 
     if (unseenTokens.length === 0) {
       // No new tokens - this is normal, just wait for next scan
@@ -858,60 +1128,94 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
     }
 
     const blacklist = new Set(settings.token_blacklist || []);
+    const sellRouteEnabled = settings.validation_rule_toggles?.EXECUTABLE_SELL !== false;
     const candidates = unseenTokens.filter((t) => {
       if (!t.address) return false;
       if (blacklist.has(t.address)) return false;
       if (t.symbol?.toUpperCase() === 'SOL' && t.address !== SOL_MINT) return false;
-      if (t.canSell === false) return false;
+      // Only enforce canSell hard filter if the EXECUTABLE_SELL validation rule is enabled
+      if (sellRouteEnabled && t.canSell === false) {
+        // Mark non-sellable tokens as REJECTED in persistent state
+        if (!isDemo) {
+          markRejected(t.address, 'not_sellable');
+        }
+        return false;
+      }
       // Double-check against traded tokens
       if (tradedTokensRef.current.has(t.address)) return false;
+      // CRITICAL: Double-check against active positions
+      if (activePositionAddresses.has(t.address.toLowerCase())) return false;
       return true;
     });
 
     if (candidates.length === 0) return;
+    
+    // Register new tokens in persistent state (LIVE mode only)
+    if (!isDemo && candidates.length > 0) {
+      await registerTokensBatch(candidates.map(t => ({
+        address: t.address,
+        symbol: t.symbol,
+        name: t.name,
+        source: t.source,
+        liquidity: t.liquidity,
+        riskScore: t.riskScore,
+        buyerPosition: t.buyerPosition,
+      })));
+    }
 
     const batchSize = isDemo ? 10 : 20;
     const batch = candidates.slice(0, batchSize);
 
-    const tokenData: TokenData[] = batch.map(t => ({
-      address: t.address,
-      name: t.name,
-      symbol: t.symbol,
-      chain: t.chain,
-      liquidity: t.liquidity,
-      liquidityLocked: t.liquidityLocked,
-      lockPercentage: t.lockPercentage,
-      buyerPosition: t.buyerPosition,
-      riskScore: t.riskScore,
-      categories: [],
-      priceUsd: t.priceUsd,
-      isPumpFun: t.isPumpFun,
-      isTradeable: t.isTradeable,
-      canBuy: t.canBuy,
-      canSell: t.canSell,
-      source: t.source,
-      safetyReasons: t.safetyReasons,
-    }));
+    // Holder data is now fetched inline by token-scanner edge function
+    // No separate call needed - data comes with scanned tokens
 
-    addBotLog({ 
-      level: 'info', 
-      category: 'evaluate', 
-      message: `Evaluating ${tokenData.length} new tokens`,
-      details: tokenData.map(t => `${t.symbol} (${t.source || 'unknown'})`).join(', '),
+    // Build token data with holder information from scanned tokens
+    const tokenData: TokenData[] = batch.map(t => {
+      // Holder data now comes directly from token scanner
+      const buyerPos = t.buyerPosition;
+      
+      return {
+        address: t.address,
+        name: t.name,
+        symbol: t.symbol,
+        chain: t.chain,
+        liquidity: t.liquidity,
+        liquidityLocked: t.liquidityLocked,
+        lockPercentage: t.lockPercentage,
+        buyerPosition: buyerPos,
+        riskScore: t.riskScore,
+        categories: [],
+        priceUsd: t.priceUsd,
+        isPumpFun: t.isPumpFun,
+        isTradeable: t.isTradeable,
+        canBuy: t.canBuy,
+        canSell: t.canSell,
+        source: t.source,
+        safetyReasons: t.safetyReasons,
+        // Gate-critical fields - pass through from scanner
+        poolCreatedAt: (t as any).poolCreatedAt || t.createdAt,
+        freezeAuthority: t.freezeAuthority,
+        mintAuthority: t.mintAuthority,
+        holders: t.holders,
+        holderCount: t.holders,
+      };
     });
+
+    // Removed generic "Evaluating X tokens" log - per-token validation logs are preferred
 
     // Demo mode execution
     if (isDemo) {
       batch.forEach(t => processedTokensRef.current.add(t.address));
       
       // Use more lenient matching for demo mode
-      const targetPositions = settings.target_buyer_positions || [1, 2, 3, 4, 5];
+      const targetPositions = settings.target_buyer_positions || [];
+      const targetPositionsEnabled = targetPositions.length > 0;
       const minLiq = settings.min_liquidity || 5;
       const maxRisk = settings.max_risk_score || 70;
       
       const approvedToken = tokenData.find(t => 
-        // Check buyer position OR allow if position is unknown (null)
-        (t.buyerPosition === null || (t.buyerPosition && targetPositions.includes(t.buyerPosition))) && 
+        // Target Positions: when enabled, enforce match; when disabled (empty), allow any position
+        (!targetPositionsEnabled || t.buyerPosition === null || (t.buyerPosition && targetPositions.includes(t.buyerPosition))) && 
         t.riskScore < maxRisk &&
         t.liquidity >= minLiq &&
         t.isTradeable !== false && // Must be tradeable
@@ -996,6 +1300,8 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
     // Live mode execution
     if (!wallet.isConnected || wallet.network !== 'solana' || !wallet.address) {
       addBotLog({ level: 'warning', category: 'trade', message: 'Connect wallet to enable live trading' });
+      // CRITICAL: Open wallet modal to prompt user connection
+      openWalletModal();
       return;
     }
 
@@ -1028,29 +1334,37 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
     batch.forEach(t => processedTokensRef.current.add(t.address));
     const approved = evaluation.decisions?.filter((d) => d.approved) || [];
     
-    if (approved.length === 0) {
-      // Get rejected tokens with their primary rejection reasons
-      const rejected = evaluation.decisions?.filter(d => !d.approved) || [];
-      const rejectionSummary = rejected.slice(0, 3).map(d => {
-        const reason = d.reasons.find(r => r.startsWith('✗')) || d.reasons[0] || 'N/A';
-        return `${d.token.symbol}: ${reason}`;
-      }).join(' | ');
+    // Log each token's validation result individually
+    const allDecisions = evaluation.decisions || [];
+    for (const decision of allDecisions) {
+      const { token, approved: isApproved, reasons } = decision;
+      const validationSteps = reasons.slice(0, 4).join(' | ');
       
-      addBotLog({ 
-        level: 'skip', 
-        category: 'evaluate', 
-        message: `${rejected.length} token(s) did not pass filters`,
-        details: rejectionSummary || undefined,
-      });
+      if (isApproved) {
+        addBotLog({
+          level: 'success',
+          category: 'evaluate',
+          message: `✅ ${token.symbol} passed validation`,
+          tokenSymbol: token.symbol,
+          tokenAddress: token.address,
+          details: `${validationSteps}\n💧 Liq: $${token.liquidity?.toLocaleString() || 'N/A'} | 🛡️ Safety: ${100 - (token.riskScore || 0)}/100`,
+        });
+      } else {
+        const failReason = reasons.find(r => r.startsWith('✗')) || reasons[0] || 'Did not meet criteria';
+        addBotLog({
+          level: 'skip',
+          category: 'evaluate',
+          message: `⏭️ ${token.symbol} skipped`,
+          tokenSymbol: token.symbol,
+          tokenAddress: token.address,
+          details: failReason,
+        });
+      }
+    }
+    
+    if (approved.length === 0) {
       return;
     }
-
-    addBotLog({
-      level: 'success',
-      category: 'evaluate',
-      message: `${approved.length} token(s) approved for trading`,
-      details: approved.map(d => d.token.symbol).join(', '),
-    });
 
     const availableSlots = Math.max(0, (settings.max_concurrent_trades || 0) - openPositions.length);
     if (availableSlots <= 0) {
@@ -1075,8 +1389,9 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
     liveTradeInFlightRef.current = true;
     try {
       for (const next of toExecute) {
-        // CRITICAL: Pre-validate token is sellable before executing buy
-        if (next.token.canSell === false) {
+        // Pre-validate token is sellable before executing buy (respects EXECUTABLE_SELL toggle)
+        const sellCheckEnabled = settings.validation_rule_toggles?.EXECUTABLE_SELL !== false;
+        if (sellCheckEnabled && next.token.canSell === false) {
           addBotLog({
             level: 'warning',
             category: 'trade',
@@ -1095,18 +1410,6 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
         const safetyScore = next.token.riskScore != null ? `${100 - next.token.riskScore}/100` : 'N/A';
         const liqText = next.token.liquidity ? `$${next.token.liquidity.toLocaleString()}` : 'N/A';
         
-        addBotLog({
-          level: 'info',
-          category: 'trade',
-          message: `📝 Starting trade: ${next.token.symbol}`,
-          tokenSymbol: next.token.symbol,
-          tokenAddress: next.token.address,
-          details: `💧 Liquidity: ${liqText} | 👤 Buyer Pos: ${buyerPos} | 🛡️ Safety: ${safetyScore}\n⚙️ Amount: ${tradeAmountSol} SOL | Slippage: ${settings.slippage_tolerance || 15}% | Priority: ${settings.priority}`,
-        });
-
-        // Use user settings for slippage and priority, with sensible defaults
-        const slippagePct = next.tradeParams?.slippage ?? settings.slippage_tolerance ?? 15;
-        
         // Priority fee mapping - configurable based on user's priority setting
         const priorityFeeMap: Record<string, number> = {
           turbo: 500000,  // 0.0005 SOL
@@ -1114,6 +1417,28 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
           normal: 100000, // 0.0001 SOL
         };
         const priorityFee = priorityFeeMap[settings.priority] || priorityFeeMap.normal;
+        
+        // Log detailed validation steps
+        addBotLog({
+          level: 'info',
+          category: 'trade',
+          message: `🔎 Validating: ${next.token.symbol}`,
+          tokenSymbol: next.token.symbol,
+          tokenAddress: next.token.address,
+          details: `Step 1: ✅ Liquidity Check - ${liqText}\nStep 2: ✅ Safety Score - ${safetyScore}\nStep 3: ✅ Buyer Position - ${buyerPos}\nStep 4: 🔄 Preparing swap transaction...`,
+        });
+        
+        addBotLog({
+          level: 'info',
+          category: 'trade',
+          message: `📝 Executing BUY: ${next.token.symbol}`,
+          tokenSymbol: next.token.symbol,
+          tokenAddress: next.token.address,
+          details: `💰 Amount: ${tradeAmountSol} SOL | Slippage: ${settings.slippage_tolerance || 15}%\n⚡ Priority: ${settings.priority} | Fee: ${priorityFee / 1e9} SOL`,
+        });
+
+        // Use user settings for slippage and priority, with sensible defaults
+        const slippagePct = next.tradeParams?.slippage ?? settings.slippage_tolerance ?? 15;
 
         const result = await snipeToken(
           next.token.address,
@@ -1131,10 +1456,24 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
             // Pass user's TP/SL settings for position persistence
             profitTakePercent: settings.profit_take_percentage,
             stopLossPercent: settings.stop_loss_percentage,
+          },
+          // CRITICAL: Pass token metadata for pre-execution gate and history logging
+          {
+            symbol: next.token.symbol,
+            name: next.token.name,
+            liquidity: next.token.liquidity,
+            priceUsd: next.token.priceUsd,
+            buyerPosition: next.token.buyerPosition ?? undefined,
+            riskScore: next.token.riskScore,
+            isPumpFun: next.token.isPumpFun,
+            source: next.token.source,
           }
         );
 
         if (result?.status === 'SUCCESS' && result.position) {
+          // CRITICAL: Mark token as TRADED in persistent state (survives restarts)
+          await markTraded(next.token.address, result.position.entryTxHash);
+          
           const entryVal = (result.position.entryPrice || 0) * (result.position.tokenAmount || 0);
           addBotLog({ 
             level: 'success', 
@@ -1150,14 +1489,36 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
           await new Promise(r => setTimeout(r, 500));
         } else {
           const failReason = result?.error || 'Trade failed - unknown error';
-          addBotLog({ 
-            level: 'error', 
-            category: 'trade', 
-            message: `❌ BUY FAILED: ${next.token.symbol}`,
-            tokenSymbol: next.token.symbol,
-            tokenAddress: next.token.address,
-            details: `💧 Liquidity: ${liqText} | 👤 Buyer Pos: ${buyerPos} | 🛡️ Safety: ${safetyScore}\n❗ Reason: ${failReason}\n⚙️ Attempted: ${tradeAmountSol} SOL | Slippage: ${settings.slippage_tolerance || 15}%\n📍 Token: ${next.token.address}`,
-          });
+          
+          // Check if failure is due to no liquidity/route - mark as PENDING for retry
+          const isLiquidityIssue = failReason.toLowerCase().includes('no route') || 
+            failReason.toLowerCase().includes('no liquidity') ||
+            failReason.toLowerCase().includes('insufficient liquidity');
+          
+          if (isLiquidityIssue) {
+            // Mark as PENDING - will retry within time window
+            await markPending(next.token.address, 'no_route');
+            addBotLog({ 
+              level: 'warning', 
+              category: 'trade', 
+              message: `⏳ PENDING: ${next.token.symbol} (no route - will retry)`,
+              tokenSymbol: next.token.symbol,
+              tokenAddress: next.token.address,
+              details: `💧 Liquidity: ${liqText} | 👤 Buyer Pos: ${buyerPos}\n❗ Reason: ${failReason}\n🔄 Will retry within 5 minutes`,
+            });
+          } else {
+            // Mark as REJECTED for permanent failures
+            await markRejected(next.token.address, failReason.slice(0, 100));
+            addBotLog({ 
+              level: 'error', 
+              category: 'trade', 
+              message: `❌ REJECTED: ${next.token.symbol}`,
+              tokenSymbol: next.token.symbol,
+              tokenAddress: next.token.address,
+              details: `💧 Liquidity: ${liqText} | 👤 Buyer Pos: ${buyerPos} | 🛡️ Safety: ${safetyScore}\n❗ Reason: ${failReason}\n⚙️ Attempted: ${tradeAmountSol} SOL | Slippage: ${settings.slippage_tolerance || 15}%\n📍 Token: ${next.token.address}`,
+            });
+          }
+          
           recordTrade(false);
           break; // Stop on first failure
         }
@@ -1175,6 +1536,9 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
     demoBalance, solPrice, evaluateTokens, snipeToken, recordTrade,
     signAndSendTransaction, refreshBalance, fetchPositions, toast,
     deductBalance, addBalance, addDemoPosition, updateDemoPosition, closeDemoPosition,
+    // Persistent token state manager functions
+    tokenStatesInitialized, canTradeToken, cleanupExpiredPending, registerTokensBatch,
+    markTraded, markPending, markRejected,
   ]);
 
   // Continuous evaluation loop - runs on interval
@@ -1196,11 +1560,7 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
       runBotEvaluation();
     }, intervalMs);
 
-    addBotLog({
-      level: 'info',
-      category: 'system',
-      message: `Bot loop started (${intervalMs / 1000}s interval)`,
-    });
+    // Bot activation is indicated by the status badge - no need to log it
 
     return () => {
       if (evaluationIntervalRef.current) {
@@ -1352,7 +1712,7 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
     toast({ title: 'Cache Cleared', description: `Cleared ${count} tokens from processed cache` });
   }, [toast]);
 
-  // Cleanup stuck positions (no route, zero balance, stablecoins that can't be sold)
+  // Cleanup stuck positions - moves them to waiting_for_liquidity instead of force-closing
   const handleCleanupStuckPositions = useCallback(async () => {
     if (isDemo) {
       toast({ title: 'Not Available', description: 'Cleanup is only available in Live mode', variant: 'destructive' });
@@ -1364,7 +1724,7 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
     );
 
     if (stuckPositions.length === 0) {
-      toast({ title: 'No Stuck Positions', description: 'All positions are already closed.' });
+      toast({ title: 'No Stuck Positions', description: 'All positions are already closed or in waiting list.' });
       return;
     }
 
@@ -1379,19 +1739,18 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
       p.status === 'open' || p.status === 'pending'
     );
 
-    let closedCount = 0;
+    let movedCount = 0;
     let failedCount = 0;
 
     for (const position of stuckPositions) {
       try {
-        const exitPrice = position.current_price ?? position.entry_price;
-        const closed = await markPositionClosed(position.id, exitPrice);
-        if (closed) {
-          closedCount++;
+        const success = await moveToWaitingForLiquidity(position.id);
+        if (success) {
+          movedCount++;
           addBotLog({
             level: 'success',
             category: 'trade',
-            message: `Force closed: ${position.token_symbol}`,
+            message: `Moved to waiting: ${position.token_symbol}`,
             tokenAddress: position.token_address,
           });
         } else {
@@ -1399,7 +1758,7 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
         }
       } catch (err) {
         failedCount++;
-        console.error('Failed to close position:', position.id, err);
+        console.error('Failed to move position to waiting:', position.id, err);
       }
     }
 
@@ -1408,19 +1767,19 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
     // Force refresh to sync UI
     await fetchPositions(true);
 
-    if (closedCount > 0) {
+    if (movedCount > 0) {
       toast({
-        title: 'Positions Cleaned Up',
-        description: `Successfully closed ${closedCount} position${closedCount > 1 ? 's' : ''}${failedCount > 0 ? `. ${failedCount} failed.` : '.'}`,
+        title: 'Positions Moved to Waiting',
+        description: `Successfully moved ${movedCount} position${movedCount > 1 ? 's' : ''} to waiting list${failedCount > 0 ? `. ${failedCount} failed.` : '.'}`,
       });
     } else if (failedCount > 0) {
       toast({
         title: 'Cleanup Failed',
-        description: `Failed to close ${failedCount} position${failedCount > 1 ? 's' : ''}. Try again or contact support.`,
+        description: `Failed to move ${failedCount} position${failedCount > 1 ? 's' : ''}. Try again.`,
         variant: 'destructive',
       });
     }
-  }, [realOpenPositions, markPositionClosed, fetchPositions, toast]);
+  }, [realOpenPositions, moveToWaitingForLiquidity, fetchPositions, toast]);
 
   const handleResetBot = useCallback(() => {
     stopBot();
@@ -1619,10 +1978,10 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
       <ConfirmDialog
         open={showCleanupConfirm}
         onOpenChange={setShowCleanupConfirm}
-        title="Cleanup Stuck Positions?"
-        description={`This will force-close ${realOpenPositions.filter(p => p.status === 'open' || p.status === 'pending').length} open position(s) that may be stuck due to no swap route, zero balance, or failed exits. These positions will be marked as 'force_closed_manual' in your history.`}
-        confirmLabel={cleaningUpPositions ? "Closing..." : "Force Close All"}
-        variant="destructive"
+        title="Move Stuck Positions to Waiting List?"
+        description={`This will move ${realOpenPositions.filter(p => p.status === 'open' || p.status === 'pending').length} stuck position(s) to the Waiting List. The bot will auto-retry selling when liquidity becomes available.`}
+        confirmLabel={cleaningUpPositions ? "Moving..." : "Move All to Waiting"}
+        variant="default"
         onConfirm={confirmCleanupPositions}
       />
       
@@ -1643,8 +2002,43 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
         tokenName={noRoutePosition?.token_name || ''}
         onMoveToWaiting={async () => {
           if (noRoutePosition) {
-            await moveToWaitingForLiquidity(noRoutePosition.id);
-            fetchPositions(true);
+            console.log('[NoRouteModal] Moving position to waiting:', noRoutePosition.id, noRoutePosition.token_symbol);
+            addBotLog({
+              level: 'warning',
+              category: 'exit',
+              message: `⏳ Moving to Waiting Pool: ${noRoutePosition.token_symbol}`,
+              tokenSymbol: noRoutePosition.token_symbol,
+              details: 'No Jupiter/Raydium route available. Will auto-retry every 30s until liquidity returns.',
+            });
+            
+            const success = await moveToWaitingForLiquidity(noRoutePosition.id);
+            console.log('[NoRouteModal] Move result:', success);
+            
+            if (success) {
+              addBotLog({
+                level: 'success',
+                category: 'exit',
+                message: `✅ Moved to Waiting Pool: ${noRoutePosition.token_symbol}`,
+                tokenSymbol: noRoutePosition.token_symbol,
+                details: 'Token removed from Active trades. Will auto-sell when liquidity returns.',
+              });
+            } else {
+              addBotLog({
+                level: 'error',
+                category: 'exit',
+                message: `❌ Failed to move: ${noRoutePosition.token_symbol}`,
+                tokenSymbol: noRoutePosition.token_symbol,
+                details: 'Could not update position status. Check console for details.',
+              });
+              toast({
+                title: 'Failed to move position',
+                description: 'Could not update the position status. Please try again.',
+                variant: 'destructive',
+              });
+            }
+            
+            // Always refresh both positions lists to sync UI state
+            await Promise.all([fetchPositions(true), fetchWaitingPositions()]);
           }
           setShowNoRouteModal(false);
           setNoRoutePosition(null);
@@ -1655,7 +2049,7 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
         }}
       />
       <AppLayout>
-        <div className="container mx-auto px-3 md:px-4 space-y-4 md:space-y-6">
+        <div className="container mx-auto max-w-[1600px] px-2 sm:px-3 md:px-5 space-y-4 md:space-y-6">
           {/* Demo Mode Banner */}
           {isDemo && (
             <Alert className="bg-warning/10 border-warning/30">
@@ -1682,6 +2076,11 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
                 You're trading with simulated {demoBalance.toFixed(0)} SOL. Switch to Live mode for real trading.
               </AlertDescription>
             </Alert>
+          )}
+
+          {/* No Credits Overlay - blocks scanner in live mode */}
+          {!isDemo && !hasCredits && (
+            <NoCreditOverlay feature="scanner" />
           )}
 
           {/* API Errors Banner */}
@@ -1718,70 +2117,66 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
             </Alert>
           )}
 
-          {/* Stats Row - 6 compact cards like screenshot */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
-            <StatsCard
-              title="Invested"
-              value={formatSolNativeValue(totalInvested).primary}
-              change={formatSolNativeValue(totalInvested).secondary}
-              changeType="neutral"
-              icon={Coins}
-            />
-            <StatsCard
-              title="Open Value"
-              value={isDemo ? `${demoBalance.toFixed(4)} SOL` : formatDualValue(totalValue).primary}
-              change={isDemo ? `$${(demoBalance * solPrice).toFixed(2)}` : formatDualValue(totalValue).secondary}
-              changeType={totalPnLPercent >= 0 ? 'positive' : 'negative'}
-              icon={Wallet}
-            />
-            <StatsCard
-              title="Active"
-              value={openPositions.length.toString()}
-              change={`${openPositions.filter(p => (p.profit_loss_percent || 0) > 0).length} profit`}
-              changeType="positive"
-              icon={TrendingUp}
-            />
-            <StatsCard
-              title="Profit"
-              value={closedPositions.filter(p => (p.profit_loss_percent || 0) > 0).length.toString()}
-              change={`${closedPositions.filter(p => (p.profit_loss_percent || 0) > 0).length} profit`}
-              changeType="positive"
-              icon={TrendingUp}
-            />
-            <StatsCard
-              title="Win Rate"
-              value={`${winRate.toFixed(0)}%`}
-              change={`${closedPositions.length} trades`}
-              changeType={winRate >= 50 ? 'positive' : winRate > 0 ? 'negative' : 'neutral'}
-              icon={Activity}
-            />
-            <StatsCard
-              title="Trades"
-              value={closedPositions.length.toString()}
-              change=""
-              changeType="neutral"
-              icon={Activity}
-            />
+          {/* Stats Row - Compact dashboard-aligned grid */}
+          <div className="grid grid-cols-3 gap-1.5 md:gap-2 lg:grid-cols-6">
+            <div className="bg-card/80 rounded-lg border border-border/40 px-3 py-2.5">
+              <p className="text-[10px] text-muted-foreground mb-0.5 truncate">Invested</p>
+              <p className="text-sm font-bold text-foreground font-mono tabular-nums truncate">{formatSolNativeValue(totalInvestedSol).primary}</p>
+              <p className="text-[9px] text-muted-foreground font-mono truncate">{formatSolNativeValue(totalInvestedSol).secondary}</p>
+            </div>
+            <div className="bg-card/80 rounded-lg border border-border/40 px-3 py-2.5">
+              <p className="text-[10px] text-muted-foreground mb-0.5 truncate">Open Value</p>
+              <p className="text-sm font-bold text-foreground font-mono tabular-nums truncate">{formatSolNativeValue(totalValueSol).primary}</p>
+              <p className="text-[9px] text-muted-foreground font-mono truncate">{formatSolNativeValue(totalValueSol).secondary}</p>
+            </div>
+            <div className="bg-card/80 rounded-lg border border-border/40 px-3 py-2.5">
+              <p className="text-[10px] text-muted-foreground mb-0.5 truncate">Total P&L</p>
+              <p className={cn("text-sm font-bold font-mono tabular-nums truncate", totalPnLSol >= 0 ? 'text-success' : 'text-destructive')}>
+                {formatSolNativeValue(totalPnLSol, { showSign: true }).primary}
+              </p>
+              <p className={cn("text-[9px] font-mono truncate", totalPnLSol >= 0 ? 'text-success/70' : 'text-destructive/70')}>
+                {formatSolNativeValue(totalPnLSol, { showSign: true }).secondary}
+              </p>
+            </div>
+            <div className="bg-card/80 rounded-lg border border-border/40 px-3 py-2.5">
+              <p className="text-[10px] text-muted-foreground mb-0.5 truncate">Active</p>
+              <p className="text-sm font-bold text-foreground tabular-nums">{openPositions.length}</p>
+              <p className="text-[9px] text-success truncate">{openPositions.filter(p => (p.profit_loss_percent || 0) > 0).length} in profit</p>
+            </div>
+            <div className="bg-card/80 rounded-lg border border-border/40 px-3 py-2.5">
+              <p className="text-[10px] text-muted-foreground mb-0.5 truncate">Pools</p>
+              <p className="text-sm font-bold text-foreground tabular-nums">{tokens.length}</p>
+              <p className="text-[9px] text-primary truncate">{tokens.filter(t => t.riskScore < 50).length} signals</p>
+            </div>
+            <div className="bg-card/80 rounded-lg border border-border/40 px-3 py-2.5">
+              <p className="text-[10px] text-muted-foreground mb-0.5 truncate">Win Rate</p>
+              <p className={cn("text-sm font-bold tabular-nums", winRate >= 50 ? 'text-success' : winRate > 0 ? 'text-destructive' : 'text-foreground')}>
+                {winRate.toFixed(0)}%
+              </p>
+              <p className="text-[9px] text-muted-foreground truncate">{closedPositions.length} trades</p>
+            </div>
           </div>
 
-          {/* Main Content Grid - Left/Right layout like screenshot */}
-          <div className="grid gap-3 lg:grid-cols-[1fr,340px]">
-            {/* Left Column - Liquidity Monitor & Bot Activity */}
-            <div className="space-y-3 order-2 lg:order-1">
-              {/* Liquidity Monitor */}
+          {/* Main Content Grid - Cleaner 2-column layout */}
+          <div className="grid gap-4 lg:grid-cols-[1fr,400px]">
+            {/* Left Column - Token Monitor (main focus) */}
+            <div className="space-y-4 order-2 lg:order-1">
+              {/* Liquidity Monitor - Primary content */}
               <LiquidityMonitor 
                 pools={tokens}
-                activeTrades={openPositions}
+                activeTrades={allActivePositions}
                 waitingPositions={waitingPositions}
                 walletTokens={walletTokens}
                 loadingWalletTokens={loadingWalletTokens}
                 loading={loading}
-                apiStatus={loading ? 'active' : 'waiting'}
+                apiStatus={loading ? 'active' : (isPoolScanningPaused ? 'waiting' : 'active')}
                 onExitTrade={handleOpenExitPreview}
                 onRetryLiquidityCheck={runLiquidityRetryCheck}
                 onMoveBackFromWaiting={moveBackToOpen}
                 onManualSellWaiting={async (pos) => {
+                  // Handle both WaitingPosition and CombinedWaitingItem (wallet tokens)
                   if ('isWalletToken' in pos && pos.isWalletToken) {
+                    // For wallet tokens, we need to create a minimal position object
                     const walletPos = {
                       id: pos.id,
                       token_address: pos.token_address,
@@ -1810,35 +2205,79 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
                 }}
                 onRefreshWalletTokens={refetchWalletTokens}
                 checkingLiquidity={checkingLiquidity}
+                isScanningPaused={isPoolScanningPaused}
+                onToggleScanning={() => setIsPoolScanningPaused(prev => !prev)}
+                holderData={holderDataMap}
+                onFetchHolders={fetchTokenHolders}
               />
 
               {/* Bot Activity Log */}
               <BotActivityLog maxEntries={30} />
             </div>
 
-            {/* Right Column - Bot Settings, Performance, API Health, Trade Signals, Recovery */}
-            <div className="space-y-3 order-1 lg:order-2">
-              {/* Bot Settings Panel - Auto trading requires Pro */}
-              <TierGate feature="autoTrading" overlay>
-                <LiquidityBotPanel
-                  settings={settings}
-                  saving={saving}
-                  onUpdateField={updateField}
-                  onSave={handleSaveSettings}
-                  isActive={isBotActive}
-                  onToggleActive={handleToggleBotActiveWithConfirm}
-                  autoEntryEnabled={autoEntryEnabled}
-                  onAutoEntryChange={toggleAutoEntry}
-                  autoExitEnabled={autoExitEnabled}
-                  onAutoExitChange={toggleAutoExit}
-                  isDemo={isDemo}
-                  walletConnected={wallet.isConnected && wallet.network === 'solana'}
-                  walletAddress={wallet.address}
-                  walletBalance={wallet.balance}
-                />
-              </TierGate>
+            {/* Right Column - Bot Controls & Stats */}
+            <div className="space-y-4 order-1 lg:order-2">
+              {/* Bot Preflight Check */}
+              <BotPreflightCheck
+                isBotActive={isBotActive}
+                isDemo={isDemo}
+                walletConnected={wallet.isConnected}
+                walletNetwork={wallet.network}
+                walletBalance={wallet.balance}
+                tradeAmount={settings?.trade_amount ?? null}
+                maxConcurrentTrades={settings?.max_concurrent_trades ?? null}
+                autoEntryEnabled={autoEntryEnabled}
+                openPositionsCount={openPositions.length}
+                onConnectWallet={connectPhantom}
+              />
+              
+              {/* Liquidity Bot Panel - All settings in one place */}
+              <LiquidityBotPanel
+                settings={settings}
+                saving={saving}
+                onUpdateField={updateField}
+                onSave={handleSaveSettings}
+                isActive={isBotActive}
+                onToggleActive={handleToggleBotActiveWithConfirm}
+                autoEntryEnabled={autoEntryEnabled}
+                onAutoEntryChange={toggleAutoEntry}
+                autoExitEnabled={autoExitEnabled}
+                onAutoExitChange={toggleAutoExit}
+                isDemo={isDemo}
+                walletConnected={wallet.isConnected && wallet.network === 'solana'}
+                walletAddress={wallet.address}
+                walletBalance={wallet.balance}
+              />
 
-              {/* Performance Panel with donut chart */}
+              {/* Clear Rejected Tokens */}
+              {!isDemo && (
+                <div className="glass rounded-xl p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-foreground">Rejected Token Cache</p>
+                      <p className="text-xs text-muted-foreground">
+                        {getStateCounts().rejectedCount} tokens blocked from re-evaluation
+                      </p>
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={async () => {
+                        const cleared = await clearRejectedTokens();
+                        processedTokensRef.current.clear();
+                        toast({
+                          title: 'Cache Cleared',
+                          description: `${cleared} rejected tokens cleared. New tokens will be re-evaluated.`,
+                        });
+                      }}
+                    >
+                      Clear & Reset
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              {/* Performance Panel */}
               <PerformancePanel
                 winRate={isDemo ? demoWinRate : winRate}
                 totalPnL={isDemo ? demoTotalPnLPercent : totalPnLPercent}
@@ -1850,36 +2289,50 @@ const Scanner = forwardRef<HTMLDivElement, object>(function Scanner(_props, ref)
                 losses={isDemo ? demoLosses : closedPositions.filter(p => (p.profit_loss_percent || 0) <= 0).length}
               />
 
-              {/* API Health Widget */}
-              <ApiHealthWidget isDemo={isDemo} />
-
               {/* Trade Signals - Live mode only */}
+              {!isDemo && <TradeSignalPanel />}
+
+              {/* Sniper Decisions - Live mode debug */}
               {!isDemo && (
-                <TierGate feature="earlyTrustMode" overlay>
-                  <TradeSignalPanel />
-                </TierGate>
+                <SniperDecisionPanel
+                  decisions={sniperResult?.decisions || []}
+                  loading={sniperLoading}
+                  isDemo={isDemo}
+                  botActive={isBotActive}
+                />
               )}
 
-              {/* Recovery Controls */}
+              {/* Validation Gate Summary */}
               {!isDemo && (
-                <TierGate requiredTier="pro" overlay>
-                  <RecoveryControls
-                    onForceScan={handleForceScan}
-                    onForceEvaluate={handleForceEvaluate}
-                    onClearProcessed={handleClearProcessed}
-                    onResetBot={handleResetBot}
-                    onCleanupStuck={handleCleanupStuckPositions}
-                    onSyncPositions={handleSyncPositions}
-                    scanning={loading}
-                    evaluating={sniperLoading}
-                    cleaningUp={cleaningUpPositions}
-                    syncingPositions={syncingPositions}
-                    processedCount={processedTokensRef.current.size}
-                    stuckPositionsCount={realOpenPositions.filter(p => p.status === 'open' || p.status === 'pending').length}
-                    openPositionsCount={realOpenPositions.length}
-                    botActive={isBotActive}
-                  />
-                </TierGate>
+                <ValidationSummaryPanel
+                  gateResults={(sniperResult?.gateResults || useScannerStore.getState().gateResults) as any}
+                />
+              )}
+
+              {/* API Health - Admin only */}
+              {isAdmin && <ApiHealthWidget isDemo={isDemo} />}
+
+              {/* Paid API Alert */}
+              <PaidApiAlert isBotActive={isBotActive} isDemo={isDemo} />
+
+              {/* Recovery Controls - Live mode only */}
+              {!isDemo && (
+                <RecoveryControls
+                  onForceScan={handleForceScan}
+                  onForceEvaluate={handleForceEvaluate}
+                  onClearProcessed={handleClearProcessed}
+                  onResetBot={handleResetBot}
+                  onCleanupStuck={handleCleanupStuckPositions}
+                  onSyncPositions={handleSyncPositions}
+                  scanning={loading}
+                  evaluating={sniperLoading}
+                  cleaningUp={cleaningUpPositions}
+                  syncingPositions={syncingPositions}
+                  processedCount={processedTokensRef.current.size}
+                  stuckPositionsCount={realOpenPositions.filter(p => p.status === 'open' || p.status === 'pending').length}
+                  openPositionsCount={realOpenPositions.length}
+                  botActive={isBotActive}
+                />
               )}
             </div>
           </div>

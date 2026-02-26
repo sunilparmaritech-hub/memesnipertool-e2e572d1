@@ -198,23 +198,35 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     };
   }, [session, setupSessionTimers, clearSessionTimers]);
 
-  const fetchUserRole = async (userId: string) => {
+  const fetchUserRole = async (userId: string): Promise<AppRole | null> => {
     try {
       const { data, error } = await supabase
         .from("user_roles")
         .select("role")
         .eq("user_id", userId)
-        .single();
+        .maybeSingle();
 
       if (error) {
         console.error("Error fetching role:", error);
-        return null;
+        return "user"; // Default to user role
       }
 
-      return data?.role as AppRole;
+      // If no role record exists, create default user role
+      if (!data) {
+        const { error: insertError } = await supabase
+          .from("user_roles")
+          .insert({ user_id: userId, role: "user" });
+        
+        if (insertError) {
+          console.error("Error creating default role:", insertError);
+        }
+        return "user";
+      }
+
+      return data.role as AppRole;
     } catch (err) {
       console.error("Error fetching role:", err);
-      return null;
+      return "user";
     }
   };
 
@@ -224,10 +236,27 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         .from("profiles")
         .select("is_suspended, suspension_reason")
         .eq("user_id", userId)
-        .single();
+        .maybeSingle();
 
       if (error) {
         console.error("Error fetching suspension status:", error);
+        return { isSuspended: false, reason: null };
+      }
+
+      // If no profile exists, create one
+      if (!data) {
+        const { data: userData } = await supabase.auth.getUser();
+        const { error: insertError } = await supabase
+          .from("profiles")
+          .insert({ 
+            user_id: userId, 
+            email: userData?.user?.email || null,
+            is_suspended: false 
+          });
+        
+        if (insertError) {
+          console.error("Error creating profile:", insertError);
+        }
         return { isSuspended: false, reason: null };
       }
 

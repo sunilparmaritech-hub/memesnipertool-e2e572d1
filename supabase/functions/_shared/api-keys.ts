@@ -1,14 +1,12 @@
 // Shared API key management utilities for edge functions
 // This provides a single source of truth for API type to secret name mapping
 
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.90.1";
 
 // Complete mapping of API types to their secret/environment variable names
 // Only includes APIs actually used in the application
+// Data providers: DexScreener (primary), GeckoTerminal (secondary), Solana RPC (metadata)
 export const API_SECRET_MAPPING: Record<string, string> = {
-  birdeye: 'BIRDEYE_API_KEY',
-  dextools: 'DEXTOOLS_API_KEY',
-  liquidity_lock: 'LIQUIDITY_LOCK_API_KEY',
   dexscreener: 'DEXSCREENER_API_KEY',
   geckoterminal: 'GECKOTERMINAL_API_KEY',
   honeypot_rugcheck: 'HONEYPOT_API_KEY',
@@ -16,6 +14,8 @@ export const API_SECRET_MAPPING: Record<string, string> = {
   raydium: 'RAYDIUM_API_KEY',
   pumpfun: 'PUMPFUN_API_KEY',
   rpc_provider: 'SOLANA_RPC_URL',
+  helius: 'HELIUS_API_KEY',
+  birdeye: 'BIRDEYE_API_KEY',
 };
 
 // Internal service token for edge-to-edge calls (validated via shared secret)
@@ -27,23 +27,17 @@ export const API_VALIDATION_ENDPOINTS: Record<string, {
   url: string; 
   method: string; 
   requiresKey: boolean;
-  skipHttpTest?: boolean; // Skip actual HTTP test due to DNS/network restrictions in edge functions
+  skipHttpTest?: boolean;
 }> = {
-  // Birdeye - use /defi/networks endpoint (more reliable than /public/tokenlist)
-  birdeye: { url: 'https://public-api.birdeye.so/defi/networks', method: 'GET', requiresKey: true },
   dexscreener: { url: 'https://api.dexscreener.com/latest/dex/tokens/So11111111111111111111111111111111111111112', method: 'GET', requiresKey: false },
   geckoterminal: { url: 'https://api.geckoterminal.com/api/v2/networks', method: 'GET', requiresKey: false },
-  // Jupiter, Raydium, Pump.fun have DNS resolution issues in Supabase edge functions
   jupiter: { url: 'https://quote-api.jup.ag/v6/quote', method: 'GET', requiresKey: false, skipHttpTest: true },
   raydium: { url: 'https://api-v3.raydium.io/main/version', method: 'GET', requiresKey: false, skipHttpTest: true },
   pumpfun: { url: 'https://frontend-api.pump.fun/coins', method: 'GET', requiresKey: false, skipHttpTest: true },
   honeypot_rugcheck: { url: 'https://api.rugcheck.xyz/v1/tokens/So11111111111111111111111111111111111111112/report', method: 'GET', requiresKey: false },
   rpc_provider: { url: 'https://api.mainnet-beta.solana.com', method: 'POST', requiresKey: false },
-  // Dextools - use v2 blockchain endpoint; if it fails, it's likely an API key issue
-  // Note: Dextools API can be flaky, so we skip HTTP test and just verify key is configured
-  dextools: { url: 'https://public-api.dextools.io/standard/v2/blockchain', method: 'GET', requiresKey: true, skipHttpTest: true },
-  // Team Finance has no public API - skip HTTP test, only verify key is configured
-  liquidity_lock: { url: 'https://api.team.finance/v1/lockups', method: 'GET', requiresKey: true, skipHttpTest: true },
+  helius: { url: 'https://mainnet.helius-rpc.com', method: 'POST', requiresKey: true, skipHttpTest: true },
+  birdeye: { url: 'https://public-api.birdeye.so/defi/tokenlist?sort_by=v24hUSD&sort_type=desc&offset=0&limit=1', method: 'GET', requiresKey: true, skipHttpTest: true },
 };
 
 // Simple XOR encryption with a key derived from service role key
@@ -241,20 +235,20 @@ export async function validateApiKey(apiType: string, apiKey?: string): Promise<
       'User-Agent': 'MemeSniper/1.0',
     };
     
-    // Add API key to headers based on API type
+  // Add API key to headers based on API type
     if (keyToTest) {
       switch (apiType) {
-        case 'birdeye':
-          headers['X-API-KEY'] = keyToTest;
-          break;
         case 'dextools':
-          // Dextools V2 API uses x-api-key header (not RapidAPI)
+          // Dextools V2 API uses x-api-key header
           headers['x-api-key'] = keyToTest;
           break;
         case 'jupiter':
           headers['x-api-key'] = keyToTest;
           break;
         case 'liquidity_lock':
+          headers['x-api-key'] = keyToTest;
+          break;
+        case 'helius':
           headers['x-api-key'] = keyToTest;
           break;
         default:

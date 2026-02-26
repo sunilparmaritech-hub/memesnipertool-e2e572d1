@@ -2,7 +2,6 @@ import React, { forwardRef, useState, useEffect } from "react";
 import AppLayout from "@/components/layout/AppLayout";
 import { useWallet } from "@/hooks/useWallet";
 import { Button } from "@/components/ui/button";
-import PaymentSettingsPanel from "@/components/admin/PaymentSettingsPanel";
 import { useAuth } from "@/contexts/AuthContext";
 import { useAdminSettings } from "@/hooks/useAdminSettings";
 import {
@@ -24,11 +23,14 @@ import {
   Play,
   RefreshCw,
   Loader2,
+  CreditCard,
 } from "lucide-react";
 import { toast } from "sonner";
 import { ApiSettingsModule } from "@/components/admin/ApiSettingsModule";
 import { UserManagementPanel } from "@/components/admin/UserManagementPanel";
-import SubscriptionDashboard from "@/components/admin/SubscriptionDashboard";
+import { TransactionAuditPanel } from "@/components/admin/TransactionAuditPanel";
+import { SubscriptionManagementPanel } from "@/components/admin/SubscriptionManagementPanel";
+import { PaymentSettingsPanel } from "@/components/admin/PaymentSettingsPanel";
 
 const Admin = forwardRef<HTMLDivElement, object>(function Admin(_props, ref) {
   const { isAdmin, user } = useAuth();
@@ -92,14 +94,15 @@ const Admin = forwardRef<HTMLDivElement, object>(function Admin(_props, ref) {
 
   const tabs = [
     { id: "api", label: "API Settings", icon: Key },
-    { id: "payments", label: "Payment & Credits", icon: Crown },
-    { id: "subscriptions", label: "Subscriptions", icon: Crown },
+    { id: "payments", label: "SOL Payments", icon: CreditCard },
     { id: "scanner", label: "Market Scanner", icon: Search },
     { id: "liquidity", label: "Liquidity Rules", icon: Droplets },
     { id: "risk", label: "Risk Filters", icon: AlertTriangle },
     { id: "engine", label: "Trading Engine", icon: Zap },
     { id: "copytrade", label: "Copy Trading", icon: Copy },
+    { id: "subscriptions", label: "Subscriptions", icon: Crown },
     { id: "users", label: "User Management", icon: Users },
+    { id: "audit", label: "Transaction Audit", icon: Shield },
     { id: "monitoring", label: "System Monitoring", icon: Activity },
   ];
 
@@ -115,23 +118,10 @@ const Admin = forwardRef<HTMLDivElement, object>(function Admin(_props, ref) {
 
   return (
     <AppLayout>
-      <div className="container mx-auto px-4">
-          {/* Page Header */}
-          <div className="flex items-center gap-3 mb-8">
-            <div className="p-2.5 rounded-lg bg-primary/10">
-              <Crown className="w-6 h-6 text-primary" />
-            </div>
-            <div>
-              <h1 className="text-2xl md:text-3xl font-bold text-foreground">
-                Admin Control Panel
-              </h1>
-              <p className="text-muted-foreground">
-                Full platform control — APIs, scanning, risk, trading, and monitoring
-              </p>
-            </div>
-            <div className="ml-auto hidden md:flex items-center gap-2">
+      <div className="container mx-auto max-w-[1600px] px-2 sm:px-3 md:px-5 py-2 sm:py-3">
+          <div className="flex justify-end items-center gap-2 mb-4">
               {saving && (
-                <span className="px-3 py-1 bg-yellow-500/10 text-yellow-500 text-sm rounded-full border border-yellow-500/20 flex items-center gap-2">
+                <span className="px-3 py-1 bg-warning/10 text-warning text-sm rounded-full border border-warning/20 flex items-center gap-2">
                   <Loader2 className="w-3 h-3 animate-spin" />
                   Saving...
                 </span>
@@ -139,7 +129,6 @@ const Admin = forwardRef<HTMLDivElement, object>(function Admin(_props, ref) {
               <span className="px-3 py-1 bg-success/10 text-success text-sm rounded-full border border-success/20">
                 Admin Access
               </span>
-            </div>
           </div>
 
           {settingsLoading ? (
@@ -177,18 +166,9 @@ const Admin = forwardRef<HTMLDivElement, object>(function Admin(_props, ref) {
                   </div>
                 )}
 
-                {/* Payment & Credits Tab */}
+                {/* SOL Payments Tab */}
                 {activeTab === "payments" && (
-                  <div className="animate-fade-in">
-                    <PaymentSettingsPanel />
-                  </div>
-                )}
-
-                {/* Subscriptions Tab */}
-                {activeTab === "subscriptions" && (
-                  <div className="animate-fade-in">
-                    <SubscriptionDashboard />
-                  </div>
+                  <PaymentSettingsPanel />
                 )}
 
                 {/* Market Scanner Settings Tab */}
@@ -516,8 +496,18 @@ const Admin = forwardRef<HTMLDivElement, object>(function Admin(_props, ref) {
                   </div>
                 )}
 
+                {/* Subscriptions Tab */}
+                {activeTab === "subscriptions" && <SubscriptionManagementPanel />}
+
                 {/* User Management Tab */}
                 {activeTab === "users" && <UserManagementPanel />}
+
+                {/* Transaction Audit Tab */}
+                {activeTab === "audit" && (
+                  <div className="animate-fade-in">
+                    <TransactionAuditPanel />
+                  </div>
+                )}
 
                 {/* System Monitoring Tab */}
                 {activeTab === "monitoring" && (

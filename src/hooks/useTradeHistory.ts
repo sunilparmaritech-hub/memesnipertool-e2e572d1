@@ -12,11 +12,31 @@ export interface TradeHistoryEntry {
   token_symbol: string | null;
   trade_type: 'buy' | 'sell';
   amount: number;
+  // NEW SEMANTIC COLUMNS (source of truth for P&L)
+  sol_spent: number | null;       // BUY: actual SOL deducted, SELL: 0
+  sol_received: number | null;    // SELL: actual SOL received, BUY: 0
+  token_amount: number | null;    // Actual token delta
+  realized_pnl_sol: number | null; // SELL only: solReceived - matchedBuySolSpent
+  roi_percent: number | null;     // SELL only: (pnl / solSpent) * 100
+  sol_balance_after: number | null;
+  // Legacy columns (for backwards compatibility)
   price_sol: number | null;
   price_usd: number | null;
   status: string | null;
   tx_hash: string | null;
   created_at: string;
+  // Extended metadata columns
+  buyer_position: number | null;
+  liquidity: number | null;
+  risk_score: number | null;
+  entry_price: number | null;
+  exit_price: number | null;
+  slippage: number | null;
+  // Integrity tracking
+  data_source: 'legacy' | 'on_chain' | 'calculated' | null;
+  is_corrupted: boolean | null;
+  corruption_reason: string | null;
+  matched_buy_tx_hash: string | null;
 }
 
 type RefetchOptions = {
@@ -55,76 +75,81 @@ export function useTradeHistory(limit: number = 1000) {
     hasAttemptedBackfillRef.current = false;
   }, [user?.id]);
 
-  const backfillFromPositions = useCallback(async () => {
+  /**
+   * DISABLED: Backfill creates fake trades without tx_hash which corrupts audit trail.
+   * Trade history should ONLY be created by confirm-transaction edge function
+   * after on-chain confirmation with valid tx_hash.
+   * 
+   * This function now only syncs metadata between positions and existing trade_history.
+   */
+  const syncMetadataFromPositions = useCallback(async () => {
     if (!user) return 0;
 
-    // First, get existing trade_history entries to avoid duplicates
-    // Use type assertion since types may not be updated yet
-    const { data: existingTrades } = await (supabase
-      .from('trade_history' as any)
-      .select('token_address, trade_type, created_at')
-      .eq('user_id', user.id) as any);
+    // Get existing trade_history entries with token metadata issues
+    const { data: existingTrades } = await supabase
+      .from('trade_history')
+      .select('id, token_address, token_symbol, token_name, tx_hash')
+      .eq('user_id', user.id);
 
-    const existingSet = new Set(
-      ((existingTrades || []) as any[]).map((t: any) => `${t.token_address}-${t.trade_type}-${t.created_at}`)
-    );
+    if (!existingTrades || existingTrades.length === 0) return 0;
 
-    const { data: positionsData, error: positionsError } = await supabase
+    // Get positions to use as metadata source
+    const { data: positionsData } = await supabase
       .from('positions')
-      .select(
-        'token_address, token_symbol, token_name, amount, entry_price, status, created_at, closed_at, exit_price, exit_tx_id'
-      )
-      .eq('user_id', user.id)
-      .order('created_at', { ascending: false });
+      .select('token_address, token_symbol, token_name')
+      .eq('user_id', user.id);
 
-    if (positionsError) throw positionsError;
+    if (!positionsData) return 0;
 
-    const positions = ((positionsData || []) as unknown as PositionBackfillRow[]).map((p) => ({ ...p }));
-    if (positions.length === 0) return 0;
+    // Create metadata lookup from positions
+    const positionMetaMap = new Map<string, { symbol: string; name: string }>();
+    for (const pos of positionsData) {
+      if (pos.token_symbol && pos.token_name && 
+          !pos.token_symbol.includes('…') && !pos.token_symbol.includes('...')) {
+        positionMetaMap.set(pos.token_address, {
+          symbol: pos.token_symbol,
+          name: pos.token_name,
+        });
+      }
+    }
 
-    // Filter out positions that already exist in trade_history
-    const buyRows = positions
-      .filter((p) => !existingSet.has(`${p.token_address}-buy-${p.created_at}`))
-      .map((p) => ({
-        user_id: user.id,
-        token_address: p.token_address,
-        token_symbol: p.token_symbol,
-        token_name: p.token_name,
-        trade_type: 'buy' as const,
-        amount: Number(p.amount),
-        price_sol: p.entry_price ?? null,
-        price_usd: p.entry_price_usd ?? null,
-        status: 'confirmed',
-        tx_hash: null,
-        created_at: p.created_at,
-      }));
+    // Fix trades with truncated/placeholder metadata
+    let fixedCount = 0;
+    for (const trade of existingTrades) {
+      const isPlaceholder = !trade.token_symbol || 
+        trade.token_symbol.includes('…') || 
+        trade.token_symbol.includes('...') ||
+        trade.token_symbol.startsWith('Token ');
+      
+      if (isPlaceholder) {
+        const meta = positionMetaMap.get(trade.token_address);
+        if (meta) {
+          const { error } = await supabase
+            .from('trade_history')
+            .update({
+              token_symbol: meta.symbol,
+              token_name: meta.name,
+            })
+            .eq('id', trade.id);
+          
+          if (!error) fixedCount++;
+        }
+      }
+    }
 
-    const sellRows = positions
-      .filter((p) => (p.status || '').toLowerCase() === 'closed')
-      .filter((p) => !existingSet.has(`${p.token_address}-sell-${p.closed_at ?? p.created_at}`))
-      .map((p) => ({
-        user_id: user.id,
-        token_address: p.token_address,
-        token_symbol: p.token_symbol,
-        token_name: p.token_name,
-        trade_type: 'sell' as const,
-        amount: Number(p.amount),
-        price_sol: p.exit_price ?? null,
-        price_usd: null,
-        status: 'confirmed',
-        tx_hash: p.exit_tx_id ?? null,
-        created_at: p.closed_at ?? p.created_at,
-      }));
-
-    const rows = [...buyRows, ...sellRows];
-    if (rows.length === 0) return 0;
-
-    // Use type assertion for insert
-    const { error: insertError } = await (supabase.from('trade_history' as any).insert(rows) as any);
-    if (insertError) throw insertError;
-
-    return rows.length;
+    return fixedCount;
   }, [user]);
+
+  /**
+   * Legacy backfill - NOW DISABLED to prevent fake trades
+   * Kept for reference but returns 0 immediately
+   */
+  const backfillFromPositions = useCallback(async () => {
+    // DISABLED: Do not create trades without on-chain tx_hash
+    // This was causing "fake token" issues in the audit trail
+    console.warn('[TradeHistory] Backfill disabled - trades should only come from confirm-transaction');
+    return 0;
+  }, []);
 
   const fetchTrades = useCallback(async (options?: RefetchOptions) => {
     if (!user) {
@@ -136,44 +161,41 @@ export function useTradeHistory(limit: number = 1000) {
     try {
       setLoading(true);
       // Fetch up to the maximum allowed per request (default 1000)
-      // Use type assertion since types may not be updated yet
-      let { data, error } = await (supabase
-        .from('trade_history' as any)
+      let { data, error } = await supabase
+        .from('trade_history')
         .select('*')
         .eq('user_id', user.id)
         .order('created_at', { ascending: false })
-        .limit(limit) as any);
+        .limit(limit);
 
       if (error) throw error;
 
-      // If history is empty, rebuild it from existing positions (one-time by default).
-      const shouldAttemptBackfill = (options?.forceBackfill ?? false) || !hasAttemptedBackfillRef.current;
-      if ((data?.length ?? 0) === 0 && shouldAttemptBackfill) {
+      // DISABLED backfill - trades should only come from on-chain confirmation
+      // Instead, we just fix metadata inconsistencies if needed
+      if ((data?.length ?? 0) > 0 && !hasAttemptedBackfillRef.current) {
         hasAttemptedBackfillRef.current = true;
         try {
-          const inserted = await backfillFromPositions();
-          if (inserted > 0) {
-            toast({
-              title: 'Transaction history rebuilt',
-              description: `Imported ${inserted} transactions from existing positions`,
-            });
-
-            const refetchResult = await (supabase
-              .from('trade_history' as any)
+          const fixed = await syncMetadataFromPositions();
+          if (fixed > 0) {
+            console.log(`[TradeHistory] Fixed ${fixed} token metadata entries`);
+            // Refetch to get updated metadata
+            const refetchResult = await supabase
+              .from('trade_history')
               .select('*')
               .eq('user_id', user.id)
               .order('created_at', { ascending: false })
-              .limit(limit) as any);
+              .limit(limit);
 
-            if (refetchResult.error) throw refetchResult.error;
-            data = refetchResult.data;
+            if (!refetchResult.error) {
+              data = refetchResult.data;
+            }
           }
         } catch (e) {
-          console.warn('Trade history backfill failed:', e);
+          console.warn('Metadata sync failed:', e);
         }
       }
 
-      const rawTrades = ((data || []) as unknown as TradeHistoryEntry[]).map((t) => ({ ...t }));
+      const rawTrades = ((data || []) as TradeHistoryEntry[]).map((t) => ({ ...t }));
       setTrades(rawTrades);
 
       // Enrich missing/placeholder token metadata
@@ -216,7 +238,7 @@ export function useTradeHistory(limit: number = 1000) {
     } finally {
       setLoading(false);
     }
-  }, [user, limit, toast, backfillFromPositions]);
+  }, [user, limit, toast, syncMetadataFromPositions]);
 
   // Initial fetch
   useEffect(() => {
@@ -249,33 +271,35 @@ export function useTradeHistory(limit: number = 1000) {
     };
   }, [user, fetchTrades]);
 
-  // Force sync - runs backfill regardless of previous attempts
+  // Force sync - now focuses on fixing metadata consistency, not creating fake trades
   const forceSync = useCallback(async () => {
     if (!user) return;
     
     try {
       setLoading(true);
-      const inserted = await backfillFromPositions();
       
-      // Refetch after sync - use type assertion
-      const { data } = await (supabase
-        .from('trade_history' as any)
+      // Fix metadata inconsistencies between positions and trade_history
+      const fixedMeta = await syncMetadataFromPositions();
+      
+      // Refetch after sync
+      const { data } = await supabase
+        .from('trade_history')
         .select('*')
         .eq('user_id', user.id)
         .order('created_at', { ascending: false })
-        .limit(limit) as any);
+        .limit(limit);
       
-      setTrades((data || []) as unknown as TradeHistoryEntry[]);
+      setTrades((data || []) as TradeHistoryEntry[]);
       
-      if (inserted > 0) {
+      if (fixedMeta > 0) {
         toast({
-          title: 'Sync Complete',
-          description: `Added ${inserted} missing transactions from positions`,
+          title: 'Metadata Synced',
+          description: `Fixed ${fixedMeta} token names/symbols from positions`,
         });
       } else {
         toast({
           title: 'Already in sync',
-          description: 'Transaction history is up to date',
+          description: 'Transaction history metadata is up to date',
         });
       }
     } catch (error: any) {
@@ -288,7 +312,7 @@ export function useTradeHistory(limit: number = 1000) {
     } finally {
       setLoading(false);
     }
-  }, [user, backfillFromPositions, limit, toast]);
+  }, [user, syncMetadataFromPositions, limit, toast]);
 
   return {
     trades,

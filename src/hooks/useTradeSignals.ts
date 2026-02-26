@@ -41,7 +41,6 @@ export function useTradeSignals() {
   const isDemo = mode === 'demo';
 
   // Fetch pending signals
-  // NOTE: trade_signals table may not exist yet - silently handle missing table
   const fetchSignals = useCallback(async () => {
     if (!user) return;
 
@@ -54,24 +53,12 @@ export function useTradeSignals() {
         .gt('expires_at', new Date().toISOString())
         .order('created_at', { ascending: false });
 
-      // Silently ignore "table does not exist" errors (PGRST205)
-      if (error) {
-        if ((error as { code?: string }).code === 'PGRST205') {
-          // Table doesn't exist yet - this is expected during development
-          setLoading(false);
-          return;
-        }
-        throw error;
-      }
+      if (error) throw error;
       
       // Type assertion since we know the structure
       setSignals((data as unknown as TradeSignal[]) || []);
     } catch (error: unknown) {
-      // Only log unexpected errors
-      const err = error as { code?: string };
-      if (err.code !== 'PGRST205') {
-        console.error('Error fetching trade signals:', error);
-      }
+      console.error('Error fetching trade signals:', error);
     } finally {
       setLoading(false);
     }

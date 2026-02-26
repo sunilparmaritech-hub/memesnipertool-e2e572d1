@@ -11,6 +11,7 @@ import {
   Zap
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import { useWalletModal } from "@/hooks/useWalletModal";
 
 interface BotPreflightCheckProps {
   isBotActive: boolean;
@@ -45,6 +46,7 @@ export default function BotPreflightCheck({
   onConnectWallet,
 }: BotPreflightCheckProps) {
   const navigate = useNavigate();
+  const { openModal: openWalletModal } = useWalletModal();
 
   // Don't show in demo mode or if bot is not active
   if (isDemo || !isBotActive) return null;
@@ -69,8 +71,8 @@ export default function BotPreflightCheck({
         : walletConnected 
           ? `Wrong network: ${walletNetwork}` 
           : 'Not connected',
-      action: !walletConnected && onConnectWallet && (
-        <Button size="sm" variant="outline" onClick={onConnectWallet} className="h-6 text-xs">
+      action: !walletConnected && (
+        <Button size="sm" variant="outline" onClick={openWalletModal} className="h-6 text-xs">
           <Wallet className="h-3 w-3 mr-1" />
           Connect
         </Button>
@@ -116,11 +118,11 @@ export default function BotPreflightCheck({
   // If all checks pass, show a minimal success indicator
   if (allPassed) {
     return (
-      <div className="flex items-center gap-2 p-2 bg-success/10 border border-success/30 rounded-lg text-xs">
-        <CheckCircle2 className="h-4 w-4 text-success" />
+      <div className="flex items-center gap-2 p-2 bg-success/10 border border-success/30 rounded-lg text-xs flex-wrap">
+        <CheckCircle2 className="h-4 w-4 text-success shrink-0" />
         <span className="text-success font-medium">Bot ready for live trading</span>
-        <Badge variant="outline" className="ml-auto text-success border-success/30">
-          {availableSlots} slots available
+        <Badge variant="outline" className="ml-auto text-success border-success/30 text-[10px] sm:text-xs">
+          {availableSlots} slots
         </Badge>
       </div>
     );
@@ -130,10 +132,11 @@ export default function BotPreflightCheck({
   return (
     <Alert variant="destructive" className="border-destructive/50 bg-destructive/10">
       <AlertTriangle className="h-4 w-4" />
-      <AlertTitle className="flex items-center gap-2">
-        <Zap className="h-4 w-4" />
-        Bot Cannot Execute Live Trades
-        <Badge variant="destructive" className="ml-2">
+      <AlertTitle className="flex items-center gap-2 flex-wrap text-sm">
+        <Zap className="h-4 w-4 shrink-0" />
+        <span className="hidden xs:inline">Bot Cannot Execute Live Trades</span>
+        <span className="xs:hidden">Trade Blocked</span>
+        <Badge variant="destructive" className="text-[10px] sm:text-xs">
           {failedCount} issue{failedCount > 1 ? 's' : ''}
         </Badge>
       </AlertTitle>
@@ -142,25 +145,25 @@ export default function BotPreflightCheck({
           {checks.map((check, idx) => (
             <div 
               key={idx}
-              className={`flex items-center justify-between p-2 rounded-lg ${
+              className={`flex items-center justify-between p-2 rounded-lg gap-2 ${
                 check.passed ? 'bg-success/10' : 'bg-destructive/20'
               }`}
             >
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 min-w-0 flex-1">
                 {check.passed ? (
-                  <CheckCircle2 className="h-4 w-4 text-success" />
+                  <CheckCircle2 className="h-4 w-4 text-success shrink-0" />
                 ) : (
-                  <XCircle className="h-4 w-4 text-destructive" />
+                  <XCircle className="h-4 w-4 text-destructive shrink-0" />
                 )}
-                <span className="font-medium text-sm">{check.label}</span>
-                <span className="text-xs text-muted-foreground">— {check.detail}</span>
+                <span className="font-medium text-xs sm:text-sm truncate">{check.label}</span>
+                <span className="text-[10px] sm:text-xs text-muted-foreground truncate hidden sm:inline">— {check.detail}</span>
               </div>
-              {check.action}
+              <div className="shrink-0">{check.action}</div>
             </div>
           ))}
         </div>
-        <p className="text-xs text-muted-foreground mt-3">
-          Fix the issues above for the bot to execute real trades. The bot is scanning but will skip execution until all checks pass.
+        <p className="text-[10px] sm:text-xs text-muted-foreground mt-3">
+          Fix the issues above for the bot to execute real trades.
         </p>
       </AlertDescription>
     </Alert>

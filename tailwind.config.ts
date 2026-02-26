@@ -12,6 +12,14 @@ export default {
         "2xl": "1400px",
       },
     },
+    screens: {
+      'xs': '375px',  // Small mobile (iPhone SE)
+      'sm': '640px',  // Mobile landscape / Large mobile
+      'md': '768px',  // Tablet
+      'lg': '1024px', // Desktop
+      'xl': '1280px', // Large desktop
+      '2xl': '1400px',
+    },
     extend: {
       fontFamily: {
         sans: ['Space Grotesk', 'sans-serif'],

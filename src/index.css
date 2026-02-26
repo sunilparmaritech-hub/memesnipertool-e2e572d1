@@ -6,58 +6,60 @@
 
 @layer base {
   :root {
-    --background: 220 25% 5%;
-    --foreground: 210 40% 98%;
+    --background: 140 20% 4%;
+    --foreground: 80 20% 93%;
 
-    --card: 220 22% 8%;
-    --card-foreground: 210 40% 98%;
+    --card: 140 18% 8%;
+    --card-foreground: 80 20% 93%;
 
-    --popover: 220 22% 7%;
-    --popover-foreground: 210 40% 98%;
+    --popover: 140 18% 6%;
+    --popover-foreground: 80 20% 93%;
 
-    --primary: 155 100% 45%;
-    --primary-foreground: 220 25% 5%;
+    --primary: 95 80% 45%;
+    --primary-foreground: 140 20% 4%;
 
-    --secondary: 220 20% 12%;
-    --secondary-foreground: 210 40% 98%;
+    --secondary: 140 15% 13%;
+    --secondary-foreground: 80 20% 93%;
 
-    --muted: 220 18% 15%;
-    --muted-foreground: 215 15% 50%;
+    --muted: 140 12% 16%;
+    --muted-foreground: 100 12% 55%;
 
-    --accent: 280 100% 60%;
-    --accent-foreground: 210 40% 98%;
+    --accent: 42 85% 52%;
+    --accent-foreground: 140 20% 4%;
 
-    --destructive: 0 70% 50%;
-    --destructive-foreground: 210 40% 98%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 80 20% 93%;
 
-    --success: 155 100% 45%;
-    --success-foreground: 220 25% 5%;
+    --success: 95 80% 45%;
+    --success-foreground: 140 20% 4%;
 
-    --warning: 40 95% 50%;
-    --warning-foreground: 220 25% 5%;
+    --warning: 42 85% 52%;
+    --warning-foreground: 140 20% 4%;
 
-    --border: 220 18% 15%;
-    --input: 220 18% 12%;
-    --ring: 155 100% 45%;
+    --border: 140 12% 16%;
+    --input: 140 14% 12%;
+    --ring: 95 80% 45%;
 
-    --radius: 0.625rem;
+    --radius: 0.75rem;
 
-    --gradient-primary: linear-gradient(135deg, hsl(155 100% 45%), hsl(175 100% 45%));
-    --gradient-accent: linear-gradient(135deg, hsl(280 100% 60%), hsl(320 100% 55%));
-    --gradient-card: linear-gradient(180deg, hsl(220 22% 10%), hsl(220 22% 6%));
-    --gradient-glow: radial-gradient(ellipse at center, hsl(155 100% 45% / 0.12), transparent 70%);
+    --gradient-primary: linear-gradient(135deg, hsl(95 80% 45%), hsl(110 70% 50%));
+    --gradient-accent: linear-gradient(135deg, hsl(42 85% 52%), hsl(32 90% 48%));
+    --gradient-card: linear-gradient(180deg, hsl(140 18% 11%), hsl(140 18% 6%));
+    --gradient-card-hover: linear-gradient(180deg, hsl(140 18% 13%), hsl(140 18% 8%));
+    --gradient-card-sidebar: linear-gradient(180deg, hsl(140 18% 9%), hsl(140 18% 6%));
+    --gradient-glow: radial-gradient(ellipse at center, hsl(95 80% 45% / 0.15), transparent 70%);
 
-    --shadow-glow: 0 0 24px hsl(155 100% 45% / 0.25);
-    --shadow-card: 0 2px 16px hsl(0 0% 0% / 0.5);
+    --shadow-glow: 0 0 30px hsl(95 80% 45% / 0.3);
+    --shadow-card: 0 4px 24px hsl(0 0% 0% / 0.5);
 
-    --sidebar-background: 220 22% 6%;
-    --sidebar-foreground: 210 40% 98%;
-    --sidebar-primary: 155 100% 45%;
-    --sidebar-primary-foreground: 220 25% 5%;
-    --sidebar-accent: 220 20% 12%;
-    --sidebar-accent-foreground: 210 40% 98%;
-    --sidebar-border: 220 18% 15%;
-    --sidebar-ring: 155 100% 45%;
+    --sidebar-background: 140 18% 6%;
+    --sidebar-foreground: 80 20% 93%;
+    --sidebar-primary: 95 80% 45%;
+    --sidebar-primary-foreground: 140 20% 4%;
+    --sidebar-accent: 140 15% 13%;
+    --sidebar-accent-foreground: 80 20% 93%;
+    --sidebar-border: 140 12% 16%;
+    --sidebar-ring: 95 80% 45%;
   }
 }
 
@@ -124,14 +126,103 @@
     animation: shimmer 2s linear infinite;
     background-size: 200% 100%;
   }
+
+  /* Typography utilities for consistent sizing */
+  .text-display {
+    @apply text-2xl md:text-3xl lg:text-4xl font-bold leading-tight;
+  }
+
+  .text-heading {
+    @apply text-lg md:text-xl lg:text-2xl font-semibold leading-snug;
+  }
+
+  .text-subheading {
+    @apply text-base md:text-lg font-medium leading-normal;
+  }
+
+  .text-body {
+    @apply text-sm md:text-base leading-relaxed;
+  }
+
+  .text-caption {
+    @apply text-xs text-muted-foreground leading-normal;
+  }
+
+  .text-label {
+    @apply text-[10px] font-medium uppercase tracking-wider text-muted-foreground;
+  }
+
+  /* Micro text for badges, metadata */
+  .text-micro {
+    @apply text-[9px] font-medium leading-tight;
+  }
+
+  /* Section header - consistent across all panels */
+  .text-section-header {
+    @apply text-xs font-bold uppercase tracking-widest text-foreground;
+  }
+
+  /* Text wrapping utilities */
+  .text-wrap-balance {
+    text-wrap: balance;
+  }
+
+  .text-wrap-pretty {
+    text-wrap: pretty;
+  }
+
+  /* Prevent text overflow - use on containers with dynamic content */
+  .text-overflow-safe {
+    @apply break-words overflow-wrap-anywhere;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+    hyphens: auto;
+  }
+
+  /* Truncate with ellipsis for single line */
+  .text-truncate {
+    @apply truncate;
+  }
+
+  /* Multi-line truncate */
+  .text-clamp-2 {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  .text-clamp-3 {
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  /* Value display - consistent sizing for numbers/stats */
+  .text-value-lg {
+    @apply text-xl md:text-2xl lg:text-3xl font-bold tabular-nums;
+  }
+
+  .text-value-md {
+    @apply text-lg md:text-xl font-bold tabular-nums;
+  }
+
+  .text-value-sm {
+    @apply text-sm md:text-base font-semibold tabular-nums;
+  }
+
+  .text-value-xs {
+    @apply text-xs md:text-sm font-medium tabular-nums;
+  }
 }
 
 @keyframes pulse-glow {
   0%, 100% {
-    box-shadow: 0 0 20px hsl(160 100% 50% / 0.3);
+    box-shadow: 0 0 20px hsl(95 80% 45% / 0.3);
   }
   50% {
-    box-shadow: 0 0 40px hsl(160 100% 50% / 0.5);
+    box-shadow: 0 0 40px hsl(95 80% 45% / 0.5);
   }
 }
 
@@ -155,20 +246,29 @@
 
 /* Scrollbar styling */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
 }
 
 ::-webkit-scrollbar-track {
-  @apply bg-background;
+  @apply bg-transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-  @apply bg-muted rounded-full;
+  @apply bg-muted/60 rounded-full;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  @apply bg-muted-foreground/50;
+  @apply bg-muted-foreground/40;
+}
+
+/* Hide scrollbar utility */
+.scrollbar-none {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
 }
 
 /* Safe area insets for mobile devices with notches */

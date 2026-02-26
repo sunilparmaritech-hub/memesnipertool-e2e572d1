@@ -70,12 +70,13 @@ function getUserLogs(userId: string | null): BotLogEntry[] {
   return userLogStores.get(key) || [];
 }
 
-// Save logs to localStorage
+// Save logs to localStorage (limited to MAX entries for performance)
 function persistUserLogs(userId: string | null): void {
   const key = getLogStorageKey(userId);
   const logs = userLogStores.get(key) || [];
   try {
-    localStorage.setItem(key, JSON.stringify(logs.slice(0, 200)));
+    // Limit persisted logs to 100 for performance
+    localStorage.setItem(key, JSON.stringify(logs.slice(0, 100)));
   } catch (error) {
     console.error('Failed to persist bot logs:', error);
   }
@@ -97,6 +98,9 @@ export function setCurrentBotLogUser(userId: string | null): void {
   currentUserId = userId;
 }
 
+// Maximum log entries before auto-cleanup
+const MAX_LOG_ENTRIES = 100;
+
 export function addBotLog(entry: Omit<BotLogEntry, 'id' | 'timestamp'>): void {
   const newEntry: BotLogEntry = {
     ...entry,
@@ -106,7 +110,12 @@ export function addBotLog(entry: Omit<BotLogEntry, 'id' | 'timestamp'>): void {
   
   const key = getLogStorageKey(currentUserId);
   const logs = getUserLogs(currentUserId);
-  const updatedLogs = [newEntry, ...logs].slice(0, 200);
+  
+  // Auto-clear when exceeding MAX_LOG_ENTRIES to optimize performance
+  const updatedLogs = logs.length >= MAX_LOG_ENTRIES 
+    ? [newEntry] // Start fresh with just the new entry
+    : [newEntry, ...logs].slice(0, MAX_LOG_ENTRIES);
+  
   userLogStores.set(key, updatedLogs);
   persistUserLogs(currentUserId);
   
@@ -147,7 +156,7 @@ export function useBotLogs() {
 }
 
 const levelConfig: Record<LogLevel, { icon: React.ElementType; color: string; bg: string }> = {
-  info: { icon: Activity, color: 'text-blue-400', bg: 'bg-blue-500/10' },
+  info: { icon: Activity, color: 'text-primary', bg: 'bg-primary/10' },
   success: { icon: CheckCircle, color: 'text-success', bg: 'bg-success/10' },
   warning: { icon: AlertTriangle, color: 'text-warning', bg: 'bg-warning/10' },
   error: { icon: XCircle, color: 'text-destructive', bg: 'bg-destructive/10' },
@@ -193,10 +202,9 @@ function getFriendlyMessage(entry: BotLogEntry): string {
     [/no route|no valid route/i, '🛤️ New pool - awaiting indexing'],
     [/Jupiter unavailable/i, '🔌 Jupiter offline - using direct RPC'],
     
-    // ===== BIRDEYE SPECIFIC =====
-    [/birdeye.*429|birdeye.*rate/i, '⏳ Birdeye rate limited'],
-    [/birdeye.*5\d\d|birdeye.*error/i, '🔄 Birdeye busy'],
-    [/birdeye.*401|birdeye.*key/i, '🔐 Birdeye API key issue'],
+    // ===== COINGECKO SPECIFIC (replaces Birdeye) =====
+    [/coingecko.*429|coingecko.*rate/i, '⏳ CoinGecko rate limited'],
+    [/coingecko.*5\d\d|coingecko.*error/i, '🔄 CoinGecko busy'],
     
     // ===== GECKOTERMINAL SPECIFIC =====
     [/gecko.*5\d\d|gecko.*error/i, '🔄 GeckoTerminal busy'],
@@ -289,8 +297,8 @@ function getFriendlyMessage(entry: BotLogEntry): string {
   return msg;
 }
 
-const INITIAL_DISPLAY_COUNT = 10;
-const LOAD_MORE_COUNT = 15;
+const INITIAL_DISPLAY_COUNT = 15;
+const LOAD_MORE_COUNT = 20;
 
 export default function BotActivityLog({ maxEntries = 100 }: BotActivityLogProps) {
   const logs = useBotLogs();
@@ -330,66 +338,72 @@ export default function BotActivityLog({ maxEntries = 100 }: BotActivityLogProps
 
   return (
     <Collapsible open={expanded} onOpenChange={setExpanded}>
-      <Card className="bg-card/80 backdrop-blur-sm border-border/40 overflow-hidden">
+      <Card className="bg-gradient-to-br from-card/90 to-card/70 backdrop-blur-sm border-border/50 overflow-hidden">
+        {/* Decorative accent */}
+        <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-primary/30 to-transparent" />
+        
         <CollapsibleTrigger asChild>
-          <CardHeader className="pb-2 pt-3 px-3 cursor-pointer hover:bg-muted/10 transition-colors">
-            <CardTitle className="text-xs font-medium flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Activity className="w-3.5 h-3.5 text-primary" />
-                <span className="text-muted-foreground">BOT ACTIVITY</span>
+          <CardHeader className="pb-3 cursor-pointer hover:bg-muted/20 transition-colors">
+            <CardTitle className="text-sm font-medium flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="p-1.5 rounded-lg bg-primary/10 border border-primary/20">
+                  <Activity className="w-3.5 h-3.5 text-primary" />
+                </div>
+                <span className="font-semibold">Bot Activity</span>
                 <Badge 
                   variant="outline" 
-                  className="text-[9px] h-4 px-1.5 bg-muted/30 border-border/40"
+                  className="text-[10px] h-5 px-2 bg-muted/50 border-border/50"
                 >
                   {logs.length} logs
                 </Badge>
               </div>
-              <div className="flex items-center gap-2">
-                <div className="flex items-center gap-1.5 text-[10px] font-medium">
-                  <span className="flex items-center gap-0.5 text-success">
-                    <CheckCircle className="w-2.5 h-2.5" />
+              <div className="flex items-center gap-3">
+                {/* Stats summary */}
+                <div className="flex items-center gap-2 text-[11px] font-medium">
+                  <span className="flex items-center gap-1 text-success">
+                    <CheckCircle className="w-3 h-3" />
                     {stats.success}
                   </span>
-                  <span className="flex items-center gap-0.5 text-muted-foreground">
-                    <Ban className="w-2.5 h-2.5" />
+                  <span className="flex items-center gap-1 text-muted-foreground">
+                    <Ban className="w-3 h-3" />
                     {stats.skip}
                   </span>
-                  <span className="flex items-center gap-0.5 text-destructive">
-                    <XCircle className="w-2.5 h-2.5" />
+                  <span className="flex items-center gap-1 text-destructive">
+                    <XCircle className="w-3 h-3" />
                     {stats.error}
                   </span>
                 </div>
                 <Button 
                   variant="ghost" 
                   size="icon" 
-                  className="h-5 w-5 hover:bg-destructive/10 hover:text-destructive"
+                  className="h-7 w-7 hover:bg-destructive/10 hover:text-destructive"
                   onClick={(e) => {
                     e.stopPropagation();
                     clearBotLogs();
                   }}
                   title="Clear all logs"
                 >
-                  <Trash2 className="w-3 h-3" />
+                  <Trash2 className="w-3.5 h-3.5" />
                 </Button>
-                <ChevronDown className={`w-3.5 h-3.5 text-muted-foreground transition-transform duration-200 ${expanded ? 'rotate-180' : ''}`} />
+                <ChevronDown className={`w-4 h-4 text-muted-foreground transition-transform duration-200 ${expanded ? 'rotate-180' : ''}`} />
               </div>
             </CardTitle>
           </CardHeader>
         </CollapsibleTrigger>
         
         <CollapsibleContent>
-          <CardContent className="pt-0 pb-3 px-3">
-            <ScrollArea className="h-[240px] pr-2">
+          <CardContent className="pt-0 pb-3">
+            <ScrollArea className="h-[420px] pr-2">
               {displayLogs.length === 0 ? (
-                <div className="flex flex-col items-center justify-center h-full text-center py-8">
-                  <div className="p-2.5 rounded-full bg-muted/20 mb-2">
-                    <Activity className="w-5 h-5 text-muted-foreground/40" />
+                <div className="flex flex-col items-center justify-center h-full text-center py-10">
+                  <div className="p-3 rounded-full bg-muted/30 mb-3">
+                    <Activity className="w-6 h-6 text-muted-foreground/50" />
                   </div>
-                  <p className="text-xs font-medium text-muted-foreground">No activity yet</p>
-                  <p className="text-[10px] text-muted-foreground/70 mt-0.5">Activate the bot to see logs</p>
+                  <p className="text-sm font-medium text-muted-foreground">No activity yet</p>
+                  <p className="text-xs text-muted-foreground/70 mt-1">Activate the bot to see logs</p>
                 </div>
               ) : (
-                <div className="space-y-1">
+                <div className="space-y-1.5">
                   {displayLogs.map((entry, index) => {
                     const config = levelConfig[entry.level];
                     const Icon = config.icon;

@@ -19,22 +19,25 @@ export type Database = {
           created_at: string
           id: string
           setting_key: string
-          setting_value: Json | null
+          setting_value: Json
           updated_at: string
+          updated_by: string | null
         }
         Insert: {
           created_at?: string
           id?: string
           setting_key: string
-          setting_value?: Json | null
+          setting_value?: Json
           updated_at?: string
+          updated_by?: string | null
         }
         Update: {
           created_at?: string
           id?: string
           setting_key?: string
-          setting_value?: Json | null
+          setting_value?: Json
           updated_at?: string
+          updated_by?: string | null
         }
         Relationships: []
       }
@@ -42,43 +45,43 @@ export type Database = {
         Row: {
           api_key_encrypted: string | null
           api_name: string
-          api_type: Database["public"]["Enums"]["api_type"]
+          api_type: string
           base_url: string
           created_at: string
           created_by: string | null
           id: string
-          is_enabled: boolean
+          is_enabled: boolean | null
           last_checked_at: string | null
-          rate_limit_per_minute: number
-          status: Database["public"]["Enums"]["api_status"]
+          rate_limit_per_minute: number | null
+          status: string | null
           updated_at: string
         }
         Insert: {
           api_key_encrypted?: string | null
           api_name: string
-          api_type: Database["public"]["Enums"]["api_type"]
+          api_type: string
           base_url: string
           created_at?: string
           created_by?: string | null
           id?: string
-          is_enabled?: boolean
+          is_enabled?: boolean | null
           last_checked_at?: string | null
-          rate_limit_per_minute?: number
-          status?: Database["public"]["Enums"]["api_status"]
+          rate_limit_per_minute?: number | null
+          status?: string | null
           updated_at?: string
         }
         Update: {
           api_key_encrypted?: string | null
           api_name?: string
-          api_type?: Database["public"]["Enums"]["api_type"]
+          api_type?: string
           base_url?: string
           created_at?: string
           created_by?: string | null
           id?: string
-          is_enabled?: boolean
+          is_enabled?: boolean | null
           last_checked_at?: string | null
-          rate_limit_per_minute?: number
-          status?: Database["public"]["Enums"]["api_status"]
+          rate_limit_per_minute?: number | null
+          status?: string | null
           updated_at?: string
         }
         Relationships: []
@@ -87,7 +90,7 @@ export type Database = {
         Row: {
           api_type: string
           created_at: string
-          endpoint: string | null
+          endpoint: string
           error_message: string | null
           id: string
           is_success: boolean | null
@@ -97,7 +100,7 @@ export type Database = {
         Insert: {
           api_type: string
           created_at?: string
-          endpoint?: string | null
+          endpoint: string
           error_message?: string | null
           id?: string
           is_success?: boolean | null
@@ -107,7 +110,7 @@ export type Database = {
         Update: {
           api_type?: string
           created_at?: string
-          endpoint?: string | null
+          endpoint?: string
           error_message?: string | null
           id?: string
           is_success?: boolean | null
@@ -118,36 +121,75 @@ export type Database = {
       }
       billing_events: {
         Row: {
-          amount: number | null
+          amount_cents: number | null
           created_at: string
           currency: string | null
+          description: string | null
           event_type: string
           id: string
           metadata: Json | null
           stripe_event_id: string | null
-          tier: Database["public"]["Enums"]["subscription_tier"] | null
           user_id: string
         }
         Insert: {
-          amount?: number | null
+          amount_cents?: number | null
           created_at?: string
           currency?: string | null
+          description?: string | null
           event_type: string
           id?: string
           metadata?: Json | null
           stripe_event_id?: string | null
-          tier?: Database["public"]["Enums"]["subscription_tier"] | null
           user_id: string
         }
         Update: {
-          amount?: number | null
+          amount_cents?: number | null
           created_at?: string
           currency?: string | null
+          description?: string | null
           event_type?: string
           id?: string
           metadata?: Json | null
           stripe_event_id?: string | null
-          tier?: Database["public"]["Enums"]["subscription_tier"] | null
+          user_id?: string
+        }
+        Relationships: []
+      }
+      circuit_breaker_events: {
+        Row: {
+          cooldown_expires_at: string
+          created_at: string
+          id: string
+          reset_at: string | null
+          reset_by: string | null
+          reset_reason: string | null
+          trigger_details: Json | null
+          trigger_type: string
+          triggered_at: string
+          user_id: string
+        }
+        Insert: {
+          cooldown_expires_at: string
+          created_at?: string
+          id?: string
+          reset_at?: string | null
+          reset_by?: string | null
+          reset_reason?: string | null
+          trigger_details?: Json | null
+          trigger_type: string
+          triggered_at?: string
+          user_id: string
+        }
+        Update: {
+          cooldown_expires_at?: string
+          created_at?: string
+          id?: string
+          reset_at?: string | null
+          reset_by?: string | null
+          reset_reason?: string | null
+          trigger_details?: Json | null
+          trigger_type?: string
+          triggered_at?: string
           user_id?: string
         }
         Relationships: []
@@ -161,7 +203,7 @@ export type Database = {
           leader_address: string
           leader_name: string | null
           price: number
-          status: string
+          status: string | null
           token_address: string
           token_symbol: string
           tx_id: string | null
@@ -175,7 +217,7 @@ export type Database = {
           leader_address: string
           leader_name?: string | null
           price: number
-          status?: string
+          status?: string | null
           token_address: string
           token_symbol: string
           tx_id?: string | null
@@ -189,7 +231,7 @@ export type Database = {
           leader_address?: string
           leader_name?: string | null
           price?: number
-          status?: string
+          status?: string | null
           token_address?: string
           token_symbol?: string
           tx_id?: string | null
@@ -199,76 +241,64 @@ export type Database = {
       }
       coupon_codes: {
         Row: {
+          applicable_plans: string[] | null
           code: string
           created_at: string
           created_by: string | null
-          discount_type: Database["public"]["Enums"]["coupon_discount_type"]
+          current_redemptions: number | null
+          discount_type: string
           discount_value: number
-          duration: Database["public"]["Enums"]["coupon_duration"]
+          duration_months: number | null
           expires_at: string | null
           id: string
-          is_active: boolean
+          is_active: boolean | null
           max_redemptions: number | null
-          redemption_count: number
-          tier_restriction:
-            | Database["public"]["Enums"]["subscription_tier"]
-            | null
-          updated_at: string
         }
         Insert: {
+          applicable_plans?: string[] | null
           code: string
           created_at?: string
           created_by?: string | null
-          discount_type?: Database["public"]["Enums"]["coupon_discount_type"]
+          current_redemptions?: number | null
+          discount_type: string
           discount_value: number
-          duration?: Database["public"]["Enums"]["coupon_duration"]
+          duration_months?: number | null
           expires_at?: string | null
           id?: string
-          is_active?: boolean
+          is_active?: boolean | null
           max_redemptions?: number | null
-          redemption_count?: number
-          tier_restriction?:
-            | Database["public"]["Enums"]["subscription_tier"]
-            | null
-          updated_at?: string
         }
         Update: {
+          applicable_plans?: string[] | null
           code?: string
           created_at?: string
           created_by?: string | null
-          discount_type?: Database["public"]["Enums"]["coupon_discount_type"]
+          current_redemptions?: number | null
+          discount_type?: string
           discount_value?: number
-          duration?: Database["public"]["Enums"]["coupon_duration"]
+          duration_months?: number | null
           expires_at?: string | null
           id?: string
-          is_active?: boolean
+          is_active?: boolean | null
           max_redemptions?: number | null
-          redemption_count?: number
-          tier_restriction?:
-            | Database["public"]["Enums"]["subscription_tier"]
-            | null
-          updated_at?: string
         }
         Relationships: []
       }
       coupon_redemptions: {
         Row: {
           coupon_id: string
-          discount_applied: number
           id: string
           redeemed_at: string
           user_id: string
         }
         Insert: {
           coupon_id: string
-          discount_applied: number
           id?: string
           redeemed_at?: string
           user_id: string
         }
         Update: {
           coupon_id?: string
-          discount_applied?: number
           id?: string
           redeemed_at?: string
           user_id?: string
@@ -285,12 +315,9 @@ export type Database = {
       }
       credit_packs: {
         Row: {
-          badge: string | null
           bonus_credits: number
           created_at: string
-          credits: number
-          description: string | null
-          features: Json | null
+          credits_amount: number
           id: string
           is_active: boolean
           name: string
@@ -299,12 +326,9 @@ export type Database = {
           updated_at: string
         }
         Insert: {
-          badge?: string | null
           bonus_credits?: number
           created_at?: string
-          credits: number
-          description?: string | null
-          features?: Json | null
+          credits_amount: number
           id?: string
           is_active?: boolean
           name: string
@@ -313,12 +337,9 @@ export type Database = {
           updated_at?: string
         }
         Update: {
-          badge?: string | null
           bonus_credits?: number
           created_at?: string
-          credits?: number
-          description?: string | null
-          features?: Json | null
+          credits_amount?: number
           id?: string
           is_active?: boolean
           name?: string
@@ -334,14 +355,15 @@ export type Database = {
           confirmed_at: string | null
           created_at: string
           credits_added: number
+          failure_reason: string | null
           id: string
           memo: string | null
           pack_id: string | null
-          sender_wallet: string | null
-          status: Database["public"]["Enums"]["credit_tx_status"]
-          tx_hash: string | null
-          updated_at: string
-          usd_value_at_payment: number | null
+          recipient_wallet: string
+          sender_wallet: string
+          slot: number | null
+          status: string
+          tx_hash: string
           user_id: string
         }
         Insert: {
@@ -349,14 +371,15 @@ export type Database = {
           confirmed_at?: string | null
           created_at?: string
           credits_added?: number
+          failure_reason?: string | null
           id?: string
           memo?: string | null
           pack_id?: string | null
-          sender_wallet?: string | null
-          status?: Database["public"]["Enums"]["credit_tx_status"]
-          tx_hash?: string | null
-          updated_at?: string
-          usd_value_at_payment?: number | null
+          recipient_wallet: string
+          sender_wallet: string
+          slot?: number | null
+          status?: string
+          tx_hash: string
           user_id: string
         }
         Update: {
@@ -364,14 +387,15 @@ export type Database = {
           confirmed_at?: string | null
           created_at?: string
           credits_added?: number
+          failure_reason?: string | null
           id?: string
           memo?: string | null
           pack_id?: string | null
-          sender_wallet?: string | null
-          status?: Database["public"]["Enums"]["credit_tx_status"]
-          tx_hash?: string | null
-          updated_at?: string
-          usd_value_at_payment?: number | null
+          recipient_wallet?: string
+          sender_wallet?: string
+          slot?: number | null
+          status?: string
+          tx_hash?: string
           user_id?: string
         }
         Relationships: [
@@ -396,7 +420,7 @@ export type Database = {
         Insert: {
           action_type: string
           created_at?: string
-          credits_used: number
+          credits_used?: number
           id?: string
           reference_id?: string | null
           user_id: string
@@ -411,141 +435,357 @@ export type Database = {
         }
         Relationships: []
       }
+      deployer_reputation: {
+        Row: {
+          avg_liquidity_survival_seconds: number | null
+          avg_lp_lifespan_seconds: number | null
+          cluster_association_score: number | null
+          cluster_id: string | null
+          created_at: string
+          last_token_deployed_at: string | null
+          last_updated: string
+          rapid_deploy_flag: boolean | null
+          reputation_score: number
+          rug_ratio: number | null
+          tokens_last_7d: number | null
+          total_rugs: number
+          total_tokens_created: number
+          wallet_address: string
+        }
+        Insert: {
+          avg_liquidity_survival_seconds?: number | null
+          avg_lp_lifespan_seconds?: number | null
+          cluster_association_score?: number | null
+          cluster_id?: string | null
+          created_at?: string
+          last_token_deployed_at?: string | null
+          last_updated?: string
+          rapid_deploy_flag?: boolean | null
+          reputation_score?: number
+          rug_ratio?: number | null
+          tokens_last_7d?: number | null
+          total_rugs?: number
+          total_tokens_created?: number
+          wallet_address: string
+        }
+        Update: {
+          avg_liquidity_survival_seconds?: number | null
+          avg_lp_lifespan_seconds?: number | null
+          cluster_association_score?: number | null
+          cluster_id?: string | null
+          created_at?: string
+          last_token_deployed_at?: string | null
+          last_updated?: string
+          rapid_deploy_flag?: boolean | null
+          reputation_score?: number
+          rug_ratio?: number | null
+          tokens_last_7d?: number | null
+          total_rugs?: number
+          total_tokens_created?: number
+          wallet_address?: string
+        }
+        Relationships: []
+      }
       disclaimer_acknowledgments: {
         Row: {
           acknowledged_at: string
           id: string
-          ip_address: string | null
           user_agent: string | null
           user_id: string
         }
         Insert: {
           acknowledged_at?: string
           id?: string
-          ip_address?: string | null
           user_agent?: string | null
           user_id: string
         }
         Update: {
           acknowledged_at?: string
           id?: string
-          ip_address?: string | null
           user_agent?: string | null
           user_id?: string
+        }
+        Relationships: []
+      }
+      notifications: {
+        Row: {
+          created_at: string
+          id: string
+          message: string
+          read: boolean | null
+          title: string
+          type: string | null
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          message: string
+          read?: boolean | null
+          title: string
+          type?: string | null
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          message?: string
+          read?: boolean | null
+          title?: string
+          type?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
+      portfolio_snapshots: {
+        Row: {
+          closed_trades_count: number | null
+          created_at: string
+          id: string
+          open_positions_count: number
+          realized_pnl_sol: number
+          snapshot_date: string
+          sol_price_usd: number | null
+          total_invested_sol: number
+          total_pnl_sol: number
+          total_value_sol: number
+          unrealized_pnl_sol: number
+          user_id: string
+          win_rate: number | null
+        }
+        Insert: {
+          closed_trades_count?: number | null
+          created_at?: string
+          id?: string
+          open_positions_count?: number
+          realized_pnl_sol?: number
+          snapshot_date?: string
+          sol_price_usd?: number | null
+          total_invested_sol?: number
+          total_pnl_sol?: number
+          total_value_sol?: number
+          unrealized_pnl_sol?: number
+          user_id: string
+          win_rate?: number | null
+        }
+        Update: {
+          closed_trades_count?: number | null
+          created_at?: string
+          id?: string
+          open_positions_count?: number
+          realized_pnl_sol?: number
+          snapshot_date?: string
+          sol_price_usd?: number | null
+          total_invested_sol?: number
+          total_pnl_sol?: number
+          total_value_sol?: number
+          unrealized_pnl_sol?: number
+          user_id?: string
+          win_rate?: number | null
         }
         Relationships: []
       }
       positions: {
         Row: {
           amount: number
-          chain: string
+          chain: string | null
           closed_at: string | null
           created_at: string
-          current_price: number
-          current_value: number
+          current_price: number | null
+          current_value: number | null
           entry_price: number
           entry_price_usd: number | null
-          entry_value: number
+          entry_value: number | null
           exit_price: number | null
           exit_reason: string | null
           exit_tx_id: string | null
           id: string
+          liquidity_check_count: number | null
+          liquidity_last_checked_at: string | null
+          pnl_percentage: number | null
           profit_loss_percent: number | null
           profit_loss_value: number | null
-          profit_take_percent: number
-          status: Database["public"]["Enums"]["position_status"]
-          stop_loss_percent: number
+          profit_take_percent: number | null
+          status: string | null
+          stop_loss_percent: number | null
           token_address: string
-          token_name: string
-          token_symbol: string
+          token_name: string | null
+          token_symbol: string | null
           updated_at: string
           user_id: string
+          waiting_for_liquidity_since: string | null
         }
         Insert: {
           amount: number
-          chain?: string
+          chain?: string | null
           closed_at?: string | null
           created_at?: string
-          current_price: number
-          current_value: number
+          current_price?: number | null
+          current_value?: number | null
           entry_price: number
           entry_price_usd?: number | null
-          entry_value: number
+          entry_value?: number | null
           exit_price?: number | null
           exit_reason?: string | null
           exit_tx_id?: string | null
           id?: string
+          liquidity_check_count?: number | null
+          liquidity_last_checked_at?: string | null
+          pnl_percentage?: number | null
           profit_loss_percent?: number | null
           profit_loss_value?: number | null
-          profit_take_percent: number
-          status?: Database["public"]["Enums"]["position_status"]
-          stop_loss_percent: number
+          profit_take_percent?: number | null
+          status?: string | null
+          stop_loss_percent?: number | null
           token_address: string
-          token_name: string
-          token_symbol: string
+          token_name?: string | null
+          token_symbol?: string | null
           updated_at?: string
           user_id: string
+          waiting_for_liquidity_since?: string | null
         }
         Update: {
           amount?: number
-          chain?: string
+          chain?: string | null
           closed_at?: string | null
           created_at?: string
-          current_price?: number
-          current_value?: number
+          current_price?: number | null
+          current_value?: number | null
           entry_price?: number
           entry_price_usd?: number | null
-          entry_value?: number
+          entry_value?: number | null
           exit_price?: number | null
           exit_reason?: string | null
           exit_tx_id?: string | null
           id?: string
+          liquidity_check_count?: number | null
+          liquidity_last_checked_at?: string | null
+          pnl_percentage?: number | null
           profit_loss_percent?: number | null
           profit_loss_value?: number | null
-          profit_take_percent?: number
-          status?: Database["public"]["Enums"]["position_status"]
-          stop_loss_percent?: number
+          profit_take_percent?: number | null
+          status?: string | null
+          stop_loss_percent?: number | null
           token_address?: string
-          token_name?: string
-          token_symbol?: string
+          token_name?: string | null
+          token_symbol?: string | null
           updated_at?: string
           user_id?: string
+          waiting_for_liquidity_since?: string | null
         }
         Relationships: []
       }
       profiles: {
         Row: {
+          avatar_url: string | null
           created_at: string
+          credit_balance: number
+          device_fingerprint: string | null
           display_name: string | null
           email: string | null
+          email_verified_at: string | null
+          enhanced_verification_at: string | null
           id: string
+          ip_country: string | null
           is_suspended: boolean | null
+          last_screened_at: string | null
+          referral_code: string | null
+          referral_earnings: number
+          referred_by: string | null
+          suspended_at: string | null
           suspension_reason: string | null
+          total_credits_purchased: number
+          total_credits_used: number
+          total_referrals: number
+          two_factor_enabled: boolean | null
           updated_at: string
           user_id: string
-          wallet_address: string | null
+          verification_tier: number
+          wallet_risk_score: number | null
+          wallet_screening_status: string | null
         }
         Insert: {
+          avatar_url?: string | null
           created_at?: string
+          credit_balance?: number
+          device_fingerprint?: string | null
           display_name?: string | null
           email?: string | null
+          email_verified_at?: string | null
+          enhanced_verification_at?: string | null
           id?: string
+          ip_country?: string | null
           is_suspended?: boolean | null
+          last_screened_at?: string | null
+          referral_code?: string | null
+          referral_earnings?: number
+          referred_by?: string | null
+          suspended_at?: string | null
           suspension_reason?: string | null
+          total_credits_purchased?: number
+          total_credits_used?: number
+          total_referrals?: number
+          two_factor_enabled?: boolean | null
           updated_at?: string
           user_id: string
-          wallet_address?: string | null
+          verification_tier?: number
+          wallet_risk_score?: number | null
+          wallet_screening_status?: string | null
         }
         Update: {
+          avatar_url?: string | null
           created_at?: string
+          credit_balance?: number
+          device_fingerprint?: string | null
           display_name?: string | null
           email?: string | null
+          email_verified_at?: string | null
+          enhanced_verification_at?: string | null
           id?: string
+          ip_country?: string | null
           is_suspended?: boolean | null
+          last_screened_at?: string | null
+          referral_code?: string | null
+          referral_earnings?: number
+          referred_by?: string | null
+          suspended_at?: string | null
           suspension_reason?: string | null
+          total_credits_purchased?: number
+          total_credits_used?: number
+          total_referrals?: number
+          two_factor_enabled?: boolean | null
           updated_at?: string
           user_id?: string
-          wallet_address?: string | null
+          verification_tier?: number
+          wallet_risk_score?: number | null
+          wallet_screening_status?: string | null
+        }
+        Relationships: []
+      }
+      referrals: {
+        Row: {
+          bonus_credited: boolean
+          created_at: string
+          id: string
+          referral_code: string
+          referred_id: string
+          referrer_id: string
+        }
+        Insert: {
+          bonus_credited?: boolean
+          created_at?: string
+          id?: string
+          referral_code: string
+          referred_id: string
+          referrer_id: string
+        }
+        Update: {
+          bonus_credited?: boolean
+          created_at?: string
+          id?: string
+          referral_code?: string
+          referred_id?: string
+          referrer_id?: string
         }
         Relationships: []
       }
@@ -559,6 +799,7 @@ export type Database = {
           is_honeypot: boolean | null
           liquidity_locked: boolean | null
           lock_percentage: number | null
+          metadata: Json | null
           owner_renounced: boolean | null
           passed_checks: boolean | null
           rejection_reasons: string[] | null
@@ -566,7 +807,7 @@ export type Database = {
           sell_tax: number | null
           token_address: string
           token_symbol: string | null
-          user_id: string
+          user_id: string | null
         }
         Insert: {
           buy_tax?: number | null
@@ -577,6 +818,7 @@ export type Database = {
           is_honeypot?: boolean | null
           liquidity_locked?: boolean | null
           lock_percentage?: number | null
+          metadata?: Json | null
           owner_renounced?: boolean | null
           passed_checks?: boolean | null
           rejection_reasons?: string[] | null
@@ -584,7 +826,7 @@ export type Database = {
           sell_tax?: number | null
           token_address: string
           token_symbol?: string | null
-          user_id: string
+          user_id?: string | null
         }
         Update: {
           buy_tax?: number | null
@@ -595,6 +837,7 @@ export type Database = {
           is_honeypot?: boolean | null
           liquidity_locked?: boolean | null
           lock_percentage?: number | null
+          metadata?: Json | null
           owner_renounced?: boolean | null
           passed_checks?: boolean | null
           rejection_reasons?: string[] | null
@@ -602,53 +845,128 @@ export type Database = {
           sell_tax?: number | null
           token_address?: string
           token_symbol?: string | null
-          user_id?: string
+          user_id?: string | null
         }
         Relationships: []
       }
       risk_settings: {
         Row: {
-          circuit_breaker_enabled: boolean | null
-          circuit_breaker_loss_threshold: number | null
-          circuit_breaker_time_window_minutes: number | null
+          circuit_breaker_cooldown_minutes: number | null
+          circuit_breaker_drawdown_threshold: number | null
+          circuit_breaker_drawdown_window_minutes: number | null
+          circuit_breaker_enabled: boolean
+          circuit_breaker_freeze_count: number | null
+          circuit_breaker_loss_threshold: number
+          circuit_breaker_requires_admin_override: boolean | null
+          circuit_breaker_rug_count: number | null
+          circuit_breaker_tax_count: number | null
+          circuit_breaker_time_window_minutes: number
+          circuit_breaker_trigger_reason: string | null
           circuit_breaker_triggered_at: string | null
           created_at: string
-          emergency_stop_active: boolean | null
+          emergency_stop_active: boolean
           id: string
-          max_risk_score: number | null
-          max_tax_percent: number | null
-          require_liquidity_locked: boolean | null
-          require_ownership_renounced: boolean | null
+          max_risk_score: number
+          max_tax_percent: number
+          min_liquidity_auto_usd: number | null
+          min_liquidity_manual_usd: number | null
+          require_liquidity_locked: boolean
+          require_ownership_renounced: boolean
           updated_at: string
           user_id: string
         }
         Insert: {
-          circuit_breaker_enabled?: boolean | null
-          circuit_breaker_loss_threshold?: number | null
-          circuit_breaker_time_window_minutes?: number | null
+          circuit_breaker_cooldown_minutes?: number | null
+          circuit_breaker_drawdown_threshold?: number | null
+          circuit_breaker_drawdown_window_minutes?: number | null
+          circuit_breaker_enabled?: boolean
+          circuit_breaker_freeze_count?: number | null
+          circuit_breaker_loss_threshold?: number
+          circuit_breaker_requires_admin_override?: boolean | null
+          circuit_breaker_rug_count?: number | null
+          circuit_breaker_tax_count?: number | null
+          circuit_breaker_time_window_minutes?: number
+          circuit_breaker_trigger_reason?: string | null
           circuit_breaker_triggered_at?: string | null
           created_at?: string
-          emergency_stop_active?: boolean | null
+          emergency_stop_active?: boolean
           id?: string
-          max_risk_score?: number | null
-          max_tax_percent?: number | null
-          require_liquidity_locked?: boolean | null
-          require_ownership_renounced?: boolean | null
+          max_risk_score?: number
+          max_tax_percent?: number
+          min_liquidity_auto_usd?: number | null
+          min_liquidity_manual_usd?: number | null
+          require_liquidity_locked?: boolean
+          require_ownership_renounced?: boolean
           updated_at?: string
           user_id: string
         }
         Update: {
-          circuit_breaker_enabled?: boolean | null
-          circuit_breaker_loss_threshold?: number | null
-          circuit_breaker_time_window_minutes?: number | null
+          circuit_breaker_cooldown_minutes?: number | null
+          circuit_breaker_drawdown_threshold?: number | null
+          circuit_breaker_drawdown_window_minutes?: number | null
+          circuit_breaker_enabled?: boolean
+          circuit_breaker_freeze_count?: number | null
+          circuit_breaker_loss_threshold?: number
+          circuit_breaker_requires_admin_override?: boolean | null
+          circuit_breaker_rug_count?: number | null
+          circuit_breaker_tax_count?: number | null
+          circuit_breaker_time_window_minutes?: number
+          circuit_breaker_trigger_reason?: string | null
           circuit_breaker_triggered_at?: string | null
           created_at?: string
-          emergency_stop_active?: boolean | null
+          emergency_stop_active?: boolean
           id?: string
-          max_risk_score?: number | null
-          max_tax_percent?: number | null
-          require_liquidity_locked?: boolean | null
-          require_ownership_renounced?: boolean | null
+          max_risk_score?: number
+          max_tax_percent?: number
+          min_liquidity_auto_usd?: number | null
+          min_liquidity_manual_usd?: number | null
+          require_liquidity_locked?: boolean
+          require_ownership_renounced?: boolean
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      sniper_settings: {
+        Row: {
+          auto_buy_enabled: boolean | null
+          created_at: string
+          gas_priority: string | null
+          id: string
+          max_buy_amount: number | null
+          slippage_tolerance: number | null
+          stop_loss_enabled: boolean | null
+          stop_loss_percentage: number | null
+          take_profit_enabled: boolean | null
+          take_profit_percentage: number | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          auto_buy_enabled?: boolean | null
+          created_at?: string
+          gas_priority?: string | null
+          id?: string
+          max_buy_amount?: number | null
+          slippage_tolerance?: number | null
+          stop_loss_enabled?: boolean | null
+          stop_loss_percentage?: number | null
+          take_profit_enabled?: boolean | null
+          take_profit_percentage?: number | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          auto_buy_enabled?: boolean | null
+          created_at?: string
+          gas_priority?: string | null
+          id?: string
+          max_buy_amount?: number | null
+          slippage_tolerance?: number | null
+          stop_loss_enabled?: boolean | null
+          stop_loss_percentage?: number | null
+          take_profit_enabled?: boolean | null
+          take_profit_percentage?: number | null
           updated_at?: string
           user_id?: string
         }
@@ -661,13 +979,11 @@ export type Database = {
           created_at: string
           current_period_end: string | null
           current_period_start: string | null
-          grace_period_end: string | null
           id: string
-          status: Database["public"]["Enums"]["subscription_status"]
+          plan: string
+          status: string
           stripe_customer_id: string | null
           stripe_subscription_id: string | null
-          tier: Database["public"]["Enums"]["subscription_tier"]
-          trial_end: string | null
           updated_at: string
           user_id: string
         }
@@ -677,13 +993,11 @@ export type Database = {
           created_at?: string
           current_period_end?: string | null
           current_period_start?: string | null
-          grace_period_end?: string | null
           id?: string
-          status?: Database["public"]["Enums"]["subscription_status"]
+          plan?: string
+          status?: string
           stripe_customer_id?: string | null
           stripe_subscription_id?: string | null
-          tier?: Database["public"]["Enums"]["subscription_tier"]
-          trial_end?: string | null
           updated_at?: string
           user_id: string
         }
@@ -693,15 +1007,64 @@ export type Database = {
           created_at?: string
           current_period_end?: string | null
           current_period_start?: string | null
-          grace_period_end?: string | null
           id?: string
-          status?: Database["public"]["Enums"]["subscription_status"]
+          plan?: string
+          status?: string
           stripe_customer_id?: string | null
           stripe_subscription_id?: string | null
-          tier?: Database["public"]["Enums"]["subscription_tier"]
-          trial_end?: string | null
           updated_at?: string
           user_id?: string
+        }
+        Relationships: []
+      }
+      support_tickets: {
+        Row: {
+          admin_reply: string | null
+          category: string
+          created_at: string
+          description: string
+          id: string
+          priority: string | null
+          replied_at: string | null
+          replied_by: string | null
+          status: string
+          subject: string
+          ticket_number: string
+          updated_at: string
+          user_id: string
+          wallet_address: string | null
+        }
+        Insert: {
+          admin_reply?: string | null
+          category: string
+          created_at?: string
+          description: string
+          id?: string
+          priority?: string | null
+          replied_at?: string | null
+          replied_by?: string | null
+          status?: string
+          subject: string
+          ticket_number: string
+          updated_at?: string
+          user_id: string
+          wallet_address?: string | null
+        }
+        Update: {
+          admin_reply?: string | null
+          category?: string
+          created_at?: string
+          description?: string
+          id?: string
+          priority?: string | null
+          replied_at?: string | null
+          replied_by?: string | null
+          status?: string
+          subject?: string
+          ticket_number?: string
+          updated_at?: string
+          user_id?: string
+          wallet_address?: string | null
         }
         Relationships: []
       }
@@ -738,15 +1101,109 @@ export type Database = {
         }
         Relationships: []
       }
+      token_processing_states: {
+        Row: {
+          buyer_position_at_discovery: number | null
+          created_at: string
+          discovered_at: string
+          id: string
+          liquidity_at_discovery: number | null
+          max_retries: number
+          pending_reason: string | null
+          pending_since: string | null
+          position_id: string | null
+          rejected_at: string | null
+          rejection_reason: string | null
+          retry_count: number
+          retry_expires_at: string | null
+          risk_score_at_discovery: number | null
+          source: string | null
+          state: string
+          token_address: string
+          token_name: string | null
+          token_symbol: string | null
+          trade_tx_hash: string | null
+          traded_at: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          buyer_position_at_discovery?: number | null
+          created_at?: string
+          discovered_at?: string
+          id?: string
+          liquidity_at_discovery?: number | null
+          max_retries?: number
+          pending_reason?: string | null
+          pending_since?: string | null
+          position_id?: string | null
+          rejected_at?: string | null
+          rejection_reason?: string | null
+          retry_count?: number
+          retry_expires_at?: string | null
+          risk_score_at_discovery?: number | null
+          source?: string | null
+          state?: string
+          token_address: string
+          token_name?: string | null
+          token_symbol?: string | null
+          trade_tx_hash?: string | null
+          traded_at?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          buyer_position_at_discovery?: number | null
+          created_at?: string
+          discovered_at?: string
+          id?: string
+          liquidity_at_discovery?: number | null
+          max_retries?: number
+          pending_reason?: string | null
+          pending_since?: string | null
+          position_id?: string | null
+          rejected_at?: string | null
+          rejection_reason?: string | null
+          retry_count?: number
+          retry_expires_at?: string | null
+          risk_score_at_discovery?: number | null
+          source?: string | null
+          state?: string
+          token_address?: string
+          token_name?: string | null
+          token_symbol?: string | null
+          trade_tx_hash?: string | null
+          traded_at?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       trade_history: {
         Row: {
           amount: number
+          buyer_position: number | null
+          corruption_reason: string | null
           created_at: string
+          data_source: string | null
+          entry_price: number | null
+          exit_price: number | null
           id: string
+          is_corrupted: boolean | null
+          liquidity: number | null
+          matched_buy_tx_hash: string | null
           price_sol: number | null
           price_usd: number | null
+          realized_pnl_sol: number | null
+          risk_score: number | null
+          roi_percent: number | null
+          slippage: number | null
+          sol_balance_after: number | null
+          sol_received: number | null
+          sol_spent: number | null
           status: string | null
           token_address: string
+          token_amount: number | null
           token_name: string | null
           token_symbol: string | null
           trade_type: string
@@ -755,12 +1212,28 @@ export type Database = {
         }
         Insert: {
           amount: number
+          buyer_position?: number | null
+          corruption_reason?: string | null
           created_at?: string
+          data_source?: string | null
+          entry_price?: number | null
+          exit_price?: number | null
           id?: string
+          is_corrupted?: boolean | null
+          liquidity?: number | null
+          matched_buy_tx_hash?: string | null
           price_sol?: number | null
           price_usd?: number | null
+          realized_pnl_sol?: number | null
+          risk_score?: number | null
+          roi_percent?: number | null
+          slippage?: number | null
+          sol_balance_after?: number | null
+          sol_received?: number | null
+          sol_spent?: number | null
           status?: string | null
           token_address: string
+          token_amount?: number | null
           token_name?: string | null
           token_symbol?: string | null
           trade_type: string
@@ -769,12 +1242,28 @@ export type Database = {
         }
         Update: {
           amount?: number
+          buyer_position?: number | null
+          corruption_reason?: string | null
           created_at?: string
+          data_source?: string | null
+          entry_price?: number | null
+          exit_price?: number | null
           id?: string
+          is_corrupted?: boolean | null
+          liquidity?: number | null
+          matched_buy_tx_hash?: string | null
           price_sol?: number | null
           price_usd?: number | null
+          realized_pnl_sol?: number | null
+          risk_score?: number | null
+          roi_percent?: number | null
+          slippage?: number | null
+          sol_balance_after?: number | null
+          sol_received?: number | null
+          sol_spent?: number | null
           status?: string | null
           token_address?: string
+          token_amount?: number | null
           token_name?: string | null
           token_symbol?: string | null
           trade_type?: string
@@ -783,101 +1272,134 @@ export type Database = {
         }
         Relationships: []
       }
-      usage_logs: {
+      trade_signals: {
         Row: {
-          api_intensive_count: number
-          auto_executions_count: number
-          clustering_calls_count: number
+          chain: string | null
           created_at: string
+          executed_at: string | null
+          expires_at: string
           id: string
-          rpc_simulations_count: number
-          updated_at: string
-          usage_date: string
+          is_pump_fun: boolean | null
+          liquidity: number | null
+          metadata: Json | null
+          price_usd: number | null
+          priority: string | null
+          reasons: Json | null
+          risk_score: number | null
+          slippage: number | null
+          source: string | null
+          status: string | null
+          token_address: string
+          token_name: string
+          token_symbol: string
+          trade_amount: number
+          tx_signature: string | null
           user_id: string
-          validations_count: number
         }
         Insert: {
-          api_intensive_count?: number
-          auto_executions_count?: number
-          clustering_calls_count?: number
+          chain?: string | null
           created_at?: string
+          executed_at?: string | null
+          expires_at: string
           id?: string
-          rpc_simulations_count?: number
-          updated_at?: string
-          usage_date?: string
+          is_pump_fun?: boolean | null
+          liquidity?: number | null
+          metadata?: Json | null
+          price_usd?: number | null
+          priority?: string | null
+          reasons?: Json | null
+          risk_score?: number | null
+          slippage?: number | null
+          source?: string | null
+          status?: string | null
+          token_address: string
+          token_name: string
+          token_symbol: string
+          trade_amount: number
+          tx_signature?: string | null
           user_id: string
-          validations_count?: number
         }
         Update: {
-          api_intensive_count?: number
-          auto_executions_count?: number
-          clustering_calls_count?: number
+          chain?: string | null
+          created_at?: string
+          executed_at?: string | null
+          expires_at?: string
+          id?: string
+          is_pump_fun?: boolean | null
+          liquidity?: number | null
+          metadata?: Json | null
+          price_usd?: number | null
+          priority?: string | null
+          reasons?: Json | null
+          risk_score?: number | null
+          slippage?: number | null
+          source?: string | null
+          status?: string | null
+          token_address?: string
+          token_name?: string
+          token_symbol?: string
+          trade_amount?: number
+          tx_signature?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
+      usage_logs: {
+        Row: {
+          count: number
+          created_at: string
+          id: string
+          updated_at: string
+          usage_date: string
+          usage_type: string
+          user_id: string
+        }
+        Insert: {
+          count?: number
           created_at?: string
           id?: string
-          rpc_simulations_count?: number
           updated_at?: string
           usage_date?: string
+          usage_type: string
+          user_id: string
+        }
+        Update: {
+          count?: number
+          created_at?: string
+          id?: string
+          updated_at?: string
+          usage_date?: string
+          usage_type?: string
           user_id?: string
-          validations_count?: number
         }
         Relationships: []
       }
       user_activity_logs: {
         Row: {
-          action: string
+          activity_category: string
+          activity_type: string
           created_at: string
-          details: Json | null
+          description: string | null
           id: string
-          ip_address: string | null
-          user_agent: string | null
+          metadata: Json | null
           user_id: string
         }
         Insert: {
-          action: string
+          activity_category: string
+          activity_type: string
           created_at?: string
-          details?: Json | null
+          description?: string | null
           id?: string
-          ip_address?: string | null
-          user_agent?: string | null
+          metadata?: Json | null
           user_id: string
         }
         Update: {
-          action?: string
+          activity_category?: string
+          activity_type?: string
           created_at?: string
-          details?: Json | null
+          description?: string | null
           id?: string
-          ip_address?: string | null
-          user_agent?: string | null
-          user_id?: string
-        }
-        Relationships: []
-      }
-      user_credits: {
-        Row: {
-          created_at: string
-          credit_balance: number
-          id: string
-          total_credits_purchased: number
-          total_credits_used: number
-          updated_at: string
-          user_id: string
-        }
-        Insert: {
-          created_at?: string
-          credit_balance?: number
-          id?: string
-          total_credits_purchased?: number
-          total_credits_used?: number
-          updated_at?: string
-          user_id: string
-        }
-        Update: {
-          created_at?: string
-          credit_balance?: number
-          id?: string
-          total_credits_purchased?: number
-          total_credits_used?: number
-          updated_at?: string
+          metadata?: Json | null
           user_id?: string
         }
         Relationships: []
@@ -887,67 +1409,214 @@ export type Database = {
           created_at: string
           id: string
           role: Database["public"]["Enums"]["app_role"]
+          updated_at: string
           user_id: string
         }
         Insert: {
           created_at?: string
           id?: string
           role?: Database["public"]["Enums"]["app_role"]
+          updated_at?: string
           user_id: string
         }
         Update: {
           created_at?: string
           id?: string
           role?: Database["public"]["Enums"]["app_role"]
+          updated_at?: string
           user_id?: string
         }
         Relationships: []
       }
       user_sniper_settings: {
         Row: {
-          category_filters: string[]
+          category_filters: Json | null
           created_at: string
           id: string
-          max_concurrent_trades: number
-          min_liquidity: number
-          priority: Database["public"]["Enums"]["sniping_priority"]
-          profit_take_percentage: number
-          stop_loss_percentage: number
-          token_blacklist: string[]
-          token_whitelist: string[]
-          trade_amount: number
+          max_concurrent_trades: number | null
+          max_risk_score: number | null
+          min_liquidity: number | null
+          priority: string | null
+          profit_take_percentage: number | null
+          slippage_tolerance: number | null
+          stop_loss_percentage: number | null
+          target_buyer_positions: Json | null
+          token_blacklist: Json | null
+          token_whitelist: Json | null
+          trade_amount: number | null
           updated_at: string
           user_id: string
+          validation_rule_toggles: Json
         }
         Insert: {
-          category_filters?: string[]
+          category_filters?: Json | null
           created_at?: string
           id?: string
-          max_concurrent_trades?: number
-          min_liquidity?: number
-          priority?: Database["public"]["Enums"]["sniping_priority"]
-          profit_take_percentage?: number
-          stop_loss_percentage?: number
-          token_blacklist?: string[]
-          token_whitelist?: string[]
-          trade_amount?: number
+          max_concurrent_trades?: number | null
+          max_risk_score?: number | null
+          min_liquidity?: number | null
+          priority?: string | null
+          profit_take_percentage?: number | null
+          slippage_tolerance?: number | null
+          stop_loss_percentage?: number | null
+          target_buyer_positions?: Json | null
+          token_blacklist?: Json | null
+          token_whitelist?: Json | null
+          trade_amount?: number | null
           updated_at?: string
           user_id: string
+          validation_rule_toggles?: Json
         }
         Update: {
-          category_filters?: string[]
+          category_filters?: Json | null
           created_at?: string
           id?: string
-          max_concurrent_trades?: number
-          min_liquidity?: number
-          priority?: Database["public"]["Enums"]["sniping_priority"]
-          profit_take_percentage?: number
-          stop_loss_percentage?: number
-          token_blacklist?: string[]
-          token_whitelist?: string[]
-          trade_amount?: number
+          max_concurrent_trades?: number | null
+          max_risk_score?: number | null
+          min_liquidity?: number | null
+          priority?: string | null
+          profit_take_percentage?: number | null
+          slippage_tolerance?: number | null
+          stop_loss_percentage?: number | null
+          target_buyer_positions?: Json | null
+          token_blacklist?: Json | null
+          token_whitelist?: Json | null
+          trade_amount?: number | null
           updated_at?: string
           user_id?: string
+          validation_rule_toggles?: Json
+        }
+        Relationships: []
+      }
+      volume_authenticity_cache: {
+        Row: {
+          analyzed_at: string
+          circular_trade_count: number | null
+          created_at: string
+          expires_at: string
+          id: string
+          is_wash_trading: boolean | null
+          same_wallet_loop_count: number | null
+          sub_second_trade_count: number | null
+          token_address: string
+          top5_wallet_volume_percent: number | null
+          volume_score: number | null
+        }
+        Insert: {
+          analyzed_at?: string
+          circular_trade_count?: number | null
+          created_at?: string
+          expires_at?: string
+          id?: string
+          is_wash_trading?: boolean | null
+          same_wallet_loop_count?: number | null
+          sub_second_trade_count?: number | null
+          token_address: string
+          top5_wallet_volume_percent?: number | null
+          volume_score?: number | null
+        }
+        Update: {
+          analyzed_at?: string
+          circular_trade_count?: number | null
+          created_at?: string
+          expires_at?: string
+          id?: string
+          is_wash_trading?: boolean | null
+          same_wallet_loop_count?: number | null
+          sub_second_trade_count?: number | null
+          token_address?: string
+          top5_wallet_volume_percent?: number | null
+          volume_score?: number | null
+        }
+        Relationships: []
+      }
+      wallet_graph_cache: {
+        Row: {
+          analyzed_at: string
+          cluster_id: string | null
+          created_at: string
+          expires_at: string
+          funding_depth: number | null
+          funding_source: string | null
+          id: string
+          initial_funding_sol: number | null
+          is_fresh_wallet: boolean | null
+          wallet_address: string
+          wallet_age_hours: number | null
+        }
+        Insert: {
+          analyzed_at?: string
+          cluster_id?: string | null
+          created_at?: string
+          expires_at?: string
+          funding_depth?: number | null
+          funding_source?: string | null
+          id?: string
+          initial_funding_sol?: number | null
+          is_fresh_wallet?: boolean | null
+          wallet_address: string
+          wallet_age_hours?: number | null
+        }
+        Update: {
+          analyzed_at?: string
+          cluster_id?: string | null
+          created_at?: string
+          expires_at?: string
+          funding_depth?: number | null
+          funding_source?: string | null
+          id?: string
+          initial_funding_sol?: number | null
+          is_fresh_wallet?: boolean | null
+          wallet_address?: string
+          wallet_age_hours?: number | null
+        }
+        Relationships: []
+      }
+      wallet_screening_results: {
+        Row: {
+          created_at: string
+          expires_at: string
+          flags: Json | null
+          id: string
+          is_illicit: boolean | null
+          is_sanctioned: boolean | null
+          raw_response: Json | null
+          risk_level: string
+          risk_score: number
+          screened_at: string
+          screening_source: string | null
+          user_id: string
+          wallet_address: string
+        }
+        Insert: {
+          created_at?: string
+          expires_at?: string
+          flags?: Json | null
+          id?: string
+          is_illicit?: boolean | null
+          is_sanctioned?: boolean | null
+          raw_response?: Json | null
+          risk_level?: string
+          risk_score?: number
+          screened_at?: string
+          screening_source?: string | null
+          user_id: string
+          wallet_address: string
+        }
+        Update: {
+          created_at?: string
+          expires_at?: string
+          flags?: Json | null
+          id?: string
+          is_illicit?: boolean | null
+          is_sanctioned?: boolean | null
+          raw_response?: Json | null
+          risk_level?: string
+          risk_score?: number
+          screened_at?: string
+          screening_source?: string | null
+          user_id?: string
+          wallet_address?: string
         }
         Relationships: []
       }
@@ -956,24 +1625,13 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      add_credits: {
-        Args: { _amount: number; _tx_id?: string; _user_id: string }
-        Returns: Json
+      cleanup_old_api_health_metrics: { Args: never; Returns: undefined }
+      credit_referral_bonus: {
+        Args: { bonus_amount: number; target_user_id: string }
+        Returns: undefined
       }
-      deduct_credits: {
-        Args: {
-          _action_type: string
-          _amount: number
-          _reference_id?: string
-          _user_id: string
-        }
-        Returns: Json
-      }
-      get_subscription_with_usage: { Args: { _user_id: string }; Returns: Json }
-      get_user_role: {
-        Args: { _user_id: string }
-        Returns: Database["public"]["Enums"]["app_role"]
-      }
+      get_credit_costs: { Args: never; Returns: Json }
+      get_payment_wallet: { Args: never; Returns: string }
       has_role: {
         Args: {
           _role: Database["public"]["Enums"]["app_role"]
@@ -981,37 +1639,9 @@ export type Database = {
         }
         Returns: boolean
       }
-      increment_usage: {
-        Args: { _amount?: number; _field: string; _user_id: string }
-        Returns: number
-      }
     }
     Enums: {
-      api_status: "active" | "inactive" | "error" | "rate_limited"
-      api_type:
-        | "dexscreener"
-        | "geckoterminal"
-        | "birdeye"
-        | "dextools"
-        | "honeypot_rugcheck"
-        | "liquidity_lock"
-        | "trade_execution"
-        | "rpc_provider"
-        | "raydium"
       app_role: "admin" | "user"
-      coupon_discount_type: "percent" | "flat"
-      coupon_duration: "once" | "three_months" | "lifetime"
-      credit_tx_status: "pending" | "confirmed" | "failed" | "expired"
-      position_status: "open" | "closed" | "pending"
-      sniping_priority: "normal" | "fast" | "turbo"
-      subscription_status:
-        | "active"
-        | "trialing"
-        | "past_due"
-        | "canceled"
-        | "unpaid"
-        | "expired"
-      subscription_tier: "free" | "pro" | "elite"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -1139,33 +1769,7 @@ export type CompositeTypes<
 export const Constants = {
   public: {
     Enums: {
-      api_status: ["active", "inactive", "error", "rate_limited"],
-      api_type: [
-        "dexscreener",
-        "geckoterminal",
-        "birdeye",
-        "dextools",
-        "honeypot_rugcheck",
-        "liquidity_lock",
-        "trade_execution",
-        "rpc_provider",
-        "raydium",
-      ],
       app_role: ["admin", "user"],
-      coupon_discount_type: ["percent", "flat"],
-      coupon_duration: ["once", "three_months", "lifetime"],
-      credit_tx_status: ["pending", "confirmed", "failed", "expired"],
-      position_status: ["open", "closed", "pending"],
-      sniping_priority: ["normal", "fast", "turbo"],
-      subscription_status: [
-        "active",
-        "trialing",
-        "past_due",
-        "canceled",
-        "unpaid",
-        "expired",
-      ],
-      subscription_tier: ["free", "pro", "elite"],
     },
   },
 } as const

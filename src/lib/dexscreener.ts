@@ -205,13 +205,14 @@ export async function fetchDexScreenerTokenMetadata(
     }
   }
   
-  // For addresses still missing after DexScreener, try Birdeye API (free, no rate limits)
+  // For addresses still missing after DexScreener, try Solana RPC metadata or Solscan (free alternatives)
+  // NOTE: Birdeye REMOVED - using free alternatives instead
   const stillMissing = stillNeeded.filter(a => !result.has(a));
   if (stillMissing.length > 0) {
     try {
-      // Birdeye's token info endpoint (free tier, rate limited but not as aggressive)
+      // Try Solscan API (free tier, no key required for basic token info)
       for (const addr of stillMissing.slice(0, 5)) { // Limit to 5
-        const res = await fetch(`https://public-api.birdeye.so/public/tokeninfo?address=${addr}`, {
+        const res = await fetch(`https://api.solscan.io/token/meta?token=${addr}`, {
           headers: { 'Accept': 'application/json' },
           signal: AbortSignal.timeout(3000),
         });
@@ -229,7 +230,7 @@ export async function fetchDexScreenerTokenMetadata(
         await new Promise(r => setTimeout(r, 200));
       }
     } catch {
-      // Ignore Birdeye errors
+      // Ignore Solscan errors - best effort
     }
   }
 

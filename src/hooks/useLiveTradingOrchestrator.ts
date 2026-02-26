@@ -11,7 +11,7 @@
  * This is the SINGLE ENTRY POINT for all live trades.
  */
 
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useRef, useState, useEffect } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useWallet } from '@/hooks/useWallet';
 import { useWalletModal } from '@/hooks/useWalletModal';
@@ -19,8 +19,24 @@ import { useTradingEngine } from '@/hooks/useTradingEngine';
 import { usePositions } from '@/hooks/usePositions';
 import { useSniperSettings, SniperSettings } from '@/hooks/useSniperSettings';
 import { useToast } from '@/hooks/use-toast';
+import { useTokenStateManager } from '@/hooks/useTokenStateManager';
 import { addBotLog } from '@/components/scanner/BotActivityLog';
 import { isPlaceholderText } from '@/lib/formatters';
+import { useCredits } from '@/hooks/useCredits';
+import { validateSwapRoute } from '@/lib/routeValidator';
+import { quickLiquidityCheck } from '@/lib/liquidityMonitor';
+import { parseSolDelta } from '@/lib/solDeltaParser';
+import { startPostBuyMonitor } from '@/lib/postBuyMonitor';
+import {
+  canExecuteToken,
+  recordExecutionAttempt,
+  acquireExecutionLock,
+  releaseExecutionLock,
+  isAutoBlacklisted,
+  recordSwapFailure,
+  verifySellRoute,
+  isScamTokenName,
+} from '@/lib/executionGuard';
 import type { TradingFlowResult } from '@/lib/trading-engine';
 
 // Approved token from auto-sniper
@@ -64,13 +80,23 @@ const TRADE_COOLDOWN_MS = 2000; // Minimum 2 seconds between trades (system limi
 const MAX_CONCURRENT_TRADES = 1; // Execute one at a time for wallet safety
 
 export function useLiveTradingOrchestrator() {
-  const { wallet, signAndSendTransaction, refreshBalance } = useWallet();
+  const { wallet, signAndSendTransaction, refreshBalance, scheduleBalanceRefresh } = useWallet();
   const { openModal: openWalletModal } = useWalletModal();
   const tradingEngine = useTradingEngine();
   const { snipeToken, exitPosition, createConfig } = tradingEngine;
-  const { createPosition, fetchPositions } = usePositions();
+  const { createPosition, fetchPositions, openPositions } = usePositions();
   const { settings } = useSniperSettings();
   const { toast } = useToast();
+  const { canAfford, deductCreditsAsync, hasCredits: userHasCredits, isAdmin: isAdminUser } = useCredits();
+  
+  // CRITICAL: Persistent token state manager - survives restarts
+  const {
+    initialized: tokenStatesInitialized,
+    canTradeToken,
+    markTraded,
+    markPending,
+    markRejected,
+  } = useTokenStateManager();
 
   const [state, setState] = useState<OrchestratorState>({
     isExecuting: false,
@@ -85,6 +111,18 @@ export function useLiveTradingOrchestrator() {
   // CRITICAL: Use ref for executedTokens to prevent stale closure issues
   // This ensures deduplication works correctly across all callbacks
   const executedTokensRef = useRef<Set<string>>(new Set());
+  
+  // CRITICAL: Track active position addresses from database to prevent duplicate trades
+  // This persists across sessions unlike executedTokensRef which is session-only
+  const activePositionAddressesRef = useRef<Set<string>>(new Set());
+  
+  // Keep activePositionAddressesRef synced with database positions
+  useEffect(() => {
+    const addresses = new Set(openPositions.map(p => p.token_address.toLowerCase()));
+    activePositionAddressesRef.current = addresses;
+    console.log(`[Orchestrator] Synced ${addresses.size} active position addresses for deduplication`);
+  }, [openPositions]);
+
 
   /**
    * Validate prerequisites for live trading
@@ -108,6 +146,11 @@ export function useLiveTradingOrchestrator() {
       return { valid: false, error: 'Trading settings not loaded' };
     }
 
+    // Check credit balance (admins bypass)
+    if (!isAdminUser && !userHasCredits) {
+      return { valid: false, error: 'Insufficient credits — purchase more to trade' };
+    }
+
     return { valid: true };
   }, [wallet, settings]);
 
@@ -123,16 +166,19 @@ export function useLiveTradingOrchestrator() {
     }
 
     // CRITICAL: Pre-validate token is sellable before executing buy
-    if (token.isTradeable === false || token.canBuy === false) {
+    // Must be EXPLICITLY true — undefined means scanner couldn't confirm, so block
+    // TOCTOU FIX: This is the FINAL check right before execution — captures any state
+    // changes that occurred between gate evaluation and actual execution
+    if (token.isTradeable !== true || token.canBuy !== true) {
       addBotLog({
         level: 'warning',
         category: 'trade',
         message: `⚠️ Skipped: ${token.symbol} (not tradeable)`,
         tokenSymbol: token.symbol,
         tokenAddress: token.address,
-        details: `Token cannot be traded - rejected before execution`,
+        details: `Token tradeability not confirmed — isTradeable: ${token.isTradeable}, canBuy: ${token.canBuy}. This may be a TOCTOU race where scanner data refreshed between gate evaluation and execution.`,
       });
-      return { success: false, error: 'Token not tradeable' };
+      return { success: false, error: 'Token not tradeable (TOCTOU check)' };
     }
 
     // Prepare trade context for logging
@@ -183,11 +229,69 @@ export function useLiveTradingOrchestrator() {
       });
 
       // Execute via 3-stage trading engine
+      // CRITICAL: MANDATORY sell simulation before every buy — no exceptions
+      // This replaces the old optional re-check and ensures bidirectional route integrity
+      addBotLog({
+        level: 'info',
+        category: 'trade',
+        message: `🔄 Mandatory sell simulation: ${token.symbol}`,
+        tokenSymbol: token.symbol,
+        tokenAddress: token.address,
+        details: 'Verifying bidirectional route (buy + sell) before execution...',
+      });
+
+      const sellVerification = await verifySellRoute(token.address);
+      
+      const hasValidRoute = token.isTradeable === true && 
+                            token.canBuy === true &&
+                            sellVerification.canSell;
+      
+      if (!hasValidRoute) {
+        const failReason = !sellVerification.canSell 
+          ? `Sell route failed: ${sellVerification.error}` 
+          : `isTradeable: ${token.isTradeable}, canBuy: ${token.canBuy}`;
+        
+        addBotLog({
+          level: 'warning',
+          category: 'trade',
+          message: `🚫 Route not confirmed: ${token.symbol}`,
+          tokenSymbol: token.symbol,
+          tokenAddress: token.address,
+          details: `${failReason} — bidirectional validation required`,
+        });
+        return { success: false, error: failReason };
+      }
+
+      addBotLog({
+        level: 'success',
+        category: 'trade',
+        message: `✅ Sell route confirmed (${sellVerification.source}): ${token.symbol}`,
+        tokenSymbol: token.symbol,
+        tokenAddress: token.address,
+      });
+      
+      // Deduct credits BEFORE executing trade (admins bypass via hook)
+      try {
+        await deductCreditsAsync({ actionType: 'auto_execution', referenceId: token.address });
+      } catch (creditErr: any) {
+        return { success: false, error: creditErr.message || 'Credit deduction failed' };
+      }
+
       const result = await snipeToken(
         token.address,
         wallet.address,
         signAndSendTransaction,
-        config
+        config,
+        {
+          symbol: token.symbol,
+          name: token.name,
+          liquidity: token.liquidity,
+          priceUsd: token.priceUsd,
+          buyerPosition: token.buyerPosition ?? undefined,
+          isPumpFun: token.isPumpFun,
+          source: token.source,
+          hasJupiterRoute: true, // Guaranteed true by the check above
+        }
       );
 
       if (!result) {
@@ -243,6 +347,232 @@ export function useLiveTradingOrchestrator() {
             tokenSymbol: finalSymbol,
             tokenAddress: token.address,
             details: `🪙 Token: ${finalName} (${finalSymbol})\n💧 Liquidity: ${liquidityTextSuccess} | 👤 Buyer Pos: ${buyerPosTextSuccess} | 🛡️ Safety: ${safetyScoreTextSuccess}\nEntry: $${position.entryPrice.toFixed(8)} | Tokens: ${position.tokenAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })} | Value: $${entryValueUsd.toFixed(4)} | SOL: ${position.solSpent.toFixed(4)}\n🔗 TX: ${txHashFull}`,
+          });
+
+          // ==========================================
+          // POST-BUY: Dual-RPC Delta Validation
+          // ==========================================
+          if (position.entryTxHash) {
+            try {
+              addBotLog({
+                level: 'info',
+                category: 'trade',
+                message: `🔍 Validating transaction: ${finalSymbol}`,
+                tokenSymbol: finalSymbol,
+                tokenAddress: token.address,
+                details: 'Running dual-RPC delta validation...',
+              });
+
+              const deltaResult = await parseSolDelta({
+                signature: position.entryTxHash,
+                walletAddress: wallet.address,
+                tradeType: 'buy',
+                expectedAmount: position.solSpent,
+              });
+
+              if (deltaResult.isCorrupted) {
+                addBotLog({
+                  level: 'warning',
+                  category: 'trade',
+                  message: `⚠️ TX Validation Warning: ${finalSymbol}`,
+                  tokenSymbol: finalSymbol,
+                  tokenAddress: token.address,
+                  details: `Reason: ${deltaResult.corruptionReason}\nActual SOL spent: ${deltaResult.solSpent.toFixed(6)}`,
+                });
+              } else {
+                addBotLog({
+                  level: 'success',
+                  category: 'trade',
+                  message: `✓ TX Validated: ${finalSymbol}`,
+                  tokenSymbol: finalSymbol,
+                  tokenAddress: token.address,
+                  details: `SOL spent: ${deltaResult.solSpent.toFixed(6)} | Fee: ${deltaResult.fee.toFixed(6)}`,
+                });
+              }
+            } catch (deltaError) {
+              console.error('[Orchestrator] Delta validation error:', deltaError);
+            }
+          }
+
+          // ==========================================
+          // POST-BUY: Liquidity Revalidation
+          // ==========================================
+          try {
+            addBotLog({
+              level: 'info',
+              category: 'trade',
+              message: `💧 Post-buy liquidity check: ${finalSymbol}`,
+              tokenSymbol: finalSymbol,
+              tokenAddress: token.address,
+              details: 'Verifying liquidity stability after buy...',
+            });
+
+            const postBuyLiquidity = await quickLiquidityCheck(token.address, token.liquidity);
+            
+            if (!postBuyLiquidity.stable) {
+              addBotLog({
+                level: 'warning',
+                category: 'trade',
+                message: `⚠️ Liquidity dropped post-buy: ${finalSymbol}`,
+                tokenSymbol: finalSymbol,
+                tokenAddress: token.address,
+                details: `Drop: ${postBuyLiquidity.liquidityDropPercent.toFixed(1)}% | ${postBuyLiquidity.blockReason || 'Monitor closely'}`,
+              });
+            } else {
+              addBotLog({
+                level: 'success',
+                category: 'trade',
+                message: `✓ Liquidity stable: ${finalSymbol}`,
+                tokenSymbol: finalSymbol,
+                tokenAddress: token.address,
+                details: `Current liquidity: $${postBuyLiquidity.snapshots[0]?.liquidityUsd?.toFixed(0) || 'N/A'}`,
+              });
+            }
+          } catch (liqError) {
+            console.error('[Orchestrator] Post-buy liquidity check error:', liqError);
+          }
+
+          // ==========================================
+          // CRITICAL: Log BUY to trade_history via confirm-transaction
+          // This ensures buyer_position, liquidity, risk_score are recorded
+          // ==========================================
+          if (position.entryTxHash && savedPosition?.id) {
+            try {
+              await supabase.functions.invoke('confirm-transaction', {
+                body: {
+                  signature: position.entryTxHash,
+                  positionId: savedPosition.id,
+                  action: 'buy',
+                  walletAddress: wallet.address,
+                  solSpent: position.solSpent,
+                  tokenAddress: token.address,
+                  tokenSymbol: finalSymbol,
+                  tokenName: finalName,
+                  amount: position.tokenAmount,
+                  // Pass all discovery metadata
+                  buyerPosition: token.buyerPosition ?? undefined,
+                  liquidity: token.liquidity ?? undefined,
+                  riskScore: token.riskScore ?? undefined,
+                  entryPrice: position.entryPrice,
+                  slippage: settings.slippage_tolerance || 15,
+                },
+              });
+              console.log(`[Orchestrator] BUY logged to trade_history: ${finalSymbol} buyer#=${token.buyerPosition || 'N/A'}`);
+            } catch (confirmErr) {
+              console.warn('[Orchestrator] confirm-transaction failed (non-blocking):', confirmErr);
+            }
+          }
+
+          // ==========================================
+          // UPGRADE 5: POST-BUY EMERGENCY MONITOR
+          // ==========================================
+          // Start 60-second monitoring with checkpoints at +15s and +45s
+          startPostBuyMonitor({
+            tokenAddress: token.address,
+            tokenSymbol: finalSymbol,
+            positionId: savedPosition?.id,
+            entryLiquidityUsd: token.liquidity || 0,
+            tokenAmount: position.tokenAmount,
+            onEmergencyExit: async (reason: string) => {
+              addBotLog({
+                level: 'error',
+                category: 'trade',
+                message: `🚨 Emergency auto-exit triggered: ${finalSymbol}`,
+                tokenSymbol: finalSymbol,
+                tokenAddress: token.address,
+                details: `Reason: ${reason}\nAttempting immediate sell via Jupiter...`,
+              });
+              
+              try {
+                // CRITICAL FIX: Actually attempt to SELL the token before closing position
+                // Previously only marked as closed without executing sell
+                if (savedPosition?.id && wallet.address) {
+                  addBotLog({
+                    level: 'warning',
+                    category: 'trade',
+                    message: `🔄 Executing emergency sell: ${finalSymbol}`,
+                    tokenSymbol: finalSymbol,
+                    tokenAddress: token.address,
+                    details: `Attempting Jupiter swap to exit position...`,
+                  });
+                  
+                  try {
+                    const exitResult = await exitPosition(
+                      token.address,
+                      position.tokenAmount,
+                      wallet.address,
+                      signAndSendTransaction,
+                      createConfig({ buyAmount: 0, slippage: 0.25, priorityFee: 0.005 })
+                    );
+                    
+                    if (exitResult?.success && exitResult.txHash) {
+                      // Confirm the sell transaction
+                      await supabase.functions.invoke('confirm-transaction', {
+                        body: {
+                          signature: exitResult.txHash,
+                          positionId: savedPosition.id,
+                          action: 'sell',
+                          walletAddress: wallet.address,
+                          tokenAddress: token.address,
+                          tokenSymbol: finalSymbol,
+                          tokenName: finalName,
+                        },
+                      });
+                      
+                      addBotLog({
+                        level: 'success',
+                        category: 'trade',
+                        message: `✅ Emergency sell executed: ${finalSymbol}`,
+                        tokenSymbol: finalSymbol,
+                        tokenAddress: token.address,
+                        details: `TX: ${exitResult.txHash}`,
+                      });
+                      
+                      scheduleBalanceRefresh();
+                      fetchPositions();
+                    } else {
+                      throw new Error(exitResult?.error || 'Exit returned non-success');
+                    }
+                  } catch (sellError) {
+                    console.error('[Orchestrator] Emergency sell failed, force-closing:', sellError);
+                    // Sell failed - force close position to prevent stuck state
+                    await supabase
+                      .from('positions')
+                      .update({ 
+                        status: 'closed', 
+                        exit_reason: `EMERGENCY_SELL_FAILED: ${reason}`,
+                        closed_at: new Date().toISOString(),
+                      })
+                      .eq('id', savedPosition.id);
+                    
+                    addBotLog({
+                      level: 'error',
+                      category: 'trade',
+                      message: `❌ Emergency sell failed: ${finalSymbol}`,
+                      tokenSymbol: finalSymbol,
+                      tokenAddress: token.address,
+                      details: `Sell failed: ${sellError instanceof Error ? sellError.message : 'unknown'}. Position force-closed.`,
+                    });
+                  }
+                }
+                
+                // Log to risk_check_logs for audit trail
+                const { data: { session: authSession } } = await supabase.auth.getSession();
+                if (authSession) {
+                  await supabase.from('risk_check_logs').insert({
+                    token_address: token.address,
+                    token_symbol: finalSymbol,
+                    user_id: authSession.user.id,
+                    risk_score: 0,
+                    passed_checks: false,
+                    rejection_reasons: [`POST_BUY_EMERGENCY: ${reason}`],
+                    metadata: { type: 'POST_BUY_EMERGENCY_EXIT' } as any,
+                  });
+                }
+              } catch (exitError) {
+                console.error('[Orchestrator] Emergency exit error:', exitError);
+              }
+            },
           });
 
           return {
@@ -315,9 +645,117 @@ export function useLiveTradingOrchestrator() {
       const token = queueRef.current.shift();
       if (!token) break;
 
+      const tokenAddrLower = token.address.toLowerCase();
+      
       // Skip if already executed - use ref for stable closure access
       if (executedTokensRef.current.has(token.address)) {
         continue;
+      }
+      
+      // EXECUTION GUARD: Auto-blacklist check
+      if (isAutoBlacklisted(token.address)) {
+        addBotLog({
+          level: 'warning',
+          category: 'trade',
+          message: `🚫 Auto-blacklisted: ${token.symbol}`,
+          tokenSymbol: token.symbol,
+          tokenAddress: token.address,
+          details: 'Token blocked after 3+ consecutive failed swap attempts',
+        });
+        executedTokensRef.current.add(token.address);
+        continue;
+      }
+      
+      // EXECUTION GUARD: Suspicious token name detection
+      const scamCheck = isScamTokenName(token.name, token.symbol);
+      if (scamCheck.suspicious) {
+        addBotLog({
+          level: 'warning',
+          category: 'trade',
+          message: `🚫 Suspicious name blocked: ${token.symbol}`,
+          tokenSymbol: token.symbol,
+          tokenAddress: token.address,
+          details: scamCheck.reason || 'Token name matches known scam patterns',
+        });
+        executedTokensRef.current.add(token.address);
+        continue;
+      }
+
+      // EXECUTION GUARD: Token cooldown lock
+      if (!canExecuteToken(token.address)) {
+        addBotLog({
+          level: 'info',
+          category: 'trade',
+          message: `⏳ Cooldown active: ${token.symbol} — skipped`,
+          tokenSymbol: token.symbol,
+          tokenAddress: token.address,
+        });
+        continue;
+      }
+      
+      // EXECUTION GUARD: Idempotency — prevent concurrent execution of same token
+      if (!acquireExecutionLock(token.address)) {
+        addBotLog({
+          level: 'warning',
+          category: 'trade',
+          message: `⏭️ Already executing: ${token.symbol}`,
+          tokenSymbol: token.symbol,
+          tokenAddress: token.address,
+        });
+        continue;
+      }
+      
+      // CRITICAL: Skip if token already has an active position in database
+      // This prevents duplicate buys across sessions
+      if (activePositionAddressesRef.current.has(tokenAddrLower)) {
+        addBotLog({
+          level: 'warning',
+          category: 'trade',
+          message: `⏭️ Skipped: ${token.symbol} (already in active positions)`,
+          tokenSymbol: token.symbol,
+          tokenAddress: token.address,
+          details: 'Token already has an open position - skipping to avoid duplicate buy',
+        });
+        continue;
+      }
+      
+      // CRITICAL: Check persistent token state - prevents duplicate trades across restarts
+      if (tokenStatesInitialized && !canTradeToken(token.address)) {
+        addBotLog({
+          level: 'warning',
+          category: 'trade',
+          message: `⏭️ Skipped: ${token.symbol} (state blocked)`,
+          tokenSymbol: token.symbol,
+          tokenAddress: token.address,
+          details: 'Token is TRADED, REJECTED, or PENDING - cannot execute',
+        });
+        continue;
+      }
+      
+      // CRITICAL SAFEGUARD: Direct database check for PENDING state
+      // This catches race conditions where state cache might be stale
+      try {
+        const { data: stateRecord } = await supabase
+          .from('token_processing_states')
+          .select('state, pending_reason')
+          .eq('token_address', tokenAddrLower)
+          .maybeSingle();
+        
+        if (stateRecord && (stateRecord.state === 'PENDING' || stateRecord.state === 'TRADED' || stateRecord.state === 'REJECTED')) {
+          addBotLog({
+            level: 'warning',
+            category: 'trade',
+            message: `⏭️ Skipped: ${token.symbol} (DB state: ${stateRecord.state})`,
+            tokenSymbol: token.symbol,
+            tokenAddress: token.address,
+            details: stateRecord.pending_reason || `Token state is ${stateRecord.state} - blocked by database check`,
+          });
+          executedTokensRef.current.add(token.address);
+          continue;
+        }
+      } catch (dbCheckError) {
+        console.error('[Orchestrator] DB state check failed:', dbCheckError);
+        // On error, proceed cautiously - the cache check should have caught it
       }
 
       // Enforce cooldown
@@ -326,13 +764,79 @@ export function useLiveTradingOrchestrator() {
         await new Promise(r => setTimeout(r, TRADE_COOLDOWN_MS - timeSinceLastTrade));
       }
 
+      // TOCTOU FIX: Route validation uses a snapshot — if token was already validated
+      // at queue time via the pre-execution gate, we trust that result and only do
+      // a lightweight re-check here to catch liquidity pulls between gate and execution
+      addBotLog({
+        level: 'info',
+        category: 'trade',
+        message: `🔍 Re-validating swap route: ${token.symbol}`,
+        tokenSymbol: token.symbol,
+        tokenAddress: token.address,
+        details: 'Lightweight re-check (TOCTOU protection)...',
+      });
+
+      const routeValidation = await validateSwapRoute(token.address, {
+        timeoutMs: 8000,
+        checkBothParallel: true,
+        checkIndexing: true,
+      });
+
+      // CRITICAL: Block tokens awaiting indexing - too new to trade safely
+      if (routeValidation.isAwaitingIndexing) {
+        addBotLog({
+          level: 'warning',
+          category: 'trade',
+          message: `⏳ Awaiting indexing: ${token.symbol} - skipped`,
+          tokenSymbol: token.symbol,
+          tokenAddress: token.address,
+          details: 'Token is too new and not yet indexed on DEX aggregators.\nWill retry once indexing completes.',
+        });
+        
+        // Mark as PENDING for retry later when indexed
+        await markPending(token.address, 'awaiting_indexing');
+        executedTokensRef.current.add(token.address); // Prevent immediate retry
+        continue;
+      }
+
+      if (!routeValidation.hasRoute) {
+        addBotLog({
+          level: 'warning',
+          category: 'trade',
+          message: `🚫 No route: ${token.symbol} - skipped`,
+          tokenSymbol: token.symbol,
+          tokenAddress: token.address,
+          details: `Jupiter: ${routeValidation.jupiter ? '✓' : '✗'} | Raydium: ${routeValidation.raydium ? '✓' : '✗'}\n${routeValidation.error || 'No active swap route on either DEX'}`,
+        });
+        
+        // Mark as PENDING for retry later
+        await markPending(token.address, 'no_route');
+        executedTokensRef.current.add(token.address); // Prevent immediate retry
+        continue;
+      }
+
+      addBotLog({
+        level: 'success',
+        category: 'trade',
+        message: `✓ Route found: ${token.symbol} via ${routeValidation.source}`,
+        tokenSymbol: token.symbol,
+        tokenAddress: token.address,
+        details: `Jupiter: ${routeValidation.jupiter ? '✓' : '✗'} | Raydium: ${routeValidation.raydium ? '✓' : '✗'} | Indexed: ✓`,
+      });
+
       setState(prev => ({
         ...prev,
         isExecuting: true,
         currentToken: token.address,
       }));
 
+      // Record execution attempt for cooldown tracking
+      recordExecutionAttempt(token.address);
+
       const result = await executeSingleTrade(token, settings!);
+
+      // ALWAYS release execution lock after trade completes
+      releaseExecutionLock(token.address);
 
       // Mark as executed regardless of result - use ref for immediate effect
       executedTokensRef.current.add(token.address);
@@ -342,15 +846,44 @@ export function useLiveTradingOrchestrator() {
       }));
 
       if (result.success) {
+        // CRITICAL: Mark token as TRADED in persistent state (survives restarts)
+        await markTraded(token.address, result.txHash, result.positionId);
+        
         toast({
           title: `🎯 Trade Executed: ${token.symbol}`,
           description: `Entry: $${result.entryPrice?.toFixed(8)} | TX: ${result.txHash?.slice(0, 8)}...`,
         });
         
-        // Refresh balance after trade
-        refreshBalance();
+        // CRITICAL: Multi-stage balance refresh for proper UI sync after transaction
+        scheduleBalanceRefresh();
         fetchPositions();
       } else {
+        // EXECUTION GUARD: Track failure and auto-blacklist after N failures
+        const failResult = recordSwapFailure(token.address, result.error || 'unknown');
+        
+        if (failResult.blacklisted) {
+          addBotLog({
+            level: 'error',
+            category: 'trade',
+            message: `🚫 Auto-blacklisted: ${token.symbol}`,
+            tokenSymbol: token.symbol,
+            tokenAddress: token.address,
+            details: `Blacklisted after ${failResult.failureCount} consecutive failures. Token will not be retried.`,
+          });
+          await markRejected(token.address, `auto_blacklisted_${failResult.failureCount}_failures`);
+        } else {
+          // Check if failure is due to liquidity/route issue - mark as PENDING for retry
+          const isLiquidityIssue = result.error?.toLowerCase().includes('no route') || 
+            result.error?.toLowerCase().includes('no liquidity') ||
+            result.error?.toLowerCase().includes('insufficient liquidity');
+          
+          if (isLiquidityIssue) {
+            await markPending(token.address, 'no_route');
+          } else {
+            await markRejected(token.address, result.error?.slice(0, 100) || 'unknown_error');
+          }
+        }
+        
         toast({
           title: `Trade Failed: ${token.symbol}`,
           description: result.error || 'Unknown error',
@@ -366,17 +899,48 @@ export function useLiveTradingOrchestrator() {
     }));
     
     executingRef.current = false;
-  }, [validatePrerequisites, state.lastTradeTime, settings, executeSingleTrade, toast, refreshBalance, fetchPositions, openWalletModal]);
+  }, [validatePrerequisites, state.lastTradeTime, settings, executeSingleTrade, toast, scheduleBalanceRefresh, fetchPositions, openWalletModal, tokenStatesInitialized, canTradeToken, markTraded, markPending, markRejected]);
 
   /**
    * Queue approved tokens for execution
    */
   const queueTokens = useCallback((tokens: ApprovedToken[]) => {
-    // Filter out already executed or queued tokens - use ref for stable access
-    const newTokens = tokens.filter(t => 
-      !executedTokensRef.current.has(t.address) &&
-      !queueRef.current.some(q => q.address === t.address)
-    );
+    // Filter out already executed, queued, OR having active positions
+    const newTokens = tokens.filter(t => {
+      const addrLower = t.address.toLowerCase();
+      
+      // Skip if already executed this session
+      if (executedTokensRef.current.has(t.address)) return false;
+      
+      // Skip if already in queue
+      if (queueRef.current.some(q => q.address === t.address)) return false;
+      
+      // CRITICAL: Skip if token already has an active position in database
+      if (activePositionAddressesRef.current.has(addrLower)) {
+        console.log(`[Orchestrator] Filtered out ${t.symbol} - already in active positions`);
+        return false;
+      }
+      
+      // CRITICAL: Check persistent token state - prevents duplicate trades across restarts
+      if (tokenStatesInitialized && !canTradeToken(t.address)) {
+        console.log(`[Orchestrator] Filtered out ${t.symbol} - persistent state: TRADED/REJECTED`);
+        return false;
+      }
+      
+      // EXECUTION GUARD: Skip auto-blacklisted tokens
+      if (isAutoBlacklisted(t.address)) {
+        console.log(`[Orchestrator] Filtered out ${t.symbol} - auto-blacklisted`);
+        return false;
+      }
+      
+      // EXECUTION GUARD: Skip tokens in cooldown
+      if (!canExecuteToken(t.address)) {
+        console.log(`[Orchestrator] Filtered out ${t.symbol} - cooldown active`);
+        return false;
+      }
+      
+      return true;
+    });
 
     if (newTokens.length === 0) return;
 
@@ -395,7 +959,7 @@ export function useLiveTradingOrchestrator() {
 
     // Start processing
     processQueue();
-  }, [processQueue]);
+  }, [processQueue, tokenStatesInitialized, canTradeToken]);
 
   /**
    * Execute immediate trade (bypass queue)

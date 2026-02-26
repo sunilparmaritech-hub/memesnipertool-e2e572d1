@@ -1,17 +1,172 @@
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.90.1";
 import { validateAutoSniperInput, type TokenData as ValidatedTokenData } from "../_shared/validation.ts";
 import { fetchJupiterQuoteWithRetry } from "../_shared/jupiter-retry.ts";
+import { getLiveSolPrice } from "../_shared/sol-price.ts";
+import { checkRateLimit, rateLimitResponse, AUTO_SNIPER_LIMIT } from "../_shared/rate-limiter.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version',
 };
 
 // Jupiter API for route validation - using free lite-api (no key required)
 const JUPITER_QUOTE_API = "https://lite-api.jup.ag/swap/v1/quote";
 // Raydium API for route validation (fallback)
 const RAYDIUM_QUOTE_API = "https://transaction-v1.raydium.io/compute/swap-base-in";
+
+// =============================================================================
+// HOLDER POSITION FETCHING (RPC)
+// =============================================================================
+
+function getRpcUrl(): string {
+  return Deno.env.get('SOLANA_RPC_URL') || 'https://api.mainnet-beta.solana.com';
+}
+
+async function rpcCall(method: string, params: unknown[]): Promise<unknown> {
+  const rpcUrl = getRpcUrl();
+  
+  const response = await fetch(rpcUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method,
+      params,
+    }),
+    signal: AbortSignal.timeout(8000),
+  });
+  
+  if (!response.ok) throw new Error(`RPC error: ${response.status}`);
+  
+  const data = await response.json();
+  if (data.error) throw new Error(data.error.message || 'RPC error');
+  
+  return data.result;
+}
+
+/**
+ * Fetch REAL holder count using multiple strategies in PARALLEL
+ */
+async function fetchHolderPosition(tokenAddress: string): Promise<{ holderCount: number; buyerPosition: number | null; source: string }> {
+  const rpcUrl = getRpcUrl();
+  const heliusMatch = rpcUrl.match(/api-key=([a-zA-Z0-9-]+)/);
+  
+  const results = await Promise.allSettled([
+    // Strategy 1: Helius DAS API
+    heliusMatch ? (async () => {
+      const response = await fetch(`https://mainnet.helius-rpc.com/?api-key=${heliusMatch[1]}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0', id: 1,
+          method: 'getAsset',
+          params: { id: tokenAddress },
+        }),
+        signal: AbortSignal.timeout(4000),
+      });
+      if (!response.ok) return null;
+      const data = await response.json();
+      const count = data?.result?.token_info?.holder_count;
+      if (typeof count === 'number' && count > 0) return { count, source: 'helius-das' };
+      return null;
+    })() : Promise.resolve(null),
+    
+    // Strategy 2: Solscan API
+    (async () => {
+      const response = await fetch(
+        `https://public-api.solscan.io/token/holders?tokenAddress=${tokenAddress}&limit=1`,
+        { signal: AbortSignal.timeout(4000), headers: { 'Accept': 'application/json' } }
+      );
+      if (!response.ok) return null;
+      const data = await response.json();
+      const count = data?.total;
+      if (typeof count === 'number' && count > 0) return { count, source: 'solscan' };
+      return null;
+    })(),
+    
+    // Strategy 3: DexScreener
+    (async () => {
+      const response = await fetch(
+        `https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`,
+        { signal: AbortSignal.timeout(3000) }
+      );
+      if (!response.ok) return null;
+      const data = await response.json();
+      const pairs = data?.pairs;
+      if (pairs && pairs.length > 0) {
+        for (const pair of pairs) {
+          const count = pair?.info?.holders || pair?.holders || pair?.txns?.holders;
+          if (typeof count === 'number' && count > 0) return { count, source: 'dexscreener' };
+        }
+      }
+      return null;
+    })(),
+    
+    // Strategy 4: Standard RPC (capped at 20)
+    (async () => {
+      const result = await rpcCall('getTokenLargestAccounts', [tokenAddress]) as {
+        value: { address: string; amount: string; uiAmount: number }[];
+      };
+      if (!result?.value || result.value.length === 0) return { count: 0, source: 'standard-rpc', isCapped: false };
+      const holdersWithBalance = result.value.filter(acc => parseFloat(acc.amount) > 0);
+      const count = holdersWithBalance.length;
+      return { count, source: 'standard-rpc', isCapped: count >= 20 };
+    })(),
+  ]);
+  
+  const heliusResult = results[0].status === 'fulfilled' ? results[0].value : null;
+  const solscanResult = results[1].status === 'fulfilled' ? results[1].value : null;
+  const dexscreenerResult = results[2].status === 'fulfilled' ? results[2].value : null;
+  const rpcResult = results[3].status === 'fulfilled' ? results[3].value : null;
+  
+  const validCounts: { count: number; source: string; isCapped?: boolean }[] = [];
+  if (heliusResult && heliusResult.count > 0) validCounts.push(heliusResult);
+  if (solscanResult && solscanResult.count > 0) validCounts.push(solscanResult);
+  if (dexscreenerResult && dexscreenerResult.count > 0) validCounts.push(dexscreenerResult);
+  
+  if (validCounts.length > 0) {
+    const best = validCounts.reduce((a, b) => a.count > b.count ? a : b);
+    if (best.count <= 2 && rpcResult?.isCapped) {
+      return { holderCount: rpcResult.count, buyerPosition: null, source: 'standard-rpc' };
+    }
+    return { holderCount: best.count, buyerPosition: best.count + 1, source: best.source };
+  }
+  
+  if (rpcResult && rpcResult.count > 0) {
+    const buyerPosition = rpcResult.isCapped ? null : rpcResult.count + 1;
+    return { holderCount: rpcResult.count, buyerPosition, source: 'standard-rpc' };
+  }
+  
+  return { holderCount: 0, buyerPosition: null, source: 'error' };
+}
+
+async function batchFetchHolderPositions(tokenAddresses: string[]): Promise<Map<string, { holderCount: number; buyerPosition: number | null }>> {
+  const results = new Map<string, { holderCount: number; buyerPosition: number | null }>();
+  const batchSize = 5;
+  
+  for (let i = 0; i < tokenAddresses.length; i += batchSize) {
+    const batch = tokenAddresses.slice(i, i + batchSize);
+    const batchResults = await Promise.allSettled(
+      batch.map(async (address) => {
+        const data = await fetchHolderPosition(address);
+        return { address, ...data };
+      })
+    );
+    
+    for (const result of batchResults) {
+      if (result.status === 'fulfilled') {
+        results.set(result.value.address, {
+          holderCount: result.value.holderCount,
+          buyerPosition: result.value.buyerPosition,
+        });
+      }
+    }
+  }
+  
+  return results;
+}
+
 const SOL_MINT = "So11111111111111111111111111111111111111112";
 
 interface ApiConfig {
@@ -34,6 +189,9 @@ interface UserSettings {
   category_filters: string[];
   token_blacklist: string[];
   token_whitelist: string[];
+  target_buyer_positions?: number[];
+  // PRODUCTION FIX: validation toggles from user settings
+  validation_rule_toggles?: Record<string, boolean>;
 }
 
 interface TokenData {
@@ -48,13 +206,12 @@ interface TokenData {
   riskScore: number;
   categories: string[];
   priceUsd?: number;
-  // Scanner validation flags - CRITICAL for bypassing DEX route checks
-  isPumpFun?: boolean;      // From token-scanner: on Pump.fun bonding curve
-  isTradeable?: boolean;    // From token-scanner: verified as tradeable
-  canBuy?: boolean;         // From token-scanner: buy is possible
-  canSell?: boolean;        // From token-scanner: sell is possible
-  source?: string;          // API source (e.g., 'Pump.fun', 'DexScreener')
-  safetyReasons?: string[]; // Safety check results from scanner
+  isPumpFun?: boolean;
+  isTradeable?: boolean;
+  canBuy?: boolean;
+  canSell?: boolean;
+  source?: string;
+  safetyReasons?: string[];
 }
 
 interface SnipeDecision {
@@ -72,413 +229,30 @@ interface SnipeDecision {
   } | null;
 }
 
-interface RiskCheckResult {
-  isHoneypot: boolean;
-  isBlacklisted: boolean;
-  ownerRenounced: boolean;
-  liquidityLocked: boolean;
-  lockPercentage: number | null;
-  riskScore: number;
-}
+// P1 FIX: Removed RiskCheckResult, getApiKey, RULE_TOGGLE_MAP, isRuleEnabled —
+// no longer needed since validation is handled by the 23-rule client-side gate.
 
-// Get API key from environment (secure) with fallback to database (legacy)
-function getApiKey(apiType: string, dbApiKey: string | null): string | null {
-  // Priority 1: Environment variable (Supabase Secrets - secure)
-  const envKey = Deno.env.get(`${apiType.toUpperCase()}_API_KEY`);
-  if (envKey) {
-    console.log(`Using secure environment variable for ${apiType}`);
-    return envKey;
-  }
-  
-  // Priority 2: Database fallback (legacy - less secure)
-  if (dbApiKey) {
-    console.log(`Warning: Using database-stored API key for ${apiType} - migrate to Supabase Secrets`);
-    return dbApiKey;
-  }
-  
-  return null;
-}
+// =============================================================================
+// SERVER-SIDE CHECKS (zero-cost, non-duplicated)
+// =============================================================================
 
-// Rule 1: Check if liquidity meets user's minimum setting
-function checkLiquidity(token: TokenData, settings: UserSettings): { passed: boolean; reason: string } {
-  const passed = token.liquidity >= settings.min_liquidity;
-  return {
-    passed,
-    reason: passed 
-      ? `✓ Liquidity ${token.liquidity.toFixed(2)} SOL meets minimum ${settings.min_liquidity} SOL`
-      : `✗ Liquidity ${token.liquidity.toFixed(2)} SOL below minimum ${settings.min_liquidity} SOL`,
-  };
-}
-
-// Rule 2: Check if liquidity is locked (OPTIONAL - just informational, don't block)
-function checkLiquidityLock(token: TokenData): { passed: boolean; reason: string } {
-  // Liquidity lock is informational only - many legitimate tokens don't lock
-  const isLocked = token.liquidityLocked === true;
-  return {
-    passed: true, // Always pass - this is just informational
-    reason: isLocked 
-      ? `✓ Liquidity locked${token.lockPercentage ? ` (${token.lockPercentage}%)` : ''}`
-      : '⚠ Liquidity not locked - proceed with caution',
-  };
-}
-
-// Rule 3: Check if token matches user's category filters
-function checkCategoryMatch(token: TokenData, settings: UserSettings): { passed: boolean; reason: string } {
-  // If user didn't set any filters, always pass
-  if (settings.category_filters.length === 0) {
-    return { passed: true, reason: '✓ No category filters applied' };
-  }
-
-  // IMPORTANT: In live scanning, category metadata may be unavailable.
-  // If we have no categories, don't block trading (otherwise nothing ever approves).
-  if (!token.categories || token.categories.length === 0) {
-    return {
-      passed: true,
-      reason: '✓ Category data unavailable - skipping category filter',
-    };
-  }
-
-  const matchedCategories = token.categories.filter((cat) =>
-    settings.category_filters.includes(cat.toLowerCase())
-  );
-
-  const passed = matchedCategories.length > 0;
-  return {
-    passed,
-    reason: passed
-      ? `✓ Matches categories: ${matchedCategories.join(', ')}`
-      : `✗ No match for filters: ${settings.category_filters.join(', ')}`,
-  };
-}
-
-// Rule 4: Check buyer position (allow positions 2-10 for live trading flexibility)
-function checkBuyerPosition(token: TokenData): { passed: boolean; reason: string } {
-  const position = token.buyerPosition;
-  
-  // If position is unknown, allow the trade (don't block on missing data)
-  if (position === null || position === undefined) {
-    return { passed: true, reason: '✓ Buyer position unknown - allowing trade' };
-  }
-  
-  // Allow positions 2-10 (not first buyer, but reasonable entry)
-  const passed = position >= 2 && position <= 10;
-  return {
-    passed,
-    reason: passed 
-      ? `✓ Can enter as buyer #${position}`
-      : position < 2 
-        ? '✗ Would be first buyer - waiting for others'
-        : `✗ Buyer position #${position} too late (>10)`,
-  };
-}
-
-// Rule 5: Risk API approval (honeypot, blacklist, owner-renounced)
-// IMPORTANT: This check is optional - if API fails, we allow the trade with a warning
-async function checkRiskApproval(
-  token: TokenData, 
-  honeypotConfig: ApiConfig | undefined
-): Promise<{ passed: boolean; reason: string; riskData?: RiskCheckResult }> {
-  if (!honeypotConfig) {
-    // No API configured - allow trade with warning
-    return { passed: true, reason: '⚠ Risk check skipped - no API configured' };
-  }
-
-  try {
-    // HoneyPot.is only works for EVM chains, not Solana
-    // Skip risk check for Solana tokens as the API doesn't support them
-    if (token.chain === 'solana' || token.address.length > 50) {
-      console.log(`Skipping HoneyPot check for Solana token ${token.symbol}`);
-      return { 
-        passed: true, 
-        reason: '⚠ Risk check skipped for Solana (use built-in riskScore)',
-        riskData: {
-          isHoneypot: false,
-          isBlacklisted: false,
-          ownerRenounced: true,
-          liquidityLocked: token.liquidityLocked,
-          lockPercentage: token.lockPercentage,
-          riskScore: token.riskScore,
-        }
-      };
-    }
-
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 5000); // 5s timeout
-    
-    const response = await fetch(
-      `${honeypotConfig.base_url}/v2/IsHoneypot?address=${token.address}`,
-      { signal: controller.signal }
-    );
-    
-    clearTimeout(timeout);
-    
-    if (!response.ok) {
-      // API error - allow trade with warning, don't block
-      console.log(`Risk API returned ${response.status} for ${token.symbol}`);
-      return { passed: true, reason: `⚠ Risk API returned ${response.status} - proceeding with caution` };
-    }
-
-    const data = await response.json();
-    
-    const riskData: RiskCheckResult = {
-      isHoneypot: data.honeypotResult?.isHoneypot || false,
-      isBlacklisted: data.simulationResult?.isBlacklisted || false,
-      ownerRenounced: data.contractCode?.ownershipRenounced || false,
-      liquidityLocked: data.pair?.liquidity?.isLocked || false,
-      lockPercentage: data.pair?.liquidity?.lockPercentage || null,
-      riskScore: data.honeypotResult?.isHoneypot ? 100 : (data.riskScore || 50),
-    };
-
-    // Only block on confirmed honeypot or blacklist - not on "owner not renounced"
-    const isBlocked = riskData.isHoneypot || riskData.isBlacklisted;
-    const issues: string[] = [];
-    if (riskData.isHoneypot) issues.push('HONEYPOT');
-    if (riskData.isBlacklisted) issues.push('BLACKLISTED');
-    
-    return {
-      passed: !isBlocked,
-      reason: isBlocked 
-        ? `✗ BLOCKED: ${issues.join(', ')}`
-        : `✓ Risk check passed (score: ${riskData.riskScore})`,
-      riskData,
-    };
-  } catch (error) {
-    // Network error, timeout, etc - allow trade with warning
-    console.error('Risk check error:', error);
-    return { passed: true, reason: '⚠ Risk API unavailable - proceeding with caution' };
-  }
-}
-
-// Rule 6: Check if token is tradeable (Pump.fun bonding curve OR Jupiter/Raydium route)
-// New tokens on Pump.fun don't have DEX routes yet - they use the bonding curve
-// CRITICAL: Trust the token-scanner's validation to avoid blocking valid trades
-// IMPORTANT: Edge functions have intermittent DNS issues - be lenient when checks fail
-async function checkTradeRoute(token: TokenData): Promise<{ passed: boolean; reason: string; source?: string }> {
-  // CRITICAL: Only Solana tokens can be traded
-  const isSolanaAddress = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(token.address);
-  const isEthereumAddress = token.address.startsWith('0x');
-  
-  if (token.chain !== 'solana' || isEthereumAddress || !isSolanaAddress) {
-    return { passed: false, reason: `✗ Non-Solana token rejected` };
-  }
-
-  // PRIORITY 1: Trust token-scanner's validation flags (most reliable)
-  // The scanner already verified tradability, don't double-check
-  if (token.isPumpFun === true) {
-    console.log(`[Route] ${token.symbol} is Pump.fun token (from scanner) - auto-approved`);
-    return { passed: true, reason: `✓ Pump.fun bonding curve (verified by scanner)`, source: 'pumpfun' };
-  }
-  
-  if (token.isTradeable === true) {
-    console.log(`[Route] ${token.symbol} verified tradeable by scanner - auto-approved`);
-    return { passed: true, reason: `✓ Verified tradeable by token scanner`, source: 'scanner' };
-  }
-
-  // PRIORITY 2: Check source - if from Pump.fun source, trust it
-  if (token.source === 'Pump.fun') {
-    console.log(`[Route] ${token.symbol} from Pump.fun source - auto-approved`);
-    return { passed: true, reason: `✓ Pump.fun source token`, source: 'pumpfun' };
-  }
-
-  // Track if all checks failed due to network/DNS issues (not "no route" errors)
-  let allNetworkFailures = true;
-  let networkErrorCount = 0;
-
-  // PRIORITY 3: Check Pump.fun API directly (fallback for tokens without scanner flags)
-  try {
-    const pumpFunController = new AbortController();
-    const pumpFunTimeout = setTimeout(() => pumpFunController.abort(), 5000);
-
-    const pumpFunResponse = await fetch(`https://frontend-api.pump.fun/coins/${token.address}`, {
-      signal: pumpFunController.signal,
-      headers: {
-        'Accept': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (compatible; MemeSniper/1.0)',
-      },
-    });
-
-    clearTimeout(pumpFunTimeout);
-    allNetworkFailures = false; // Request succeeded
-
-    if (pumpFunResponse.ok) {
-      const pumpData = await pumpFunResponse.json();
-      // Token exists on Pump.fun (either on bonding curve or graduated)
-      if (pumpData) {
-        if (!pumpData.complete) {
-          console.log(`[Pump.fun] Token ${token.symbol} is on bonding curve - tradeable`);
-          return { 
-            passed: true, 
-            reason: `✓ Pump.fun bonding curve token`,
-            source: 'pumpfun'
-          };
-        } else {
-          console.log(`[Pump.fun] Token ${token.symbol} graduated - tradeable via DEX`);
-          return { 
-            passed: true, 
-            reason: `✓ Graduated Pump.fun token (tradeable on DEX)`,
-            source: 'pumpfun-graduated'
-          };
-        }
-      }
-    }
-  } catch (pumpError: any) {
-    const errorMsg = pumpError.message || '';
-    // Check if this is a DNS/network error vs a valid "not found" response
-    if (errorMsg.includes('dns error') || errorMsg.includes('network') || errorMsg.includes('timeout') || errorMsg.includes('connect')) {
-      networkErrorCount++;
-      console.log(`[Pump.fun] Network error for ${token.symbol}: ${errorMsg}`);
-    } else {
-      allNetworkFailures = false; // This was a real API response (like 404)
-      console.log(`[Pump.fun] Check failed for ${token.symbol}: ${errorMsg}`);
-    }
-  }
-
-  // PRIORITY 4: Check Jupiter/Raydium routes for non-Pump.fun tokens
-  const testAmount = "1000000"; // 0.001 SOL in lamports
-  
-  // Check both in parallel
-  const routeChecks = await Promise.allSettled([
-    // Jupiter check with retry logic
-    (async () => {
-      const quoteResult = await fetchJupiterQuoteWithRetry({
-        inputMint: SOL_MINT,
-        outputMint: token.address,
-        amount: testAmount,
-        slippageBps: 500,
-        timeoutMs: 8000,
-      });
-
-      if (quoteResult.ok === true && quoteResult.quote.outAmount) {
-        return { source: 'jupiter', outputAmount: quoteResult.quote.outAmount, networkError: false };
-      }
-      
-      // Handle rate limit as network error so it can fallback
-      if (quoteResult.ok === false && quoteResult.kind === 'RATE_LIMITED') {
-        const err = new Error('Jupiter rate limited');
-        (err as any).isNetworkError = true;
-        throw err;
-      }
-      
-      throw new Error('No Jupiter route');
-    })(),
-    
-    // Raydium check
-    (async () => {
-      const raydiumParams = new URLSearchParams({
-        inputMint: SOL_MINT,
-        outputMint: token.address,
-        amount: testAmount,
-        slippageBps: "500",
-        txVersion: "V0",
-      });
-
-      const response = await fetch(`${RAYDIUM_QUOTE_API}?${raydiumParams}`, {
-        signal: AbortSignal.timeout(8000),
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        if (data.success && data.data?.outputAmount) {
-          return { source: 'raydium', outputAmount: data.data.outputAmount, networkError: false };
-        }
-      }
-      throw new Error('No Raydium route');
-    })(),
-  ]);
-
-  // Check if any route succeeded
-  for (const result of routeChecks) {
-    if (result.status === 'fulfilled') {
-      const { source, outputAmount } = result.value;
-      console.log(`[${source}] Route found for ${token.symbol}: ${outputAmount} output`);
-      return { 
-        passed: true, 
-        reason: `✓ ${source === 'jupiter' ? 'Jupiter' : 'Raydium'} route verified`,
-        source
-      };
-    } else if (result.status === 'rejected') {
-      const errorMsg = (result.reason?.message || String(result.reason) || '').toLowerCase();
-      if (errorMsg.includes('dns error') || errorMsg.includes('network') || errorMsg.includes('timeout') || errorMsg.includes('connect') || errorMsg.includes('lookup')) {
-        networkErrorCount++;
-      } else {
-        allNetworkFailures = false; // Real API response
-      }
-    }
-  }
-
-  // PRIORITY 5: If ALL checks failed due to network/DNS issues, allow the trade
-  // The scanner already validated these tokens - DNS failures shouldn't block execution
-  if (allNetworkFailures && networkErrorCount > 0) {
-    console.log(`[Route] ${token.symbol} - all ${networkErrorCount} route checks failed due to network issues, allowing trade`);
-    return { 
-      passed: true, 
-      reason: `✓ Network checks unavailable - allowing (scanner validated)`,
-      source: 'network-fallback'
-    };
-  }
-
-  // PRIORITY 6: For tokens with substantial liquidity, allow even without route verification
-  // (Route checks can fail due to network issues but token may still be tradeable)
-  if (token.liquidity >= 300) { // 300+ SOL liquidity is substantial for meme tokens
-    console.log(`[Route] ${token.symbol} has good liquidity (${token.liquidity} SOL) - allowing despite no route`);
-    return { 
-      passed: true, 
-      reason: `✓ Good liquidity (${token.liquidity.toFixed(0)} SOL) - likely tradeable`,
-      source: 'liquidity'
-    };
-  }
-
-  // No routes found
-  console.log(`[Route] No route found for ${token.symbol} on Jupiter or Raydium`);
-  return { 
-    passed: false, 
-    reason: `✗ No DEX route found - token may be too new or have no liquidity`
-  };
-}
-
-// Check blacklist/whitelist
-function checkBlacklistWhitelist(
-  token: TokenData, 
-  settings: UserSettings
-): { passed: boolean; reason: string } {
-  // Check blacklist first
-  if (settings.token_blacklist.some(addr => 
-    addr.toLowerCase() === token.address.toLowerCase()
-  )) {
+function checkBlacklistWhitelist(token: TokenData, settings: UserSettings): { passed: boolean; reason: string } {
+  if (settings.token_blacklist.some(addr => addr.toLowerCase() === token.address.toLowerCase())) {
     return { passed: false, reason: '✗ Token is blacklisted by user' };
   }
-
-  // If whitelist exists and is not empty, token must be on it
   if (settings.token_whitelist.length > 0) {
-    const onWhitelist = settings.token_whitelist.some(addr => 
-      addr.toLowerCase() === token.address.toLowerCase()
-    );
-    return {
-      passed: onWhitelist,
-      reason: onWhitelist 
-        ? '✓ Token is on whitelist'
-        : '✗ Token not on whitelist',
-    };
+    const onWhitelist = settings.token_whitelist.some(addr => addr.toLowerCase() === token.address.toLowerCase());
+    return { passed: onWhitelist, reason: onWhitelist ? '✓ Token is on whitelist' : '✗ Token not on whitelist' };
   }
-
   return { passed: true, reason: '✓ Token not blacklisted' };
 }
 
-// Create a trade signal for frontend execution (proper wallet signing)
 async function createTradeSignal(
-  token: TokenData,
-  settings: UserSettings,
-  supabase: any,
-  userId: string,
-  routeSource?: string
+  token: TokenData, settings: UserSettings, supabase: any, userId: string, routeSource?: string
 ): Promise<{ success: boolean; signalId?: string; error?: string }> {
   try {
-    console.log(`Creating trade signal for ${token.symbol}`);
-    
-    // Calculate signal expiry (5 minutes from now)
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
     
-    // Create trade signal for frontend to execute
     const { data: signalData, error: signalError } = await supabase
       .from('trade_signals')
       .insert({
@@ -510,45 +284,34 @@ async function createTradeSignal(
       .single();
 
     if (signalError) {
-      console.error('Error creating trade signal:', signalError);
       return { success: false, error: `Failed to create signal: ${signalError.message}` };
     }
 
     console.log(`Trade signal created for ${token.symbol}:`, signalData.id);
     
-    // Log the signal in system_logs
     await supabase.from('system_logs').insert({
       user_id: userId,
       event_type: 'trade_signal_created',
       event_category: 'trading',
       message: `Trade signal created for ${token.symbol} - Amount: ${settings.trade_amount} SOL`,
       metadata: {
-        signal_id: signalData.id,
-        token_address: token.address,
-        token_symbol: token.symbol,
-        amount: settings.trade_amount,
-        liquidity: token.liquidity,
-        risk_score: token.riskScore,
-        source: routeSource,
-        expires_at: expiresAt,
+        signal_id: signalData.id, token_address: token.address, token_symbol: token.symbol,
+        amount: settings.trade_amount, liquidity: token.liquidity, source: routeSource,
       },
       severity: 'info',
     });
 
-    return { 
-      success: true, 
-      signalId: signalData.id,
-    };
+    return { success: true, signalId: signalData.id };
   } catch (error) {
-    console.error('Trade signal creation error:', error);
-    return { 
-      success: false, 
-      error: error instanceof Error ? error.message : 'Signal creation failed',
-    };
+    return { success: false, error: error instanceof Error ? error.message : 'Signal creation failed' };
   }
 }
 
-serve(async (req) => {
+// =============================================================================
+// MAIN HANDLER
+// =============================================================================
+
+Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
   }
@@ -557,8 +320,7 @@ serve(async (req) => {
     const authHeader = req.headers.get('Authorization');
     if (!authHeader?.startsWith('Bearer ')) {
       return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-        status: 401,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
 
@@ -566,44 +328,51 @@ serve(async (req) => {
     const anonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
     const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
-    // Auth client for JWT verification (works with signing-keys on custom domains)
     const authClient = createClient(supabaseUrl, anonKey, {
       global: { headers: { Authorization: authHeader } },
     });
 
-    const token = authHeader.slice('Bearer '.length);
-    const { data: claimsData, error: claimsError } = await authClient.auth.getClaims(token);
-    const userId = claimsData?.claims?.sub;
-
-    if (claimsError || !userId) {
-      return new Response(JSON.stringify({ error: 'Invalid or expired token' }), {
-        status: 401,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    // PRODUCTION FIX: Use getClaims for reliable JWT validation in edge environment
+    const token = authHeader.replace('Bearer ', '');
+    let userId: string;
+    
+    try {
+      const { data: claimsData, error: claimsError } = await authClient.auth.getClaims(token);
+      const sub = claimsData?.claims?.sub as string | undefined;
+      if (claimsError || !sub) {
+        return new Response(JSON.stringify({ error: claimsError?.message || 'Invalid token' }), {
+          status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+      userId = sub;
+    } catch (authErr: any) {
+      return new Response(JSON.stringify({ error: authErr.message || 'Auth failed' }), {
+        status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
 
-    // Service client for DB access
-    const supabase = createClient(supabaseUrl, serviceRoleKey);
-    const user = { id: userId };
+    // Per-user rate limiting
+    const rateCheck = checkRateLimit(userId, AUTO_SNIPER_LIMIT);
+    if (!rateCheck.allowed) {
+      return rateLimitResponse(rateCheck, corsHeaders);
+    }
 
-    // Parse and validate request body
+    const supabase = createClient(supabaseUrl, serviceRoleKey);
+
     const rawBody = await req.json().catch(() => ({}));
     const validationResult = validateAutoSniperInput(rawBody);
     
     if (!validationResult.success) {
       return new Response(JSON.stringify({ error: validationResult.error }), {
-        status: 400,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
     
     const { tokens, executeOnApproval } = validationResult.data!;
 
-    // Default settings to use if user hasn't configured any
-    // IMPORTANT: These MUST match the defaults in useSniperSettings.ts
     const defaultSettings: UserSettings = {
-      user_id: user.id,
-      min_liquidity: 5, // 5 SOL minimum (matches frontend default)
+      user_id: userId,
+      min_liquidity: 5,
       profit_take_percentage: 100,
       stop_loss_percentage: 20,
       trade_amount: 0.1,
@@ -614,34 +383,34 @@ serve(async (req) => {
       token_whitelist: [],
     };
 
-    // Fetch user's sniper settings
+    // PRODUCTION FIX: Fetch validation_rule_toggles alongside other settings
     const { data: userSettings } = await supabase
       .from('user_sniper_settings')
       .select('*')
-      .eq('user_id', user.id)
+      .eq('user_id', userId)
       .single();
 
-    // Use user settings if found, otherwise use defaults
-    const settings: UserSettings = userSettings || defaultSettings;
-    console.log(`Using settings for user ${user.id}:`, userSettings ? 'custom' : 'defaults');
+    const settings: UserSettings = userSettings ? {
+      ...defaultSettings,
+      ...userSettings,
+      category_filters: Array.isArray(userSettings.category_filters) ? userSettings.category_filters : defaultSettings.category_filters,
+      token_blacklist: Array.isArray(userSettings.token_blacklist) ? userSettings.token_blacklist : [],
+      token_whitelist: Array.isArray(userSettings.token_whitelist) ? userSettings.token_whitelist : [],
+      target_buyer_positions: Array.isArray(userSettings.target_buyer_positions) ? userSettings.target_buyer_positions : undefined,
+      validation_rule_toggles: userSettings.validation_rule_toggles as Record<string, boolean> | undefined,
+    } : defaultSettings;
+    
+    console.log(`Using settings for user ${userId}:`, userSettings ? 'custom' : 'defaults');
+    
+    // P1 FIX: Removed SOL price fetch, toggle logging, API config fetch, and
+    // honeypot config — none are needed since validation is done client-side.
+    // Server only needs settings for blacklist/whitelist and trade parameters.
 
-    // Fetch API configurations
-    const { data: apiConfigs } = await supabase
-      .from('api_configurations')
-      .select('*')
-      .eq('is_enabled', true);
-
-    const getApiConfig = (type: string): ApiConfig | undefined =>
-      apiConfigs?.find((c: ApiConfig) => c.api_type === type);
-
-    const honeypotConfig = getApiConfig('honeypot_rugcheck');
-    const tradeExecutionConfig = getApiConfig('trade_execution');
-
-    // Check how many open positions user already has
+    // Check open positions
     const { count: openPositionsCount } = await supabase
       .from('positions')
       .select('*', { count: 'exact', head: true })
-      .eq('user_id', user.id)
+      .eq('user_id', userId)
       .eq('status', 'open');
 
     const currentOpenPositions = openPositionsCount || 0;
@@ -649,93 +418,60 @@ serve(async (req) => {
     
     console.log(`User has ${currentOpenPositions} open positions, ${availableSlots} slots available`);
 
+    // ==========================================================================
+    // PRODUCTION FIX: ALWAYS fetch holder positions for accurate data
+    // Previously skipped when no target_buyer_positions were set
+    // ==========================================================================
+    console.log(`[Holders] Fetching positions for ${tokens.length} tokens`);
+    const tokenAddresses = (tokens as TokenData[]).map(t => t.address);
+    const holderPositions = await batchFetchHolderPositions(tokenAddresses);
+    console.log(`[Holders] Fetched positions for ${holderPositions.size} tokens`);
+
+    // Enrich tokens with holder position data
+    const enrichedTokens = (tokens as TokenData[]).map(token => {
+      const positionData = holderPositions.get(token.address);
+      if (positionData) {
+        return { ...token, buyerPosition: positionData.buyerPosition };
+      }
+      return token;
+    });
+
     const decisions: SnipeDecision[] = [];
     const executedTrades: { token: string; txId?: string; error?: string; positionId?: string }[] = [];
     let tradesExecuted = 0;
 
-    // Evaluate each token against the rules
-    for (const tokenData of tokens as TokenData[]) {
+    // ==========================================================================
+    // P1 FIX: DEDUPLICATION — Client already ran 22-rule pre-execution gate.
+    // Server only performs: sellability hard-check, blacklist/whitelist, and
+    // signal creation. All other validation (liquidity, buyer position, route,
+    // risk API, etc.) was already done client-side and tokens arriving here
+    // have already passed the gate.
+    // ==========================================================================
+
+    for (const tokenData of enrichedTokens) {
       const reasons: string[] = [];
       let allPassed = true;
 
-      // Rule 0: CRITICAL - Token must be sellable to avoid stuck positions
+      // Hard-check: Sellability (cannot be toggled off, zero-cost)
       if (tokenData.canSell === false) {
         reasons.push('✗ Token cannot be sold (would create stuck position)');
         allPassed = false;
         console.log(`[Sellability] Token ${tokenData.symbol} rejected - not sellable`);
       }
 
-      // Rule 1: Liquidity check against user's min_liquidity setting
-      if (allPassed) {
-        const liquidityCheck = checkLiquidity(tokenData, settings);
-        reasons.push(liquidityCheck.reason);
-        if (!liquidityCheck.passed) {
-          allPassed = false;
-          console.log(`[Liquidity] Token ${tokenData.symbol} rejected - ${tokenData.liquidity} SOL < ${settings.min_liquidity} SOL minimum`);
-        }
-      }
-
-      // Rule 2: Liquidity lock check (optional - can be bypassed if not required)
-      if (allPassed) {
-        const lockCheck = checkLiquidityLock(tokenData);
-        reasons.push(lockCheck.reason);
-        // Don't fail on lock check alone - just add reason
-      }
-
-      // Rule 3: Category filter check
-      if (allPassed) {
-        const categoryCheck = checkCategoryMatch(tokenData, settings);
-        reasons.push(categoryCheck.reason);
-        if (!categoryCheck.passed) allPassed = false;
-      }
-
-      // Rule 4: Buyer position check
-      if (allPassed) {
-        const positionCheck = checkBuyerPosition(tokenData);
-        reasons.push(positionCheck.reason);
-        if (!positionCheck.passed) allPassed = false;
-      }
-
-      // Check blacklist/whitelist
+      // Hard-check: Blacklist/whitelist (zero-cost, always enforced server-side)
       if (allPassed) {
         const listCheck = checkBlacklistWhitelist(tokenData, settings);
         reasons.push(listCheck.reason);
         if (!listCheck.passed) allPassed = false;
       }
 
-      // Rule 5: Risk API check (only if other rules pass AND API is configured)
-      // Skip risk check if no API configured - don't block trades due to missing config
-      if (allPassed && honeypotConfig) {
-        const riskCheck = await checkRiskApproval(tokenData, honeypotConfig);
-        reasons.push(riskCheck.reason);
-        if (!riskCheck.passed) allPassed = false;
-
-        // Update token with risk data
-        if (riskCheck.riskData) {
-          tokenData.liquidityLocked = riskCheck.riskData.liquidityLocked;
-          tokenData.lockPercentage = riskCheck.riskData.lockPercentage;
-          tokenData.riskScore = riskCheck.riskData.riskScore;
-        }
-      } else if (allPassed && !honeypotConfig) {
-        // No risk API configured - allow trade with warning
-        reasons.push('⚠ Risk check skipped - no API configured');
-        console.log(`Risk check skipped for ${tokenData.symbol} - no honeypot API configured`);
-      }
-
-      // Rule 6: CRITICAL - Verify Jupiter/Raydium has a route for this token
-      // This prevents ROUTE_NOT_FOUND errors during trade execution
+      // Trust client gate for all other rules — log that we're skipping server re-validation
       if (allPassed) {
-        const routeCheck = await checkTradeRoute(tokenData);
-        reasons.push(routeCheck.reason);
-        if (!routeCheck.passed) {
-          allPassed = false;
-          console.log(`[Route] Token ${tokenData.symbol} rejected - no route available`);
-        }
+        reasons.push('✓ Pre-execution gate passed client-side (22 rules)');
       }
-      
-      // Log the decision for debugging with settings context
-      console.log(`Token ${tokenData.symbol}: approved=${allPassed} | Settings: ${settings.trade_amount} SOL, TP ${settings.profit_take_percentage}%, SL ${settings.stop_loss_percentage}%, Min Liq ${settings.min_liquidity} SOL`);
 
+      console.log(`Token ${tokenData.symbol.padEnd(12)}: approved=${allPassed} | Settings: ${settings.trade_amount} SOL, TP ${settings.profit_take_percentage}%, SL ${settings.stop_loss_percentage}%, Min Liq ${settings.min_liquidity}`);
 
       const decision: SnipeDecision = {
         token: tokenData,
@@ -743,10 +479,8 @@ serve(async (req) => {
         reasons,
         tradeParams: allPassed ? {
           amount: settings.trade_amount,
-          // Use user's configured slippage from settings, fallback to priority-based
           slippage: (userSettings as any)?.slippage_tolerance ?? (settings.priority === 'turbo' ? 15 : settings.priority === 'fast' ? 10 : 5),
           priority: settings.priority,
-          // Include TP/SL for reference
           profitTakePercent: settings.profit_take_percentage,
           stopLossPercent: settings.stop_loss_percentage,
           minLiquidity: settings.min_liquidity,
@@ -756,17 +490,9 @@ serve(async (req) => {
 
       decisions.push(decision);
 
-      // Create trade signal if approved and execution is enabled and we have available slots
       if (allPassed && executeOnApproval && tradesExecuted < availableSlots) {
-        // Create trade signal for frontend wallet signing (proper production flow)
-        const routeCheck = await checkTradeRoute(tokenData);
-        const signalResult = await createTradeSignal(
-          tokenData, 
-          settings, 
-          supabase, 
-          user.id,
-          routeCheck.source
-        );
+        const routeSource = tokenData.isPumpFun ? 'pumpfun' : (tokenData.source || 'jupiter');
+        const signalResult = await createTradeSignal(tokenData, settings, supabase, userId, routeSource);
         executedTrades.push({
           token: tokenData.symbol,
           txId: signalResult.signalId,

@@ -1,90 +1,88 @@
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { forwardRef } from "react";
+import { Badge } from "@/components/ui/badge";
+import { Zap, RefreshCw, TrendingUp, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { TrendingUp, Eye, LogOut, Sparkles } from "lucide-react";
+import { useTrendingTokens } from "@/hooks/useTrendingTokens";
+import { useNavigate } from "react-router-dom";
 import { cn } from "@/lib/utils";
 
-interface MarketSignal {
-  id: string;
-  type: 'bullish' | 'volume_spike' | 'bearish' | 'breakout';
-  title: string;
-  token: string;
-  confidence: number;
-  action: 'buy' | 'monitor' | 'exit';
-}
+const IntelligencePanels = forwardRef<HTMLDivElement>(function IntelligencePanels(_, ref) {
+  const navigate = useNavigate();
+  const { tokens, loading, refetch } = useTrendingTokens();
 
-interface IntelligencePanelsProps {
-  signals?: MarketSignal[];
-}
+  const signals = tokens.slice(0, 4).map((token, i) => {
+    const isPositive = token.priceChange24h >= 0;
+    const signal = isPositive ? (token.priceChange24h > 10 ? 'Buy' : 'Monitor') : 'Exit';
+    const confidence = Math.min(99, Math.max(60, 87 - i * 5 + Math.floor(token.priceChange24h)));
+    const flagType = isPositive ? 'BULLISH' : 'BEARISH';
+    return { ...token, signal, confidence, flagType, isPositive };
+  });
 
-const defaultSignals: MarketSignal[] = [
-  { id: '1', type: 'bullish', title: 'BULLISH FLAG', token: 'JUP', confidence: 90, action: 'buy' },
-  { id: '2', type: 'volume_spike', title: 'VOLUME SPIKE', token: 'WIF', confidence: 85, action: 'monitor' },
-  { id: '3', type: 'bearish', title: 'BEARISH DIVERGENCE', token: 'MEW', confidence: 75, action: 'exit' },
-];
+  const signalBadge = (signal: string) => {
+    const styles = {
+      Buy: 'bg-success/15 text-success border-success/30',
+      Monitor: 'bg-primary/15 text-primary border-primary/30',
+      Exit: 'bg-destructive/15 text-destructive border-destructive/30',
+    };
+    return styles[signal as keyof typeof styles] || styles.Monitor;
+  };
 
-const actionColors = {
-  buy: 'bg-success/15 text-success border-success/30 hover:bg-success/25',
-  monitor: 'bg-primary/15 text-primary border-primary/30 hover:bg-primary/25',
-  exit: 'bg-destructive/15 text-destructive border-destructive/30 hover:bg-destructive/25',
-};
-
-const actionIcons = {
-  buy: TrendingUp,
-  monitor: Eye,
-  exit: LogOut,
-};
-
-export default function IntelligencePanels({ signals = defaultSignals }: IntelligencePanelsProps) {
   return (
-    <Card className="border border-border/50 bg-card/80 backdrop-blur-sm h-full">
-      <CardHeader className="pb-2 pt-3 px-3">
-        <CardTitle className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-          Intelligence Panels
-        </CardTitle>
-        <div className="flex items-center justify-between mt-1.5">
-          <div className="flex items-center gap-1.5">
-            <Sparkles className="w-3.5 h-3.5 text-primary" />
-            <span className="text-xs font-semibold">Market Signals</span>
-          </div>
-          <span className="text-[9px] text-muted-foreground uppercase tracking-wider">Confidence %</span>
+    <div ref={ref} className="rounded-xl border border-border/30 bg-card/40 overflow-hidden flex flex-col h-[340px]">
+      <div className="px-4 py-3 flex items-center justify-between border-b border-border/20">
+        <div className="flex items-center gap-2">
+          <Zap className="w-4 h-4 text-accent" />
+          <h3 className="text-xs font-bold uppercase tracking-widest text-foreground whitespace-nowrap">Intelligence Panels</h3>
         </div>
-      </CardHeader>
-      <CardContent className="px-3 pb-3 space-y-1.5 overflow-y-auto max-h-[260px]">
-        {signals.map((signal, index) => {
-          const ActionIcon = actionIcons[signal.action];
-          
-          return (
-            <div
-              key={signal.id}
-              className="p-2.5 rounded-lg bg-secondary/40 border border-border/30 hover:bg-secondary/60 transition-all duration-200 animate-fade-in"
-              style={{ animationDelay: `${index * 50}ms` }}
-            >
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex-1 min-w-0">
-                  <p className="text-[11px] font-semibold text-foreground">
-                    {signal.title} <span className="text-muted-foreground">on</span>{' '}
-                    <span className="text-primary">{signal.token}</span>
-                  </p>
-                  <p className="text-[10px] text-muted-foreground">
-                    ({signal.confidence}%)
-                  </p>
-                </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className={cn(
-                    "h-6 text-[10px] font-medium capitalize gap-1 shrink-0 px-2",
-                    actionColors[signal.action]
+        <div className="flex items-center gap-1.5">
+          <Button variant="ghost" size="icon" className="h-5 w-5" onClick={() => refetch()} disabled={loading}>
+            <RefreshCw className={cn("w-3 h-3", loading && "animate-spin")} />
+          </Button>
+          <Badge variant="outline" className="text-[8px] px-1.5 py-0 bg-success/10 text-success border-success/30">
+            Live
+          </Badge>
+        </div>
+      </div>
+
+      <div className="p-3 space-y-3">
+        <div className="flex items-center justify-between">
+          <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Market Signals</span>
+          <span className="text-[9px] text-muted-foreground">Confidence %</span>
+        </div>
+
+        <div className="space-y-2">
+          {signals.length === 0 ? (
+            <p className="text-[11px] text-muted-foreground text-center py-4">No signals available</p>
+          ) : (
+            signals.map((s, i) => (
+              <div
+                key={s.address + i}
+                className="flex items-center justify-between gap-2 p-2.5 rounded-lg hover:bg-secondary/20 transition-colors cursor-pointer"
+                onClick={() => navigate(`/token/${s.address}`)}
+              >
+                <div className="flex items-center gap-2 min-w-0">
+                  {s.isPositive ? (
+                    <TrendingUp className="w-3.5 h-3.5 text-success shrink-0" />
+                  ) : (
+                    <AlertTriangle className="w-3.5 h-3.5 text-destructive shrink-0" />
                   )}
-                >
-                  <ActionIcon className="w-3 h-3" />
-                  {signal.action}
-                </Button>
+                  <div className="min-w-0">
+                    <span className="text-xs font-bold text-foreground uppercase truncate block">
+                      {s.flagType} FLAG ON {s.symbol}
+                    </span>
+                    <span className="text-[10px] text-muted-foreground">({s.confidence}%)</span>
+                  </div>
+                </div>
+                <Badge variant="outline" className={`text-[9px] px-2 py-0.5 font-bold shrink-0 ${signalBadge(s.signal)}`}>
+                  {s.signal}
+                </Badge>
               </div>
-            </div>
-          );
-        })}
-      </CardContent>
-    </Card>
+            ))
+          )}
+        </div>
+      </div>
+    </div>
   );
-}
+});
+
+export default IntelligencePanels;

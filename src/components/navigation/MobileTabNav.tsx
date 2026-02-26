@@ -14,7 +14,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useAuth } from "@/contexts/AuthContext";
-import { Shield, Crown, BarChart3, Bell, User, LogOut } from "lucide-react";
+import { Shield, Crown, BarChart3, Bell, User, LogOut, BookOpen, Rocket, Info, Mail, CreditCard } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
 interface TabItem {
@@ -24,7 +24,7 @@ interface TabItem {
 }
 
 const mainTabs: TabItem[] = [
-  { label: "Home", path: "/", icon: LayoutDashboard },
+  { label: "Home", path: "/dashboard", icon: LayoutDashboard },
   { label: "Scanner", path: "/scanner", icon: Zap },
   { label: "Portfolio", path: "/portfolio", icon: Briefcase },
   { label: "Settings", path: "/sniper-settings", icon: Settings },
@@ -41,7 +41,7 @@ export default function MobileTabNav() {
   };
 
   const isActive = (path: string) => {
-    if (path === "/") return location.pathname === "/";
+    if (path === "/dashboard") return location.pathname === "/dashboard";
     return location.pathname.startsWith(path);
   };
 
@@ -50,8 +50,8 @@ export default function MobileTabNav() {
   );
 
   return (
-    <nav className="fixed bottom-0 left-0 right-0 z-50 lg:hidden bg-background/95 backdrop-blur-xl border-t border-border/50 safe-area-bottom">
-      <div className="flex items-center justify-around h-16 px-2">
+    <nav className="fixed bottom-0 left-0 right-0 z-50 lg:hidden bg-background/95 backdrop-blur-xl border-t border-border/40 safe-area-bottom">
+      <div className="flex items-center justify-around h-14 px-1">
         {mainTabs.map((tab) => {
           const Icon = tab.icon;
           const active = isActive(tab.path);
@@ -108,6 +108,36 @@ export default function MobileTabNav() {
               <Link to="/settings" className="flex items-center gap-2">
                 <User className="w-4 h-4" />
                 Account
+              </Link>
+            </DropdownMenuItem>
+            <DropdownMenuItem asChild className="cursor-pointer">
+              <Link to="/pricing" className="flex items-center gap-2">
+                <CreditCard className="w-4 h-4" />
+                Pricing & Plans
+              </Link>
+            </DropdownMenuItem>
+            <DropdownMenuItem asChild className="cursor-pointer">
+              <Link to="/basics" className="flex items-center gap-2">
+                <BookOpen className="w-4 h-4" />
+                Platform Guide
+              </Link>
+            </DropdownMenuItem>
+            <DropdownMenuItem asChild className="cursor-pointer">
+              <Link to="/promotions" className="flex items-center gap-2">
+                <Rocket className="w-4 h-4" />
+                Referrals
+              </Link>
+            </DropdownMenuItem>
+            <DropdownMenuItem asChild className="cursor-pointer">
+              <Link to="/about" className="flex items-center gap-2">
+                <Info className="w-4 h-4" />
+                About Us
+              </Link>
+            </DropdownMenuItem>
+            <DropdownMenuItem asChild className="cursor-pointer">
+              <Link to="/contact" className="flex items-center gap-2">
+                <Mail className="w-4 h-4" />
+                Contact Us
               </Link>
             </DropdownMenuItem>
             {isAdmin && (

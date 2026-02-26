@@ -67,35 +67,17 @@ const API_INFO: Record<ApiType, {
   birdeye: {
     label: 'Birdeye API',
     required: true,
-    description: 'Essential for Solana token analytics, price feeds, and wallet tracking.',
-    helpNotes: 'API key required. Free tier: 100 req/min. Sign up requires Solana wallet.',
+    description: 'Primary API for accurate holder counts, token overview, and security data on Solana.',
+    helpNotes: 'Paid API. Required for accurate holder counts and token security checks. Get key from birdeye.so.',
     defaultUrl: 'https://public-api.birdeye.so',
     requiresKey: true,
     secretName: 'BIRDEYE_API_KEY',
-    exampleKey: 'a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6',
-    keyFormat: '32-character alphanumeric string',
-    getKeyUrl: 'https://birdeye.so/api',
+    exampleKey: 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',
+    keyFormat: 'Alphanumeric API key from Birdeye dashboard',
+    getKeyUrl: 'https://birdeye.so',
     commonErrors: [
-      { pattern: '401', solution: 'Invalid or missing API key. Get a free key at birdeye.so/api and configure it.' },
-      { pattern: '403', solution: 'API key expired or revoked. Generate a new key at birdeye.so/api.' },
-      { pattern: 'API key required', solution: 'Add your Birdeye API key in the configuration. Sign up at birdeye.so.' },
-    ],
-  },
-  dextools: {
-    label: 'Dextools API',
-    required: false,
-    description: 'Optional premium API for advanced token scoring and pair analysis.',
-    helpNotes: 'Get API key from Dextools. Uses x-api-key header for authentication.',
-    defaultUrl: 'https://public-api.dextools.io',
-    requiresKey: true,
-    secretName: 'DEXTOOLS_API_KEY',
-    exampleKey: 'abc123def456ghi789jkl012mno345pqr678',
-    keyFormat: 'Dextools API key - alphanumeric string from your Dextools account',
-    getKeyUrl: 'https://developer.dextools.io',
-    alternatives: ['dexscreener', 'geckoterminal'],
-    commonErrors: [
-      { pattern: '401', solution: 'Invalid API key. Get your key from developer.dextools.io.' },
-      { pattern: '403', solution: 'API access denied. Check your subscription plan at dextools.io.' },
+      { pattern: '401', solution: 'Invalid API key. Get your key from birdeye.so dashboard.' },
+      { pattern: '429', solution: 'Rate limited. Upgrade your Birdeye plan for higher limits.' },
     ],
   },
   honeypot_rugcheck: {
@@ -112,22 +94,6 @@ const API_INFO: Record<ApiType, {
     commonErrors: [
       { pattern: 'timeout', solution: 'Honeypot API can be slow. The scanner will continue with other tokens.' },
       { pattern: '503', solution: 'Service temporarily unavailable. Token risk scores may be estimated.' },
-    ],
-  },
-  liquidity_lock: {
-    label: 'Liquidity Lock API',
-    required: false,
-    description: 'Verifies if token liquidity is locked. Used for additional safety scoring.',
-    helpNotes: 'Optional. Team Finance uses on-chain verification. API key for enhanced features only.',
-    defaultUrl: 'https://api.team.finance',
-    requiresKey: false, // Changed: on-chain verification works without API key
-    secretName: 'LIQUIDITY_LOCK_API_KEY',
-    exampleKey: 'tf_api_xxxxxxxxxxxxxxxxxxxx',
-    keyFormat: 'Optional - for enhanced rate limits only',
-    getKeyUrl: 'https://team.finance',
-    alternatives: ['On-chain verification (default)'],
-    commonErrors: [
-      { pattern: '404', solution: 'Team Finance has no public REST API. Uses on-chain verification by default.' },
     ],
   },
   jupiter: {
@@ -195,6 +161,22 @@ const API_INFO: Record<ApiType, {
     commonErrors: [
       { pattern: '429', solution: 'Public RPC rate limited. Consider using Helius or QuickNode for better limits.' },
       { pattern: 'timeout', solution: 'RPC node is slow. Try a different provider like helius.xyz or quicknode.com.' },
+    ],
+  },
+  helius: {
+    label: 'Helius API',
+    required: false,
+    description: 'Enhanced Solana RPC with webhooks, DAS API, and better rate limits.',
+    helpNotes: 'Recommended for production. Provides webhooks for new pool detection.',
+    defaultUrl: 'https://mainnet.helius-rpc.com',
+    requiresKey: true,
+    secretName: 'HELIUS_API_KEY',
+    exampleKey: 'xxxx-xxxx-xxxx-xxxx',
+    keyFormat: 'UUID API key from Helius dashboard',
+    getKeyUrl: 'https://helius.dev',
+    commonErrors: [
+      { pattern: '401', solution: 'Invalid API key. Get your key from helius.dev dashboard.' },
+      { pattern: '429', solution: 'Rate limited. Upgrade your Helius plan for higher limits.' },
     ],
   },
 };

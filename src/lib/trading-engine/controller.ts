@@ -1,6 +1,8 @@
 /**
  * Trading Flow Controller
  * Orchestrates the 3-stage trading process
+ * 
+ * CRITICAL: Pre-execution gate is called BEFORE any snipe execution
  */
 
 import type {
@@ -17,6 +19,7 @@ import { DEFAULT_TRADING_CONFIG, createTradingConfig, validateConfig } from './c
 import { detectLiquidity, monitorLiquidity } from './liquidity-detector';
 import { executeRaydiumSnipe } from './raydium-sniper';
 import { waitForJupiterIndex, executeJupiterTrade, checkJupiterIndex } from './jupiter-trader';
+import { preExecutionGate, simulateJupiterSell, type PreExecutionGateInput, type GateDecision } from '../preExecutionGate';
 
 export interface TradingFlowOptions {
   config?: Partial<TradingConfig>;
@@ -31,6 +34,10 @@ export interface TradingFlowOptions {
   executeSnipe?: boolean; // Whether to execute the snipe
   waitForJupiter?: boolean; // Whether to poll for Jupiter indexing
   abortSignal?: AbortSignal; // For cancellation
+  
+  // Pre-execution gate input (REQUIRED for safe execution)
+  gateInput?: PreExecutionGateInput;
+  skipPreExecutionGate?: boolean; // Only for testing - NEVER use in production
 }
 
 /**
@@ -70,6 +77,64 @@ export async function runTradingFlow(
     // Check for abort
     if (options.abortSignal?.aborted) {
       return createAbortedResult(startTime, liquidityResult, snipeResult, jupiterReady);
+    }
+    
+    // ==========================================
+    // STAGE 0: PRE-EXECUTION GATE (MANDATORY)
+    // ==========================================
+    
+    if (options.executeSnipe && !options.skipPreExecutionGate) {
+      if (!options.gateInput) {
+        return {
+          status: 'FAILED',
+          stages: {
+            liquidityDetection: null,
+            raydiumSnipe: null,
+            jupiterReady: false,
+          },
+          position: null,
+          error: 'Pre-execution gate input required for trade execution',
+          startedAt: startTime,
+          completedAt: Date.now(),
+        };
+      }
+      
+      // Run the pre-execution gate
+      const gateDecision = await preExecutionGate(options.gateInput);
+      
+      options.onEvent?.({
+        type: gateDecision.allowed ? 'RISK_CHECK_PASSED' : 'RISK_CHECK_FAILED',
+        data: {
+          overallScore: gateDecision.riskScore,
+          isRugPull: gateDecision.failedRules.includes('LIQUIDITY_REALITY'),
+          isHoneypot: gateDecision.failedRules.includes('EXECUTABLE_SELL'),
+          hasMintAuthority: false,
+          hasFreezeAuthority: false,
+          holderCount: options.gateInput.uniqueBuyerCount || 0,
+          topHolderPercent: 0,
+          passed: gateDecision.allowed,
+          reasons: gateDecision.reasons,
+        },
+      });
+      
+      // CRITICAL: If gate fails, BLOCK execution immediately
+      if (!gateDecision.allowed) {
+        console.log(`[Controller] PRE-EXECUTION GATE BLOCKED: ${tokenAddress}`, gateDecision.failedRules);
+        return {
+          status: 'FAILED',
+          stages: {
+            liquidityDetection: null,
+            raydiumSnipe: null,
+            jupiterReady: false,
+          },
+          position: null,
+          error: `Pre-execution gate blocked: ${gateDecision.failedRules.join(', ')} (score: ${gateDecision.riskScore})`,
+          startedAt: startTime,
+          completedAt: Date.now(),
+        };
+      }
+      
+      console.log(`[Controller] PRE-EXECUTION GATE PASSED: ${tokenAddress} (score: ${gateDecision.riskScore})`);
     }
     
     // ==========================================

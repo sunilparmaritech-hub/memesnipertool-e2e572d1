@@ -82,6 +82,9 @@ export function BotProvider({ children }: { children: ReactNode }) {
       ...prev,
       isBotActive: true,
       isPaused: false,
+      // FIX: Ensure auto-entry is enabled when bot starts — prevents
+      // stale localStorage value from blocking trades after bot restart
+      autoEntryEnabled: true,
       lastStartTime: Date.now(),
     }));
     toast({

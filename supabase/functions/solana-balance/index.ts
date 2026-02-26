@@ -1,4 +1,8 @@
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.90.1";
+import { getApiKey } from "../_shared/api-keys.ts";
+import { checkRateLimit, rateLimitResponse, SOL_PRICE_LIMIT } from "../_shared/rate-limiter.ts";
+
+const BALANCE_LIMIT = { ...SOL_PRICE_LIMIT, maxRequests: 20, functionName: 'solana-balance' };
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -52,23 +56,25 @@ Deno.serve(async (req) => {
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
+    const token = authHeader.replace("Bearer ", "");
     const supabase = createClient(supabaseUrl, supabaseAnonKey, {
       global: { headers: { Authorization: authHeader } },
     });
 
-    // Verify user using getClaims for proper JWT validation
-    const token = authHeader.replace("Bearer ", "");
-    const { data, error: authError } = await supabase.auth.getClaims(token);
-
-    if (authError || !data?.claims?.sub) {
+    // Verify user - pass token explicitly to avoid HTML error pages
+    const { data: { user }, error: authError } = await supabase.auth.getUser(token);
+    if (authError || !user?.id) {
       console.error("[SolanaBalance] Auth error:", authError?.message);
       return new Response(JSON.stringify({ error: "Invalid authentication" }), {
         status: 401,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
+    const userId = user.id;
 
-    const userId = data.claims.sub;
+    // Per-user rate limiting
+    const rl = checkRateLimit(userId, BALANCE_LIMIT);
+    if (!rl.allowed) return rateLimitResponse(rl, corsHeaders);
 
     const body: BalanceRequest = await req.json().catch(() => ({ publicKey: "" }));
     if (!body.publicKey || typeof body.publicKey !== "string") {
@@ -78,7 +84,7 @@ Deno.serve(async (req) => {
       });
     }
 
-    const rpcUrl = Deno.env.get("SOLANA_RPC_URL") || "https://api.mainnet-beta.solana.com";
+    const rpcUrl = await getApiKey('rpc_provider') || "https://api.mainnet-beta.solana.com";
 
     let rpcHost = "unknown";
     try {

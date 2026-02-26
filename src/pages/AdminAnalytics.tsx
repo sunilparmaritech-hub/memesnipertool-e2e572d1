@@ -33,14 +33,11 @@ import {
   AlertOctagon,
   Ban,
 } from "lucide-react";
+import { formatPreciseUsd } from "@/lib/precision";
 
 const CHART_COLORS = ['#22c55e', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
 
-const formatCurrency = (value: number) => {
-  if (Math.abs(value) >= 1000000) return `$${(value / 1000000).toFixed(2)}M`;
-  if (Math.abs(value) >= 1000) return `$${(value / 1000).toFixed(1)}K`;
-  return `$${value.toFixed(2)}`;
-};
+const formatCurrency = (value: number) => formatPreciseUsd(value);
 
 const AdminAnalytics = forwardRef<HTMLDivElement, object>(function AdminAnalytics(_props, ref) {
   // All hooks must be called first, before any conditional logic
@@ -92,7 +89,7 @@ const AdminAnalytics = forwardRef<HTMLDivElement, object>(function AdminAnalytic
       />
 
       <main className="relative pt-20 md:pt-24 pb-8">
-        <div className="container mx-auto px-4">
+        <div className="container mx-auto max-w-[1600px] px-2 sm:px-3 md:px-5">
           {/* Header */}
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
             <div className="flex items-center gap-3">
@@ -563,12 +560,12 @@ const AdminAnalytics = forwardRef<HTMLDivElement, object>(function AdminAnalytic
                     Scanner API Health Summary
                   </CardTitle>
                   <CardDescription>
-                    Real-time health status of token scanner APIs (DexScreener, GeckoTerminal, Birdeye, Raydium)
+                    Real-time health status of token scanner APIs (DexScreener, GeckoTerminal, CoinGecko, Raydium)
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                    {['dexscreener', 'geckoterminal', 'birdeye', 'raydium'].map((apiType) => {
+                    {['dexscreener', 'geckoterminal', 'coingecko', 'raydium'].map((apiType) => {
                       const apiData = analytics.apiHealth.byType[apiType];
                       const config = apiConfigs.find((c: ApiConfig) => c.api_type === apiType);
                       const errorCount = analytics.apiErrors.byType[apiType] || 0;

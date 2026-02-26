@@ -3,6 +3,7 @@ import { Connection, PublicKey, LAMPORTS_PER_SOL, Transaction, VersionedTransact
 import { BrowserProvider, formatEther } from 'ethers';
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/integrations/supabase/client';
+import { useWalletStore } from '@/stores/walletStore';
 
 export type WalletType = 'phantom' | 'solflare' | 'backpack' | 'metamask' | 'walletconnect';
 export type BlockchainNetwork = 'solana' | 'ethereum' | 'bsc';
@@ -56,6 +57,37 @@ declare global {
   }
 }
 
+// Detect if running on mobile
+const isMobileDevice = (): boolean => {
+  return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+};
+
+// Check if we're inside a mobile wallet in-app browser
+const isInWalletBrowser = (): boolean => {
+  const ua = navigator.userAgent.toLowerCase();
+  return ua.includes('phantom') || ua.includes('solflare') || ua.includes('backpack');
+};
+
+// Mobile deep link URLs for wallet apps
+const WALLET_DEEP_LINKS = {
+  phantom: {
+    // Universal link that works on both iOS and Android
+    browse: (url: string) => `https://phantom.app/ul/browse/${encodeURIComponent(url)}`,
+    connect: () => 'https://phantom.app/ul/v1/connect',
+    appStore: 'https://phantom.app/download',
+  },
+  solflare: {
+    browse: (url: string) => `https://solflare.com/ul/v1/browse/${encodeURIComponent(url)}`,
+    connect: () => 'solflare://connect',
+    appStore: 'https://solflare.com/download',
+  },
+  backpack: {
+    browse: (url: string) => `https://backpack.app/ul/browse/${encodeURIComponent(url)}`,
+    connect: () => 'https://backpack.app/',
+    appStore: 'https://backpack.app/download',
+  },
+};
+
 // Use multiple RPC endpoints with fallback for reliability
 // Priority: custom public RPC > widely-available public endpoints
 const SOLANA_RPC_ENDPOINTS = [
@@ -71,13 +103,14 @@ const ETH_CHAIN_ID = '0x1';
 const WALLET_STORAGE_KEY = 'connected_wallet';
 
 export function useWallet() {
-  const [wallet, setWallet] = useState<WalletState>({
-    isConnected: false,
-    address: null,
-    balance: null,
-    network: null,
-    walletType: null,
-  });
+  const { wallet, setWallet: setWalletStore, clearWallet } = useWalletStore();
+  const setWallet = useCallback((state: WalletState | ((prev: WalletState) => WalletState)) => {
+    if (typeof state === 'function') {
+      setWalletStore(state(useWalletStore.getState().wallet));
+    } else {
+      setWalletStore(state);
+    }
+  }, [setWalletStore]);
   const [isConnecting, setIsConnecting] = useState(false);
   const { toast } = useToast();
   const rpcIndexRef = useRef(0);
@@ -181,17 +214,27 @@ export function useWallet() {
     localStorage.removeItem(WALLET_STORAGE_KEY);
   }, []);
 
-  // Connect to Phantom wallet
+  // Connect to Phantom wallet (with mobile deep link support)
   const connectPhantom = useCallback(async () => {
     const provider = window.solana;
     
+    // On mobile without provider, redirect to Phantom app
     if (!provider?.isPhantom) {
+      if (isMobileDevice() && !isInWalletBrowser()) {
+        // Open the current page in Phantom's in-app browser
+        const currentUrl = window.location.href;
+        window.location.href = WALLET_DEEP_LINKS.phantom.browse(currentUrl);
+        return;
+      }
+      
       toast({
         title: 'Phantom not found',
-        description: 'Please install Phantom wallet extension',
+        description: isMobileDevice() 
+          ? 'Opening Phantom app...' 
+          : 'Please install Phantom wallet extension',
         variant: 'destructive',
       });
-      window.open('https://phantom.app/', '_blank');
+      window.open(WALLET_DEEP_LINKS.phantom.appStore, '_blank');
       return;
     }
 
@@ -237,17 +280,26 @@ export function useWallet() {
     }
   }, [toast, getSolanaBalance, saveWalletConnection]);
 
-  // Connect to Solflare wallet
+  // Connect to Solflare wallet (with mobile deep link support)
   const connectSolflare = useCallback(async () => {
     const provider = window.solflare;
     
+    // On mobile without provider, redirect to Solflare app
     if (!provider?.isSolflare) {
+      if (isMobileDevice() && !isInWalletBrowser()) {
+        const currentUrl = window.location.href;
+        window.location.href = WALLET_DEEP_LINKS.solflare.browse(currentUrl);
+        return;
+      }
+      
       toast({
         title: 'Solflare not found',
-        description: 'Please install Solflare wallet extension',
+        description: isMobileDevice() 
+          ? 'Opening Solflare app...' 
+          : 'Please install Solflare wallet extension',
         variant: 'destructive',
       });
-      window.open('https://solflare.com/', '_blank');
+      window.open(WALLET_DEEP_LINKS.solflare.appStore, '_blank');
       return;
     }
 
@@ -285,17 +337,26 @@ export function useWallet() {
     }
   }, [toast, getSolanaBalance, saveWalletConnection]);
 
-  // Connect to Backpack wallet
+  // Connect to Backpack wallet (with mobile deep link support)
   const connectBackpack = useCallback(async () => {
     const provider = window.backpack;
     
+    // On mobile without provider, redirect to Backpack app
     if (!provider?.isBackpack) {
+      if (isMobileDevice() && !isInWalletBrowser()) {
+        const currentUrl = window.location.href;
+        window.location.href = WALLET_DEEP_LINKS.backpack.browse(currentUrl);
+        return;
+      }
+      
       toast({
         title: 'Backpack not found',
-        description: 'Please install Backpack wallet extension',
+        description: isMobileDevice() 
+          ? 'Opening Backpack app...' 
+          : 'Please install Backpack wallet extension',
         variant: 'destructive',
       });
-      window.open('https://backpack.app/', '_blank');
+      window.open(WALLET_DEEP_LINKS.backpack.appStore, '_blank');
       return;
     }
 
@@ -452,6 +513,8 @@ export function useWallet() {
     }
   }, [wallet.walletType, wallet.network, toast, getSolanaProvider, clearWalletConnection]);
 
+  // CRITICAL: Enhanced balance refresh with multi-stage updates
+  // This ensures UI shows updated balance as soon as blockchain confirms
   const refreshBalance = useCallback(async () => {
     if (!wallet.isConnected || !wallet.address) return;
 
@@ -469,6 +532,15 @@ export function useWallet() {
       console.error('Failed to refresh balance:', error);
     }
   }, [wallet.isConnected, wallet.address, wallet.network, getSolanaBalance]);
+
+  // Multi-stage balance refresh for transaction confirmation
+  // Solana has eventual consistency - refresh at 0s, 2s, 5s, 10s intervals
+  const scheduleBalanceRefresh = useCallback(() => {
+    refreshBalance(); // Immediate
+    setTimeout(() => refreshBalance(), 2000);  // After 2s
+    setTimeout(() => refreshBalance(), 5000);  // After 5s
+    setTimeout(() => refreshBalance(), 10000); // After 10s
+  }, [refreshBalance]);
 
   // Sign a Solana transaction (user signs directly on wallet)
   const signTransaction = useCallback(async <T extends Transaction | VersionedTransaction>(
@@ -544,8 +616,8 @@ export function useWallet() {
         description: `Signature: ${result.signature.slice(0, 8)}...`,
       });
 
-      // Refresh balance after transaction
-      setTimeout(() => refreshBalance(), 2000);
+      // CRITICAL: Use multi-stage balance refresh for proper UI sync
+      scheduleBalanceRefresh();
 
       return {
         signature: result.signature,
@@ -568,7 +640,7 @@ export function useWallet() {
         error: errorMessage,
       };
     }
-  }, [wallet, toast, getSolanaProvider, refreshBalance]);
+  }, [wallet, toast, getSolanaProvider, scheduleBalanceRefresh]);
 
   // Sign a message (for verification purposes)
   const signMessage = useCallback(async (message: string): Promise<Uint8Array | null> => {
@@ -780,6 +852,7 @@ export function useWallet() {
     showDisconnectConfirm,
     pendingDisconnect,
     refreshBalance,
+    scheduleBalanceRefresh, // Multi-stage refresh for post-transaction updates
     signTransaction,
     signAndSendTransaction,
     signMessage,

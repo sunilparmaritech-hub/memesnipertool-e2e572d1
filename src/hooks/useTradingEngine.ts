@@ -39,6 +39,7 @@ import {
   type LiquidityDetectionResult,
   type JupiterIndexStatus,
   type UnsignedTransaction,
+  type PreExecutionGateInput,
 } from '@/lib/trading-engine';
 
 export type TradingEngineStatus = 
@@ -168,12 +169,25 @@ export function useTradingEngine() {
   /**
    * Quick snipe a token - detect liquidity and execute immediately
    * @param config - Trading config including profitTakePercent and stopLossPercent for position persistence
+   * @param tokenMetadata - Optional metadata for pre-execution gate (symbol, name, liquidity, etc.)
    */
   const snipeToken = useCallback(async (
     tokenAddress: string,
     walletAddress: string,
     walletSignAndSend: (tx: VersionedTransaction) => Promise<SignAndSendResult>,
-    config?: TradingEngineConfig
+    config?: TradingEngineConfig,
+    tokenMetadata?: {
+      symbol?: string;
+      name?: string;
+      liquidity?: number;
+      priceUsd?: number;
+      buyerPosition?: number;
+      riskScore?: number;
+      isPumpFun?: boolean;
+      source?: string;
+      hasJupiterRoute?: boolean;
+      hasFreezeAuthority?: boolean;
+    }
   ): Promise<TradingFlowResult | null> => {
     if (isExecutingRef.current) {
       console.log('[TradingEngine] Already executing, skipping');
@@ -241,12 +255,31 @@ export function useTradingEngine() {
     });
 
     try {
+      // Build gate input for pre-execution validation
+      // CRITICAL: hasJupiterRoute must come from actual route validation, NOT hardcoded
+      const gateInput = {
+        tokenAddress,
+        tokenSymbol: tokenMetadata?.symbol || 'UNKNOWN',
+        tokenName: tokenMetadata?.name || 'Unknown Token',
+        liquidity: tokenMetadata?.liquidity ?? (config?.minLiquidity ?? 5000),
+        priceUsd: tokenMetadata?.priceUsd,
+        buyerPosition: tokenMetadata?.buyerPosition,
+        isPumpFun: tokenMetadata?.isPumpFun,
+        source: tokenMetadata?.source,
+        // CRITICAL: Route validation must be passed from caller (orchestrator)
+        // DO NOT hardcode to true - this caused fake token trades
+        hasJupiterRoute: tokenMetadata?.hasJupiterRoute,
+        hasFreezeAuthority: tokenMetadata?.hasFreezeAuthority,
+      };
+
       const result = await quickSnipe(tokenAddress, {
         walletAddress,
         signTransaction: createSignTransaction(walletSignAndSend),
         config,
         onEvent: handleEvent,
         abortSignal: abortControllerRef.current.signal,
+        gateInput, // CRITICAL: Pass gate input for pre-execution validation
+        skipPreExecutionGate: config?.skipRiskCheck, // If risk check was already done, skip gate
       });
 
       // CRITICAL: Persist position to database after successful snipe
@@ -311,9 +344,10 @@ export function useTradingEngine() {
               console.log('[TradingEngine] Position saved to database:', savedPosition?.id);
             }
 
-            // Log to trade_history for Transaction History display (use type assertion)
-            const { error: historyError } = await (supabase
-              .from('trade_history' as any)
+            // Log to trade_history for Transaction History display
+            // CRITICAL: Include ALL metadata for comprehensive transaction records
+            const { error: historyError } = await supabase
+              .from('trade_history')
               .insert({
                 user_id: user.id,
                 token_address: position.tokenAddress,
@@ -321,16 +355,37 @@ export function useTradingEngine() {
                 token_name: position.tokenName || position.tokenSymbol,
                 trade_type: 'buy',
                 amount: position.tokenAmount,
-                price_sol: position.entryPrice,
-                price_usd: entryPriceUsd,
+                // Semantic SOL columns (source of truth)
+                sol_spent: position.solSpent || entryValue,
+                sol_received: 0, // BUY never receives SOL
+                token_amount: position.tokenAmount,
+                // Legacy compatibility
+                price_sol: position.solSpent || entryValue,
+                price_usd: entryPriceUsd ? entryPriceUsd * position.tokenAmount : null,
                 status: 'confirmed',
                 tx_hash: position.entryTxHash,
-              }) as any);
+                // CRITICAL: Extended metadata from scanner
+                buyer_position: tokenMetadata?.buyerPosition || null,
+                liquidity: tokenMetadata?.liquidity || null,
+                risk_score: tokenMetadata?.riskScore ?? null,
+                entry_price: entryPriceUsd || position.entryPrice || null,
+                slippage: config?.slippage ? config.slippage * 100 : null, // Convert from decimal to percent
+                // Integrity tracking
+                data_source: 'on_chain',
+                is_corrupted: false,
+                // P&L fields are NULL for BUY
+                realized_pnl_sol: null,
+                roi_percent: null,
+              });
 
             if (historyError) {
               console.error('[TradingEngine] Failed to log trade history:', historyError);
             } else {
-              console.log('[TradingEngine] Trade logged to history');
+              console.log('[TradingEngine] Trade logged to history with metadata:', {
+                buyer_position: tokenMetadata?.buyerPosition,
+                liquidity: tokenMetadata?.liquidity,
+                sol_spent: position.solSpent,
+              });
             }
           }
         } catch (persistError) {

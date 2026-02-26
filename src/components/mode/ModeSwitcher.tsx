@@ -28,23 +28,23 @@ export default function ModeSwitcher() {
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <div className="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-secondary/50 border border-border/50 cursor-pointer hover:bg-secondary/70 transition-colors">
-          <div className={`flex items-center gap-1.5 ${!isLive ? 'text-warning' : 'text-muted-foreground'}`}>
-            <FlaskConical className="w-3.5 h-3.5" />
-            <span className="text-xs font-medium hidden sm:inline">Demo</span>
+        <div className="flex items-center gap-1.5 sm:gap-2 px-1.5 sm:px-2 py-1 sm:py-1.5 rounded-lg bg-secondary/50 border border-border/50 cursor-pointer hover:bg-secondary/70 transition-colors">
+          <div className={`flex items-center gap-1 sm:gap-1.5 ${!isLive ? 'text-warning' : 'text-muted-foreground'}`}>
+            <FlaskConical className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
+            <span className="text-[10px] sm:text-xs font-medium hidden sm:inline">Demo</span>
           </div>
           <Switch
             checked={isLive}
             onCheckedChange={(checked) => setMode(checked ? 'live' : 'demo')}
-            className="data-[state=checked]:bg-success data-[state=unchecked]:bg-warning h-5 w-9"
+            className="data-[state=checked]:bg-success data-[state=unchecked]:bg-warning h-4 w-7 sm:h-5 sm:w-9"
             onClick={(e) => e.stopPropagation()}
           />
-          <div className={`flex items-center gap-1.5 ${isLive ? 'text-success' : 'text-muted-foreground'}`}>
-            <Radio className="w-3.5 h-3.5" />
-            <span className="text-xs font-medium hidden sm:inline">Live</span>
+          <div className={`flex items-center gap-1 sm:gap-1.5 ${isLive ? 'text-success' : 'text-muted-foreground'}`}>
+            <Radio className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
+            <span className="text-[10px] sm:text-xs font-medium hidden sm:inline">Live</span>
           </div>
           {!isLive && (
-            <Badge variant="outline" className="bg-warning/10 text-warning border-warning/30 text-[10px] px-1.5 py-0 hidden md:flex">
+            <Badge variant="outline" className="bg-warning/10 text-warning border-warning/30 text-[10px] px-1 py-0 hidden md:flex">
               TEST
             </Badge>
           )}

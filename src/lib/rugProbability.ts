@@ -467,7 +467,7 @@ export async function calculateRugProbability(
     warnings.push('Asymmetric buyer distribution');
   }
   
-  // Determine if trade should be blocked (>= 55%)
+  // Determine if trade should be blocked (>= 70% hard block)
   const blockTrade = rugProbability >= RUG_PROBABILITY_BLOCK_THRESHOLD;
   
   let blockReason: string | undefined;

@@ -31,6 +31,7 @@ import { UserManagementPanel } from "@/components/admin/UserManagementPanel";
 import { TransactionAuditPanel } from "@/components/admin/TransactionAuditPanel";
 import { SubscriptionManagementPanel } from "@/components/admin/SubscriptionManagementPanel";
 import { PaymentSettingsPanel } from "@/components/admin/PaymentSettingsPanel";
+import { RuleWeightsPanel } from "@/components/admin/RuleWeightsPanel";
 
 const Admin = forwardRef<HTMLDivElement, object>(function Admin(_props, ref) {
   const { isAdmin, user } = useAuth();
@@ -99,6 +100,7 @@ const Admin = forwardRef<HTMLDivElement, object>(function Admin(_props, ref) {
     { id: "liquidity", label: "Liquidity Rules", icon: Droplets },
     { id: "risk", label: "Risk Filters", icon: AlertTriangle },
     { id: "engine", label: "Trading Engine", icon: Zap },
+    { id: "ruleweights", label: "Rule Weights", icon: Database },
     { id: "copytrade", label: "Copy Trading", icon: Copy },
     { id: "subscriptions", label: "Subscriptions", icon: Crown },
     { id: "users", label: "User Management", icon: Users },
@@ -169,6 +171,13 @@ const Admin = forwardRef<HTMLDivElement, object>(function Admin(_props, ref) {
                 {/* SOL Payments Tab */}
                 {activeTab === "payments" && (
                   <PaymentSettingsPanel />
+                )}
+
+                {/* Rule Weights Tab */}
+                {activeTab === "ruleweights" && (
+                  <div className="animate-fade-in">
+                    <RuleWeightsPanel />
+                  </div>
                 )}
 
                 {/* Market Scanner Settings Tab */}

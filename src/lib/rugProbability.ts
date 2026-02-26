@@ -119,9 +119,10 @@ const WEIGHTS = {
   BUYER_DISTRIBUTION: 0.15,
 } as const;
 
-// Thresholds - Updated scoring policy
-const RUG_PROBABILITY_BLOCK_THRESHOLD = 55;   // Block if >= 55%
-const RUG_PROBABILITY_OBSERVE_THRESHOLD = 40; // Observe if 40-55%, Trade if < 40%
+// Thresholds - Probabilistic scoring policy (upgraded)
+const RUG_PROBABILITY_BLOCK_THRESHOLD = 70;   // Hard block if >= 70%
+const RUG_PROBABILITY_REDUCE_THRESHOLD = 55;  // Reduced size if 55–69%
+const RUG_PROBABILITY_OBSERVE_THRESHOLD = 40; // Observe if 40-54%, Trade if < 40%
 
 const LIQUIDITY_FDV_THRESHOLDS = {
   HEALTHY: 0.1,      // > 10% is healthy
@@ -430,19 +431,20 @@ export async function calculateRugProbability(
     breakdown.buyerDistribution.contribution
   );
   
-  // Determine risk level based on updated thresholds
-  // < 40% = SAFE (trade)
-  // 40-55% = OBSERVE (warn but allow)
-  // >= 55% = BLOCK
+  // Determine risk level — new probabilistic thresholds:
+  // < 40% = SAFE (full trade)
+  // 40–54% = OBSERVE (warn, allow with normal size)
+  // 55–69% = REDUCED SIZE (allow but penalise position size)
+  // >= 70% = HARD BLOCK
   let riskLevel: RugProbabilityResult['riskLevel'];
   if (rugProbability < 40) {
-    riskLevel = 'LOW';      // SAFE - can trade
+    riskLevel = 'LOW';      // SAFE
   } else if (rugProbability < 55) {
-    riskLevel = 'MEDIUM';   // OBSERVE - warn but allow
-  } else if (rugProbability < 75) {
-    riskLevel = 'HIGH';     // BLOCK
+    riskLevel = 'MEDIUM';   // OBSERVE
+  } else if (rugProbability < 70) {
+    riskLevel = 'HIGH';     // REDUCED SIZE
   } else {
-    riskLevel = 'CRITICAL'; // BLOCK - extreme risk
+    riskLevel = 'CRITICAL'; // HARD BLOCK
   }
   
   // Generate warnings
@@ -465,7 +467,7 @@ export async function calculateRugProbability(
     warnings.push('Asymmetric buyer distribution');
   }
   
-  // Determine if trade should be blocked (>= 55%)
+  // Determine if trade should be blocked (>= 70% hard block)
   const blockTrade = rugProbability >= RUG_PROBABILITY_BLOCK_THRESHOLD;
   
   let blockReason: string | undefined;

@@ -119,9 +119,10 @@ const WEIGHTS = {
   BUYER_DISTRIBUTION: 0.15,
 } as const;
 
-// Thresholds - Updated scoring policy
-const RUG_PROBABILITY_BLOCK_THRESHOLD = 55;   // Block if >= 55%
-const RUG_PROBABILITY_OBSERVE_THRESHOLD = 40; // Observe if 40-55%, Trade if < 40%
+// Thresholds - Probabilistic scoring policy (upgraded)
+const RUG_PROBABILITY_BLOCK_THRESHOLD = 70;   // Hard block if >= 70%
+const RUG_PROBABILITY_REDUCE_THRESHOLD = 55;  // Reduced size if 55–69%
+const RUG_PROBABILITY_OBSERVE_THRESHOLD = 40; // Observe if 40-54%, Trade if < 40%
 
 const LIQUIDITY_FDV_THRESHOLDS = {
   HEALTHY: 0.1,      // > 10% is healthy

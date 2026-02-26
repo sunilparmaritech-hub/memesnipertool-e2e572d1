@@ -100,6 +100,7 @@ const Admin = forwardRef<HTMLDivElement, object>(function Admin(_props, ref) {
     { id: "liquidity", label: "Liquidity Rules", icon: Droplets },
     { id: "risk", label: "Risk Filters", icon: AlertTriangle },
     { id: "engine", label: "Trading Engine", icon: Zap },
+    { id: "ruleweights", label: "Rule Weights", icon: Database },
     { id: "copytrade", label: "Copy Trading", icon: Copy },
     { id: "subscriptions", label: "Subscriptions", icon: Crown },
     { id: "users", label: "User Management", icon: Users },

@@ -8,25 +8,28 @@ export interface CreditPack {
   id: string;
   name: string;
   sol_price: number;
-  credits_amount: number;
+  credits: number;
+  credits_amount?: number; // alias for credits for backward compat
   bonus_credits: number;
   is_active: boolean;
   sort_order: number;
+  description?: string | null;
+  badge?: string | null;
 }
 
 export interface CreditTransaction {
   id: string;
   user_id: string;
-  tx_hash: string;
-  sender_wallet: string;
-  recipient_wallet: string;
+  tx_hash: string | null;
+  sender_wallet: string | null;
   amount_sol: number;
   credits_added: number;
   status: string;
-  failure_reason: string | null;
   memo: string | null;
   created_at: string;
   confirmed_at: string | null;
+  pack_id?: string | null;
+  usd_value_at_payment?: number | null;
 }
 
 export interface UserCredits {

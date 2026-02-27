@@ -76,11 +76,20 @@ export function useUsageTracking() {
     return limit !== -1 && limit !== 9999 && getUsage(type) >= limit;
   };
 
+  const canUse = (type: UsageType): boolean => !isAtLimit(type);
+  const getUsagePercent = (type: UsageType): number => {
+    const limit = getLimit(type);
+    if (!limit || limit === 9999 || limit === -1) return 0;
+    return Math.min(100, Math.round((getUsage(type) / limit) * 100));
+  };
+
   return {
     incrementUsage: incrementUsage.mutate,
     getUsage,
     getLimit,
     isAtLimit,
+    canUse,
+    getUsagePercent,
     usageData,
   };
 }

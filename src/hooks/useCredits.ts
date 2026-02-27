@@ -71,13 +71,13 @@ export function useCredits() {
     ...(adminCreditCosts || {}),
   };
 
-  // Fetch user credit balance
+  // Fetch user credit balance from user_credits table
   const { data: credits, isLoading: creditsLoading } = useQuery({
     queryKey: ["user-credits", user?.id],
     queryFn: async (): Promise<UserCredits> => {
       if (!user) return { credit_balance: 0, total_credits_purchased: 0, total_credits_used: 0 };
       const { data, error } = await supabase
-        .from("profiles")
+        .from("user_credits")
         .select("credit_balance, total_credits_purchased, total_credits_used")
         .eq("user_id", user.id)
         .maybeSingle();

@@ -92,20 +92,14 @@ export function useVerificationTier() {
     },
   });
 
-  const logDeviceFingerprint = async (fingerprint: string) => {
-    if (!user) return;
-    await supabase
-      .from("profiles")
-      .update({ device_fingerprint: fingerprint })
-      .eq("user_id", user.id);
+  const logDeviceFingerprint = async (_fingerprint: string) => {
+    // device_fingerprint not stored in profiles - silently skip
+    console.log("[VerificationTier] device fingerprint noted (not persisted)");
   };
 
-  const logIpCountry = async (country: string) => {
-    if (!user) return;
-    await supabase
-      .from("profiles")
-      .update({ ip_country: country })
-      .eq("user_id", user.id);
+  const logIpCountry = async (_country: string) => {
+    // ip_country not stored in profiles - silently skip
+    console.log("[VerificationTier] ip country noted (not persisted)");
   };
 
   return {

@@ -152,6 +152,42 @@ export type Database = {
         }
         Relationships: []
       }
+      circuit_breaker_events: {
+        Row: {
+          cooldown_expires_at: string | null
+          id: string
+          reset_at: string | null
+          reset_by: string | null
+          reset_reason: string | null
+          trigger_details: Json | null
+          trigger_type: string
+          triggered_at: string
+          user_id: string
+        }
+        Insert: {
+          cooldown_expires_at?: string | null
+          id?: string
+          reset_at?: string | null
+          reset_by?: string | null
+          reset_reason?: string | null
+          trigger_details?: Json | null
+          trigger_type: string
+          triggered_at?: string
+          user_id: string
+        }
+        Update: {
+          cooldown_expires_at?: string | null
+          id?: string
+          reset_at?: string | null
+          reset_by?: string | null
+          reset_reason?: string | null
+          trigger_details?: Json | null
+          trigger_type?: string
+          triggered_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       copy_trades: {
         Row: {
           action: string
@@ -411,6 +447,54 @@ export type Database = {
         }
         Relationships: []
       }
+      deployer_reputation: {
+        Row: {
+          avg_liquidity_survival_seconds: number | null
+          avg_lp_lifespan_seconds: number | null
+          cluster_association_score: number | null
+          created_at: string
+          fast_lp_pull_flag: boolean | null
+          id: string
+          last_token_deployed_at: string | null
+          rapid_deploy_flag: boolean | null
+          rug_ratio: number | null
+          tokens_last_7d: number | null
+          total_tokens_created: number | null
+          updated_at: string
+          wallet_address: string
+        }
+        Insert: {
+          avg_liquidity_survival_seconds?: number | null
+          avg_lp_lifespan_seconds?: number | null
+          cluster_association_score?: number | null
+          created_at?: string
+          fast_lp_pull_flag?: boolean | null
+          id?: string
+          last_token_deployed_at?: string | null
+          rapid_deploy_flag?: boolean | null
+          rug_ratio?: number | null
+          tokens_last_7d?: number | null
+          total_tokens_created?: number | null
+          updated_at?: string
+          wallet_address: string
+        }
+        Update: {
+          avg_liquidity_survival_seconds?: number | null
+          avg_lp_lifespan_seconds?: number | null
+          cluster_association_score?: number | null
+          created_at?: string
+          fast_lp_pull_flag?: boolean | null
+          id?: string
+          last_token_deployed_at?: string | null
+          rapid_deploy_flag?: boolean | null
+          rug_ratio?: number | null
+          tokens_last_7d?: number | null
+          total_tokens_created?: number | null
+          updated_at?: string
+          wallet_address?: string
+        }
+        Relationships: []
+      }
       disclaimer_acknowledgments: {
         Row: {
           acknowledged_at: string
@@ -626,9 +710,15 @@ export type Database = {
       }
       risk_settings: {
         Row: {
+          circuit_breaker_cooldown_minutes: number | null
           circuit_breaker_enabled: boolean | null
+          circuit_breaker_freeze_count: number | null
           circuit_breaker_loss_threshold: number | null
+          circuit_breaker_requires_admin_override: boolean | null
+          circuit_breaker_rug_count: number | null
+          circuit_breaker_tax_count: number | null
           circuit_breaker_time_window_minutes: number | null
+          circuit_breaker_trigger_reason: string | null
           circuit_breaker_triggered_at: string | null
           created_at: string
           emergency_stop_active: boolean | null
@@ -641,9 +731,15 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          circuit_breaker_cooldown_minutes?: number | null
           circuit_breaker_enabled?: boolean | null
+          circuit_breaker_freeze_count?: number | null
           circuit_breaker_loss_threshold?: number | null
+          circuit_breaker_requires_admin_override?: boolean | null
+          circuit_breaker_rug_count?: number | null
+          circuit_breaker_tax_count?: number | null
           circuit_breaker_time_window_minutes?: number | null
+          circuit_breaker_trigger_reason?: string | null
           circuit_breaker_triggered_at?: string | null
           created_at?: string
           emergency_stop_active?: boolean | null
@@ -656,9 +752,15 @@ export type Database = {
           user_id: string
         }
         Update: {
+          circuit_breaker_cooldown_minutes?: number | null
           circuit_breaker_enabled?: boolean | null
+          circuit_breaker_freeze_count?: number | null
           circuit_breaker_loss_threshold?: number | null
+          circuit_breaker_requires_admin_override?: boolean | null
+          circuit_breaker_rug_count?: number | null
+          circuit_breaker_tax_count?: number | null
           circuit_breaker_time_window_minutes?: number | null
+          circuit_breaker_trigger_reason?: string | null
           circuit_breaker_triggered_at?: string | null
           created_at?: string
           emergency_stop_active?: boolean | null

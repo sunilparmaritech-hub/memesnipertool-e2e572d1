@@ -511,7 +511,7 @@ export function useLiquidityRetryWorker() {
       const { data, error } = await supabase
         .from('positions')
         .update({
-          status: 'waiting_for_liquidity',
+          status: 'waiting_for_liquidity' as any,
           waiting_for_liquidity_since: new Date().toISOString(),
           liquidity_check_count: 0,
           liquidity_last_checked_at: null,

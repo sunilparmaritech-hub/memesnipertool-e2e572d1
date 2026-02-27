@@ -111,7 +111,7 @@ export function useCredits() {
         console.error("Error fetching packs:", error);
         return [];
       }
-      return (data || []) as CreditPack[];
+      return (data || []).map(p => ({ ...p, credits_amount: p.credits })) as CreditPack[];
     },
     staleTime: 60_000,
   });
@@ -132,7 +132,7 @@ export function useCredits() {
         console.error("Error fetching transactions:", error);
         return [];
       }
-      return (data || []) as CreditTransaction[];
+      return (data || []) as unknown as CreditTransaction[];
     },
     enabled: !!user,
     staleTime: 15_000,

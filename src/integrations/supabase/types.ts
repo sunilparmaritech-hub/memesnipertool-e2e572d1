@@ -450,6 +450,8 @@ export type Database = {
           exit_reason: string | null
           exit_tx_id: string | null
           id: string
+          liquidity_check_count: number | null
+          liquidity_last_checked_at: string | null
           profit_loss_percent: number | null
           profit_loss_value: number | null
           profit_take_percent: number
@@ -460,6 +462,7 @@ export type Database = {
           token_symbol: string
           updated_at: string
           user_id: string
+          waiting_for_liquidity_since: string | null
         }
         Insert: {
           amount: number
@@ -475,6 +478,8 @@ export type Database = {
           exit_reason?: string | null
           exit_tx_id?: string | null
           id?: string
+          liquidity_check_count?: number | null
+          liquidity_last_checked_at?: string | null
           profit_loss_percent?: number | null
           profit_loss_value?: number | null
           profit_take_percent: number
@@ -485,6 +490,7 @@ export type Database = {
           token_symbol: string
           updated_at?: string
           user_id: string
+          waiting_for_liquidity_since?: string | null
         }
         Update: {
           amount?: number
@@ -500,6 +506,8 @@ export type Database = {
           exit_reason?: string | null
           exit_tx_id?: string | null
           id?: string
+          liquidity_check_count?: number | null
+          liquidity_last_checked_at?: string | null
           profit_loss_percent?: number | null
           profit_loss_value?: number | null
           profit_take_percent?: number
@@ -510,6 +518,7 @@ export type Database = {
           token_symbol?: string
           updated_at?: string
           user_id?: string
+          waiting_for_liquidity_since?: string | null
         }
         Relationships: []
       }
@@ -520,7 +529,10 @@ export type Database = {
           email: string | null
           id: string
           is_suspended: boolean | null
+          referral_code: string | null
+          referral_earnings: number | null
           suspension_reason: string | null
+          total_referrals: number | null
           updated_at: string
           user_id: string
           wallet_address: string | null
@@ -531,7 +543,10 @@ export type Database = {
           email?: string | null
           id?: string
           is_suspended?: boolean | null
+          referral_code?: string | null
+          referral_earnings?: number | null
           suspension_reason?: string | null
+          total_referrals?: number | null
           updated_at?: string
           user_id: string
           wallet_address?: string | null
@@ -542,7 +557,10 @@ export type Database = {
           email?: string | null
           id?: string
           is_suspended?: boolean | null
+          referral_code?: string | null
+          referral_earnings?: number | null
           suspension_reason?: string | null
+          total_referrals?: number | null
           updated_at?: string
           user_id?: string
           wallet_address?: string | null
@@ -738,13 +756,48 @@ export type Database = {
         }
         Relationships: []
       }
+      token_processing_states: {
+        Row: {
+          created_at: string
+          id: string
+          pending_reason: string | null
+          state: string
+          token_address: string
+          updated_at: string
+          user_id: string | null
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          pending_reason?: string | null
+          state?: string
+          token_address: string
+          updated_at?: string
+          user_id?: string | null
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          pending_reason?: string | null
+          state?: string
+          token_address?: string
+          updated_at?: string
+          user_id?: string | null
+        }
+        Relationships: []
+      }
       trade_history: {
         Row: {
           amount: number
+          buyer_position: number | null
           created_at: string
+          entry_price: number | null
           id: string
+          liquidity: number | null
           price_sol: number | null
           price_usd: number | null
+          risk_score: number | null
+          sol_spent: number | null
           status: string | null
           token_address: string
           token_name: string | null
@@ -755,10 +808,15 @@ export type Database = {
         }
         Insert: {
           amount: number
+          buyer_position?: number | null
           created_at?: string
+          entry_price?: number | null
           id?: string
+          liquidity?: number | null
           price_sol?: number | null
           price_usd?: number | null
+          risk_score?: number | null
+          sol_spent?: number | null
           status?: string | null
           token_address: string
           token_name?: string | null
@@ -769,10 +827,15 @@ export type Database = {
         }
         Update: {
           amount?: number
+          buyer_position?: number | null
           created_at?: string
+          entry_price?: number | null
           id?: string
+          liquidity?: number | null
           price_sol?: number | null
           price_usd?: number | null
+          risk_score?: number | null
+          sol_spent?: number | null
           status?: string | null
           token_address?: string
           token_name?: string | null
@@ -912,12 +975,15 @@ export type Database = {
           min_liquidity: number
           priority: Database["public"]["Enums"]["sniping_priority"]
           profit_take_percentage: number
+          slippage_tolerance: number | null
           stop_loss_percentage: number
+          target_buyer_positions: number[] | null
           token_blacklist: string[]
           token_whitelist: string[]
           trade_amount: number
           updated_at: string
           user_id: string
+          validation_rule_toggles: Json | null
         }
         Insert: {
           category_filters?: string[]
@@ -927,12 +993,15 @@ export type Database = {
           min_liquidity?: number
           priority?: Database["public"]["Enums"]["sniping_priority"]
           profit_take_percentage?: number
+          slippage_tolerance?: number | null
           stop_loss_percentage?: number
+          target_buyer_positions?: number[] | null
           token_blacklist?: string[]
           token_whitelist?: string[]
           trade_amount?: number
           updated_at?: string
           user_id: string
+          validation_rule_toggles?: Json | null
         }
         Update: {
           category_filters?: string[]
@@ -942,12 +1011,15 @@ export type Database = {
           min_liquidity?: number
           priority?: Database["public"]["Enums"]["sniping_priority"]
           profit_take_percentage?: number
+          slippage_tolerance?: number | null
           stop_loss_percentage?: number
+          target_buyer_positions?: number[] | null
           token_blacklist?: string[]
           token_whitelist?: string[]
           trade_amount?: number
           updated_at?: string
           user_id?: string
+          validation_rule_toggles?: Json | null
         }
         Relationships: []
       }
@@ -969,6 +1041,7 @@ export type Database = {
         }
         Returns: Json
       }
+      get_credit_costs: { Args: never; Returns: Json }
       get_subscription_with_usage: { Args: { _user_id: string }; Returns: Json }
       get_user_role: {
         Args: { _user_id: string }

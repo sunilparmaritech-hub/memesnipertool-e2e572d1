@@ -55,14 +55,11 @@ export function AdminGrantCredits() {
       return;
     }
     setGranting(true);
-    const { error } = await supabase
-      .from("profiles")
-      .update({
-        credit_balance: foundUser.credit_balance + amount,
-        total_credits_purchased: amount, // increment via raw value since we can't do atomic add via client
-        updated_at: new Date().toISOString(),
-      })
-      .eq("user_id", foundUser.user_id);
+    // Use the add_credits RPC for atomic update
+    const { error } = await supabase.rpc("add_credits", {
+      _user_id: foundUser.user_id,
+      _amount: amount,
+    });
 
     if (error) {
       toast.error("Failed to grant credits: " + error.message);

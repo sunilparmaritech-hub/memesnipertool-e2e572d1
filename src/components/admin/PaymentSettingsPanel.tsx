@@ -137,7 +137,7 @@ export function PaymentSettingsPanel() {
       const { error } = await supabase.from("credit_packs").insert({
         name: newPack.name,
         sol_price: parseFloat(newPack.sol_price),
-        credits_amount: parseInt(newPack.credits_amount),
+        credits: parseInt(newPack.credits_amount),
         bonus_credits: parseInt(newPack.bonus_credits) || 0,
         sort_order: packs.length + 1,
       });

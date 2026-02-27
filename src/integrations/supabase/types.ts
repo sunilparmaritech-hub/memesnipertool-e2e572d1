@@ -452,13 +452,17 @@ export type Database = {
           avg_liquidity_survival_seconds: number | null
           avg_lp_lifespan_seconds: number | null
           cluster_association_score: number | null
+          cluster_id: string | null
           created_at: string
           fast_lp_pull_flag: boolean | null
           id: string
           last_token_deployed_at: string | null
+          last_updated: string | null
           rapid_deploy_flag: boolean | null
+          reputation_score: number | null
           rug_ratio: number | null
           tokens_last_7d: number | null
+          total_rugs: number | null
           total_tokens_created: number | null
           updated_at: string
           wallet_address: string
@@ -467,13 +471,17 @@ export type Database = {
           avg_liquidity_survival_seconds?: number | null
           avg_lp_lifespan_seconds?: number | null
           cluster_association_score?: number | null
+          cluster_id?: string | null
           created_at?: string
           fast_lp_pull_flag?: boolean | null
           id?: string
           last_token_deployed_at?: string | null
+          last_updated?: string | null
           rapid_deploy_flag?: boolean | null
+          reputation_score?: number | null
           rug_ratio?: number | null
           tokens_last_7d?: number | null
+          total_rugs?: number | null
           total_tokens_created?: number | null
           updated_at?: string
           wallet_address: string
@@ -482,13 +490,17 @@ export type Database = {
           avg_liquidity_survival_seconds?: number | null
           avg_lp_lifespan_seconds?: number | null
           cluster_association_score?: number | null
+          cluster_id?: string | null
           created_at?: string
           fast_lp_pull_flag?: boolean | null
           id?: string
           last_token_deployed_at?: string | null
+          last_updated?: string | null
           rapid_deploy_flag?: boolean | null
+          reputation_score?: number | null
           rug_ratio?: number | null
           tokens_last_7d?: number | null
+          total_rugs?: number | null
           total_tokens_created?: number | null
           updated_at?: string
           wallet_address?: string
@@ -651,6 +663,30 @@ export type Database = {
         }
         Relationships: []
       }
+      referrals: {
+        Row: {
+          bonus_credited: boolean
+          created_at: string
+          id: string
+          referred_id: string
+          referrer_id: string
+        }
+        Insert: {
+          bonus_credited?: boolean
+          created_at?: string
+          id?: string
+          referred_id: string
+          referrer_id: string
+        }
+        Update: {
+          bonus_credited?: boolean
+          created_at?: string
+          id?: string
+          referred_id?: string
+          referrer_id?: string
+        }
+        Relationships: []
+      }
       risk_check_logs: {
         Row: {
           buy_tax: number | null
@@ -725,6 +761,8 @@ export type Database = {
           id: string
           max_risk_score: number | null
           max_tax_percent: number | null
+          min_liquidity_auto_usd: number | null
+          min_liquidity_manual_usd: number | null
           require_liquidity_locked: boolean | null
           require_ownership_renounced: boolean | null
           updated_at: string
@@ -746,6 +784,8 @@ export type Database = {
           id?: string
           max_risk_score?: number | null
           max_tax_percent?: number | null
+          min_liquidity_auto_usd?: number | null
+          min_liquidity_manual_usd?: number | null
           require_liquidity_locked?: boolean | null
           require_ownership_renounced?: boolean | null
           updated_at?: string
@@ -767,6 +807,8 @@ export type Database = {
           id?: string
           max_risk_score?: number | null
           max_tax_percent?: number | null
+          min_liquidity_auto_usd?: number | null
+          min_liquidity_manual_usd?: number | null
           require_liquidity_locked?: boolean | null
           require_ownership_renounced?: boolean | null
           updated_at?: string
@@ -822,6 +864,48 @@ export type Database = {
           trial_end?: string | null
           updated_at?: string
           user_id?: string
+        }
+        Relationships: []
+      }
+      support_tickets: {
+        Row: {
+          category: string
+          created_at: string
+          description: string
+          id: string
+          priority: string
+          status: string
+          subject: string
+          ticket_number: string
+          updated_at: string
+          user_id: string
+          wallet_address: string | null
+        }
+        Insert: {
+          category?: string
+          created_at?: string
+          description: string
+          id?: string
+          priority?: string
+          status?: string
+          subject: string
+          ticket_number: string
+          updated_at?: string
+          user_id: string
+          wallet_address?: string | null
+        }
+        Update: {
+          category?: string
+          created_at?: string
+          description?: string
+          id?: string
+          priority?: string
+          status?: string
+          subject?: string
+          ticket_number?: string
+          updated_at?: string
+          user_id?: string
+          wallet_address?: string | null
         }
         Relationships: []
       }
@@ -1125,6 +1209,33 @@ export type Database = {
         }
         Relationships: []
       }
+      volume_authenticity_cache: {
+        Row: {
+          authenticity_score: number | null
+          bot_volume_ratio: number | null
+          cached_at: string
+          id: string
+          token_address: string
+          wash_trade_ratio: number | null
+        }
+        Insert: {
+          authenticity_score?: number | null
+          bot_volume_ratio?: number | null
+          cached_at?: string
+          id?: string
+          token_address: string
+          wash_trade_ratio?: number | null
+        }
+        Update: {
+          authenticity_score?: number | null
+          bot_volume_ratio?: number | null
+          cached_at?: string
+          id?: string
+          token_address?: string
+          wash_trade_ratio?: number | null
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
@@ -1144,6 +1255,7 @@ export type Database = {
         Returns: Json
       }
       get_credit_costs: { Args: never; Returns: Json }
+      get_payment_wallet: { Args: never; Returns: string }
       get_subscription_with_usage: { Args: { _user_id: string }; Returns: Json }
       get_user_role: {
         Args: { _user_id: string }

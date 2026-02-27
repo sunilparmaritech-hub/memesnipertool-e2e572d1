@@ -26,18 +26,25 @@ export function AdminGrantCredits() {
     if (!searchEmail.trim()) return;
     setSearching(true);
     setFoundUser(null);
-    const { data, error } = await supabase
+    // Search profile first
+    const { data: profileData, error: profileError } = await supabase
       .from("profiles")
-      .select("user_id, email, display_name, credit_balance")
+      .select("user_id, email, display_name")
       .ilike("email", `%${searchEmail.trim()}%`)
       .limit(1)
       .maybeSingle();
     setSearching(false);
-    if (error || !data) {
+    if (profileError || !profileData) {
       toast.error("User not found");
       return;
     }
-    setFoundUser(data as FoundUser);
+    // Fetch credit balance from user_credits table
+    const { data: creditsData } = await supabase
+      .from("user_credits")
+      .select("credit_balance")
+      .eq("user_id", profileData.user_id)
+      .maybeSingle();
+    setFoundUser({ ...profileData, credit_balance: creditsData?.credit_balance ?? 0 } as FoundUser);
   };
 
   const handleGrant = async () => {
@@ -48,14 +55,11 @@ export function AdminGrantCredits() {
       return;
     }
     setGranting(true);
-    const { error } = await supabase
-      .from("profiles")
-      .update({
-        credit_balance: foundUser.credit_balance + amount,
-        total_credits_purchased: amount, // increment via raw value since we can't do atomic add via client
-        updated_at: new Date().toISOString(),
-      })
-      .eq("user_id", foundUser.user_id);
+    // Use the add_credits RPC for atomic update
+    const { error } = await supabase.rpc("add_credits", {
+      _user_id: foundUser.user_id,
+      _amount: amount,
+    });
 
     if (error) {
       toast.error("Failed to grant credits: " + error.message);

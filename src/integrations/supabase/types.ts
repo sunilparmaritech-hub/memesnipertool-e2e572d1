@@ -152,6 +152,42 @@ export type Database = {
         }
         Relationships: []
       }
+      circuit_breaker_events: {
+        Row: {
+          cooldown_expires_at: string | null
+          id: string
+          reset_at: string | null
+          reset_by: string | null
+          reset_reason: string | null
+          trigger_details: Json | null
+          trigger_type: string
+          triggered_at: string
+          user_id: string
+        }
+        Insert: {
+          cooldown_expires_at?: string | null
+          id?: string
+          reset_at?: string | null
+          reset_by?: string | null
+          reset_reason?: string | null
+          trigger_details?: Json | null
+          trigger_type: string
+          triggered_at?: string
+          user_id: string
+        }
+        Update: {
+          cooldown_expires_at?: string | null
+          id?: string
+          reset_at?: string | null
+          reset_by?: string | null
+          reset_reason?: string | null
+          trigger_details?: Json | null
+          trigger_type?: string
+          triggered_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       copy_trades: {
         Row: {
           action: string
@@ -411,6 +447,66 @@ export type Database = {
         }
         Relationships: []
       }
+      deployer_reputation: {
+        Row: {
+          avg_liquidity_survival_seconds: number | null
+          avg_lp_lifespan_seconds: number | null
+          cluster_association_score: number | null
+          cluster_id: string | null
+          created_at: string
+          fast_lp_pull_flag: boolean | null
+          id: string
+          last_token_deployed_at: string | null
+          last_updated: string | null
+          rapid_deploy_flag: boolean | null
+          reputation_score: number | null
+          rug_ratio: number | null
+          tokens_last_7d: number | null
+          total_rugs: number | null
+          total_tokens_created: number | null
+          updated_at: string
+          wallet_address: string
+        }
+        Insert: {
+          avg_liquidity_survival_seconds?: number | null
+          avg_lp_lifespan_seconds?: number | null
+          cluster_association_score?: number | null
+          cluster_id?: string | null
+          created_at?: string
+          fast_lp_pull_flag?: boolean | null
+          id?: string
+          last_token_deployed_at?: string | null
+          last_updated?: string | null
+          rapid_deploy_flag?: boolean | null
+          reputation_score?: number | null
+          rug_ratio?: number | null
+          tokens_last_7d?: number | null
+          total_rugs?: number | null
+          total_tokens_created?: number | null
+          updated_at?: string
+          wallet_address: string
+        }
+        Update: {
+          avg_liquidity_survival_seconds?: number | null
+          avg_lp_lifespan_seconds?: number | null
+          cluster_association_score?: number | null
+          cluster_id?: string | null
+          created_at?: string
+          fast_lp_pull_flag?: boolean | null
+          id?: string
+          last_token_deployed_at?: string | null
+          last_updated?: string | null
+          rapid_deploy_flag?: boolean | null
+          reputation_score?: number | null
+          rug_ratio?: number | null
+          tokens_last_7d?: number | null
+          total_rugs?: number | null
+          total_tokens_created?: number | null
+          updated_at?: string
+          wallet_address?: string
+        }
+        Relationships: []
+      }
       disclaimer_acknowledgments: {
         Row: {
           acknowledged_at: string
@@ -450,6 +546,8 @@ export type Database = {
           exit_reason: string | null
           exit_tx_id: string | null
           id: string
+          liquidity_check_count: number | null
+          liquidity_last_checked_at: string | null
           profit_loss_percent: number | null
           profit_loss_value: number | null
           profit_take_percent: number
@@ -460,6 +558,7 @@ export type Database = {
           token_symbol: string
           updated_at: string
           user_id: string
+          waiting_for_liquidity_since: string | null
         }
         Insert: {
           amount: number
@@ -475,6 +574,8 @@ export type Database = {
           exit_reason?: string | null
           exit_tx_id?: string | null
           id?: string
+          liquidity_check_count?: number | null
+          liquidity_last_checked_at?: string | null
           profit_loss_percent?: number | null
           profit_loss_value?: number | null
           profit_take_percent: number
@@ -485,6 +586,7 @@ export type Database = {
           token_symbol: string
           updated_at?: string
           user_id: string
+          waiting_for_liquidity_since?: string | null
         }
         Update: {
           amount?: number
@@ -500,6 +602,8 @@ export type Database = {
           exit_reason?: string | null
           exit_tx_id?: string | null
           id?: string
+          liquidity_check_count?: number | null
+          liquidity_last_checked_at?: string | null
           profit_loss_percent?: number | null
           profit_loss_value?: number | null
           profit_take_percent?: number
@@ -510,6 +614,7 @@ export type Database = {
           token_symbol?: string
           updated_at?: string
           user_id?: string
+          waiting_for_liquidity_since?: string | null
         }
         Relationships: []
       }
@@ -520,7 +625,10 @@ export type Database = {
           email: string | null
           id: string
           is_suspended: boolean | null
+          referral_code: string | null
+          referral_earnings: number | null
           suspension_reason: string | null
+          total_referrals: number | null
           updated_at: string
           user_id: string
           wallet_address: string | null
@@ -531,7 +639,10 @@ export type Database = {
           email?: string | null
           id?: string
           is_suspended?: boolean | null
+          referral_code?: string | null
+          referral_earnings?: number | null
           suspension_reason?: string | null
+          total_referrals?: number | null
           updated_at?: string
           user_id: string
           wallet_address?: string | null
@@ -542,10 +653,37 @@ export type Database = {
           email?: string | null
           id?: string
           is_suspended?: boolean | null
+          referral_code?: string | null
+          referral_earnings?: number | null
           suspension_reason?: string | null
+          total_referrals?: number | null
           updated_at?: string
           user_id?: string
           wallet_address?: string | null
+        }
+        Relationships: []
+      }
+      referrals: {
+        Row: {
+          bonus_credited: boolean
+          created_at: string
+          id: string
+          referred_id: string
+          referrer_id: string
+        }
+        Insert: {
+          bonus_credited?: boolean
+          created_at?: string
+          id?: string
+          referred_id: string
+          referrer_id: string
+        }
+        Update: {
+          bonus_credited?: boolean
+          created_at?: string
+          id?: string
+          referred_id?: string
+          referrer_id?: string
         }
         Relationships: []
       }
@@ -608,45 +746,69 @@ export type Database = {
       }
       risk_settings: {
         Row: {
+          circuit_breaker_cooldown_minutes: number | null
           circuit_breaker_enabled: boolean | null
+          circuit_breaker_freeze_count: number | null
           circuit_breaker_loss_threshold: number | null
+          circuit_breaker_requires_admin_override: boolean | null
+          circuit_breaker_rug_count: number | null
+          circuit_breaker_tax_count: number | null
           circuit_breaker_time_window_minutes: number | null
+          circuit_breaker_trigger_reason: string | null
           circuit_breaker_triggered_at: string | null
           created_at: string
           emergency_stop_active: boolean | null
           id: string
           max_risk_score: number | null
           max_tax_percent: number | null
+          min_liquidity_auto_usd: number | null
+          min_liquidity_manual_usd: number | null
           require_liquidity_locked: boolean | null
           require_ownership_renounced: boolean | null
           updated_at: string
           user_id: string
         }
         Insert: {
+          circuit_breaker_cooldown_minutes?: number | null
           circuit_breaker_enabled?: boolean | null
+          circuit_breaker_freeze_count?: number | null
           circuit_breaker_loss_threshold?: number | null
+          circuit_breaker_requires_admin_override?: boolean | null
+          circuit_breaker_rug_count?: number | null
+          circuit_breaker_tax_count?: number | null
           circuit_breaker_time_window_minutes?: number | null
+          circuit_breaker_trigger_reason?: string | null
           circuit_breaker_triggered_at?: string | null
           created_at?: string
           emergency_stop_active?: boolean | null
           id?: string
           max_risk_score?: number | null
           max_tax_percent?: number | null
+          min_liquidity_auto_usd?: number | null
+          min_liquidity_manual_usd?: number | null
           require_liquidity_locked?: boolean | null
           require_ownership_renounced?: boolean | null
           updated_at?: string
           user_id: string
         }
         Update: {
+          circuit_breaker_cooldown_minutes?: number | null
           circuit_breaker_enabled?: boolean | null
+          circuit_breaker_freeze_count?: number | null
           circuit_breaker_loss_threshold?: number | null
+          circuit_breaker_requires_admin_override?: boolean | null
+          circuit_breaker_rug_count?: number | null
+          circuit_breaker_tax_count?: number | null
           circuit_breaker_time_window_minutes?: number | null
+          circuit_breaker_trigger_reason?: string | null
           circuit_breaker_triggered_at?: string | null
           created_at?: string
           emergency_stop_active?: boolean | null
           id?: string
           max_risk_score?: number | null
           max_tax_percent?: number | null
+          min_liquidity_auto_usd?: number | null
+          min_liquidity_manual_usd?: number | null
           require_liquidity_locked?: boolean | null
           require_ownership_renounced?: boolean | null
           updated_at?: string
@@ -705,6 +867,48 @@ export type Database = {
         }
         Relationships: []
       }
+      support_tickets: {
+        Row: {
+          category: string
+          created_at: string
+          description: string
+          id: string
+          priority: string
+          status: string
+          subject: string
+          ticket_number: string
+          updated_at: string
+          user_id: string
+          wallet_address: string | null
+        }
+        Insert: {
+          category?: string
+          created_at?: string
+          description: string
+          id?: string
+          priority?: string
+          status?: string
+          subject: string
+          ticket_number: string
+          updated_at?: string
+          user_id: string
+          wallet_address?: string | null
+        }
+        Update: {
+          category?: string
+          created_at?: string
+          description?: string
+          id?: string
+          priority?: string
+          status?: string
+          subject?: string
+          ticket_number?: string
+          updated_at?: string
+          user_id?: string
+          wallet_address?: string | null
+        }
+        Relationships: []
+      }
       system_logs: {
         Row: {
           created_at: string
@@ -738,13 +942,48 @@ export type Database = {
         }
         Relationships: []
       }
+      token_processing_states: {
+        Row: {
+          created_at: string
+          id: string
+          pending_reason: string | null
+          state: string
+          token_address: string
+          updated_at: string
+          user_id: string | null
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          pending_reason?: string | null
+          state?: string
+          token_address: string
+          updated_at?: string
+          user_id?: string | null
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          pending_reason?: string | null
+          state?: string
+          token_address?: string
+          updated_at?: string
+          user_id?: string | null
+        }
+        Relationships: []
+      }
       trade_history: {
         Row: {
           amount: number
+          buyer_position: number | null
           created_at: string
+          entry_price: number | null
           id: string
+          liquidity: number | null
           price_sol: number | null
           price_usd: number | null
+          risk_score: number | null
+          sol_spent: number | null
           status: string | null
           token_address: string
           token_name: string | null
@@ -755,10 +994,15 @@ export type Database = {
         }
         Insert: {
           amount: number
+          buyer_position?: number | null
           created_at?: string
+          entry_price?: number | null
           id?: string
+          liquidity?: number | null
           price_sol?: number | null
           price_usd?: number | null
+          risk_score?: number | null
+          sol_spent?: number | null
           status?: string | null
           token_address: string
           token_name?: string | null
@@ -769,10 +1013,15 @@ export type Database = {
         }
         Update: {
           amount?: number
+          buyer_position?: number | null
           created_at?: string
+          entry_price?: number | null
           id?: string
+          liquidity?: number | null
           price_sol?: number | null
           price_usd?: number | null
+          risk_score?: number | null
+          sol_spent?: number | null
           status?: string | null
           token_address?: string
           token_name?: string | null
@@ -912,12 +1161,15 @@ export type Database = {
           min_liquidity: number
           priority: Database["public"]["Enums"]["sniping_priority"]
           profit_take_percentage: number
+          slippage_tolerance: number | null
           stop_loss_percentage: number
+          target_buyer_positions: number[] | null
           token_blacklist: string[]
           token_whitelist: string[]
           trade_amount: number
           updated_at: string
           user_id: string
+          validation_rule_toggles: Json | null
         }
         Insert: {
           category_filters?: string[]
@@ -927,12 +1179,15 @@ export type Database = {
           min_liquidity?: number
           priority?: Database["public"]["Enums"]["sniping_priority"]
           profit_take_percentage?: number
+          slippage_tolerance?: number | null
           stop_loss_percentage?: number
+          target_buyer_positions?: number[] | null
           token_blacklist?: string[]
           token_whitelist?: string[]
           trade_amount?: number
           updated_at?: string
           user_id: string
+          validation_rule_toggles?: Json | null
         }
         Update: {
           category_filters?: string[]
@@ -942,12 +1197,42 @@ export type Database = {
           min_liquidity?: number
           priority?: Database["public"]["Enums"]["sniping_priority"]
           profit_take_percentage?: number
+          slippage_tolerance?: number | null
           stop_loss_percentage?: number
+          target_buyer_positions?: number[] | null
           token_blacklist?: string[]
           token_whitelist?: string[]
           trade_amount?: number
           updated_at?: string
           user_id?: string
+          validation_rule_toggles?: Json | null
+        }
+        Relationships: []
+      }
+      volume_authenticity_cache: {
+        Row: {
+          authenticity_score: number | null
+          bot_volume_ratio: number | null
+          cached_at: string
+          id: string
+          token_address: string
+          wash_trade_ratio: number | null
+        }
+        Insert: {
+          authenticity_score?: number | null
+          bot_volume_ratio?: number | null
+          cached_at?: string
+          id?: string
+          token_address: string
+          wash_trade_ratio?: number | null
+        }
+        Update: {
+          authenticity_score?: number | null
+          bot_volume_ratio?: number | null
+          cached_at?: string
+          id?: string
+          token_address?: string
+          wash_trade_ratio?: number | null
         }
         Relationships: []
       }
@@ -969,6 +1254,8 @@ export type Database = {
         }
         Returns: Json
       }
+      get_credit_costs: { Args: never; Returns: Json }
+      get_payment_wallet: { Args: never; Returns: string }
       get_subscription_with_usage: { Args: { _user_id: string }; Returns: Json }
       get_user_role: {
         Args: { _user_id: string }

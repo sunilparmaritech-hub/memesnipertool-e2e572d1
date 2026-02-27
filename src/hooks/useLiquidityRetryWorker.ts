@@ -48,7 +48,7 @@ export function useLiquidityRetryWorker() {
         .from('positions')
         .select('*')
         .eq('user_id', user.id)
-        .eq('status', 'waiting_for_liquidity')
+        .eq('status', 'waiting_for_liquidity' as any)
         .order('waiting_for_liquidity_since', { ascending: true });
 
       if (error) {
@@ -511,7 +511,7 @@ export function useLiquidityRetryWorker() {
       const { data, error } = await supabase
         .from('positions')
         .update({
-          status: 'waiting_for_liquidity',
+          status: 'waiting_for_liquidity' as any,
           waiting_for_liquidity_since: new Date().toISOString(),
           liquidity_check_count: 0,
           liquidity_last_checked_at: null,

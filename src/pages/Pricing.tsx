@@ -464,10 +464,10 @@ export default function Pricing() {
                           Awaiting on-chain confirmation. If pending &gt;5min, contact support.
                         </p>
                       )}
-                      {tx.failure_reason && (
+                      {(tx as any).failure_reason && (
                         <p className="text-[10px] text-destructive mt-1 flex items-center gap-1">
                           <XCircle className="w-3 h-3 shrink-0" />
-                          {tx.failure_reason}
+                          {(tx as any).failure_reason}
                         </p>
                       )}
                       {tx.status === "confirmed" && tx.credits_added === 0 && (

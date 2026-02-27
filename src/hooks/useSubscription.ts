@@ -112,13 +112,13 @@ export const TIER_CONFIG: Record<SubscriptionPlan, { name: string; limits: TierL
 export function useSubscription() {
   const { user, isAdmin } = useAuth();
 
-  // Read credit balance from profile
+  // Read credit balance from user_credits table
   const { data: profile, isLoading, refetch } = useQuery({
     queryKey: ["subscription-credits", user?.id],
     queryFn: async () => {
       if (!user) return null;
       const { data, error } = await supabase
-        .from("profiles")
+        .from("user_credits")
         .select("credit_balance, total_credits_purchased")
         .eq("user_id", user.id)
         .maybeSingle();

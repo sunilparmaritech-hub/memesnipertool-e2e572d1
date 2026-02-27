@@ -8,25 +8,28 @@ export interface CreditPack {
   id: string;
   name: string;
   sol_price: number;
-  credits_amount: number;
+  credits: number;
+  credits_amount?: number; // alias for credits for backward compat
   bonus_credits: number;
   is_active: boolean;
   sort_order: number;
+  description?: string | null;
+  badge?: string | null;
 }
 
 export interface CreditTransaction {
   id: string;
   user_id: string;
-  tx_hash: string;
-  sender_wallet: string;
-  recipient_wallet: string;
+  tx_hash: string | null;
+  sender_wallet: string | null;
   amount_sol: number;
   credits_added: number;
   status: string;
-  failure_reason: string | null;
   memo: string | null;
   created_at: string;
   confirmed_at: string | null;
+  pack_id?: string | null;
+  usd_value_at_payment?: number | null;
 }
 
 export interface UserCredits {
@@ -68,13 +71,13 @@ export function useCredits() {
     ...(adminCreditCosts || {}),
   };
 
-  // Fetch user credit balance
+  // Fetch user credit balance from user_credits table
   const { data: credits, isLoading: creditsLoading } = useQuery({
     queryKey: ["user-credits", user?.id],
     queryFn: async (): Promise<UserCredits> => {
       if (!user) return { credit_balance: 0, total_credits_purchased: 0, total_credits_used: 0 };
       const { data, error } = await supabase
-        .from("profiles")
+        .from("user_credits")
         .select("credit_balance, total_credits_purchased, total_credits_used")
         .eq("user_id", user.id)
         .maybeSingle();
@@ -108,7 +111,7 @@ export function useCredits() {
         console.error("Error fetching packs:", error);
         return [];
       }
-      return (data || []) as CreditPack[];
+      return (data || []).map(p => ({ ...p, credits_amount: p.credits })) as CreditPack[];
     },
     staleTime: 60_000,
   });
@@ -129,7 +132,7 @@ export function useCredits() {
         console.error("Error fetching transactions:", error);
         return [];
       }
-      return (data || []) as CreditTransaction[];
+      return (data || []) as unknown as CreditTransaction[];
     },
     enabled: !!user,
     staleTime: 15_000,

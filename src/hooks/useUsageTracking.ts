@@ -5,6 +5,13 @@ import { useSubscription, TIER_CONFIG, SubscriptionPlan } from "./useSubscriptio
 
 export type UsageType = "token_validation" | "auto_execution" | "clustering_call" | "api_check";
 
+const USAGE_TYPE_TO_FIELD: Record<UsageType, string> = {
+  token_validation: "validations_count",
+  auto_execution: "auto_executions_count",
+  clustering_call: "clustering_calls_count",
+  api_check: "api_intensive_count",
+};
+
 const USAGE_TYPE_TO_LIMIT_KEY: Record<UsageType, string> = {
   token_validation: "daily_validations",
   auto_execution: "daily_auto_executions",
@@ -32,7 +39,7 @@ export function useUsageTracking() {
         console.error("Error fetching usage:", error);
         return [];
       }
-      return data;
+      return data || [];
     },
     enabled: !!user,
     staleTime: 30_000,
@@ -41,27 +48,12 @@ export function useUsageTracking() {
   const incrementUsage = useMutation({
     mutationFn: async (type: UsageType) => {
       if (!user) throw new Error("Not authenticated");
-
-      const { data: existing } = await supabase
-        .from("usage_logs")
-        .select("id, count")
-        .eq("user_id", user.id)
-        .eq("usage_type", type)
-        .eq("usage_date", today)
-        .maybeSingle();
-
-      if (existing) {
-        const { error } = await supabase
-          .from("usage_logs")
-          .update({ count: existing.count + 1 })
-          .eq("id", existing.id);
-        if (error) throw error;
-      } else {
-        const { error } = await supabase
-          .from("usage_logs")
-          .insert({ user_id: user.id, usage_type: type, usage_date: today, count: 1 });
-        if (error) throw error;
-      }
+      const field = USAGE_TYPE_TO_FIELD[type] as "validations_count" | "auto_executions_count" | "clustering_calls_count" | "api_intensive_count";
+      await supabase.rpc("increment_usage", {
+        _user_id: user.id,
+        _field: field.replace("_count", "").replace("auto_executions", "auto_executions").replace("api_intensive", "api_intensive").replace("clustering_calls", "clustering").replace("validations", "validations"),
+        _amount: 1,
+      });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["usage_logs", user?.id, today] });
@@ -69,8 +61,9 @@ export function useUsageTracking() {
   });
 
   const getUsage = (type: UsageType): number => {
-    const entry = usageData.find((u: any) => u.usage_type === type);
-    return entry?.count || 0;
+    const field = USAGE_TYPE_TO_FIELD[type];
+    const row = (usageData as any[])[0];
+    return row?.[field] || 0;
   };
 
   const getLimit = (type: UsageType): number => {
@@ -78,22 +71,25 @@ export function useUsageTracking() {
     return (TIER_CONFIG[plan]?.limits as any)?.[key] || 0;
   };
 
-  const canUse = (type: UsageType): boolean => {
-    return getUsage(type) < getLimit(type);
+  const isAtLimit = (type: UsageType): boolean => {
+    const limit = getLimit(type);
+    return limit !== -1 && limit !== 9999 && getUsage(type) >= limit;
   };
 
+  const canUse = (type: UsageType): boolean => !isAtLimit(type);
   const getUsagePercent = (type: UsageType): number => {
     const limit = getLimit(type);
-    if (limit === 0) return 100;
+    if (!limit || limit === 9999 || limit === -1) return 0;
     return Math.min(100, Math.round((getUsage(type) / limit) * 100));
   };
 
   return {
-    usageData,
+    incrementUsage: incrementUsage.mutate,
     getUsage,
     getLimit,
+    isAtLimit,
     canUse,
     getUsagePercent,
-    incrementUsage: incrementUsage.mutate,
+    usageData,
   };
 }

@@ -531,6 +531,57 @@ export type Database = {
         }
         Relationships: []
       }
+      portfolio_snapshots: {
+        Row: {
+          closed_trades_count: number | null
+          created_at: string
+          id: string
+          open_positions_count: number
+          realized_pnl_sol: number
+          snapshot_date: string
+          sol_price_usd: number | null
+          total_invested_sol: number
+          total_pnl_sol: number
+          total_value_sol: number
+          unrealized_pnl_sol: number
+          updated_at: string
+          user_id: string
+          win_rate: number | null
+        }
+        Insert: {
+          closed_trades_count?: number | null
+          created_at?: string
+          id?: string
+          open_positions_count?: number
+          realized_pnl_sol?: number
+          snapshot_date?: string
+          sol_price_usd?: number | null
+          total_invested_sol?: number
+          total_pnl_sol?: number
+          total_value_sol?: number
+          unrealized_pnl_sol?: number
+          updated_at?: string
+          user_id: string
+          win_rate?: number | null
+        }
+        Update: {
+          closed_trades_count?: number | null
+          created_at?: string
+          id?: string
+          open_positions_count?: number
+          realized_pnl_sol?: number
+          snapshot_date?: string
+          sol_price_usd?: number | null
+          total_invested_sol?: number
+          total_pnl_sol?: number
+          total_value_sol?: number
+          unrealized_pnl_sol?: number
+          updated_at?: string
+          user_id?: string
+          win_rate?: number | null
+        }
+        Relationships: []
+      }
       positions: {
         Row: {
           amount: number
@@ -1032,6 +1083,78 @@ export type Database = {
         }
         Relationships: []
       }
+      trade_signals: {
+        Row: {
+          chain: string
+          created_at: string
+          executed_at: string | null
+          expires_at: string
+          id: string
+          is_pump_fun: boolean
+          liquidity: number
+          metadata: Json
+          price_usd: number | null
+          priority: string
+          reasons: string[]
+          risk_score: number
+          slippage: number
+          source: string | null
+          status: string
+          token_address: string
+          token_name: string
+          token_symbol: string
+          trade_amount: number
+          tx_signature: string | null
+          user_id: string
+        }
+        Insert: {
+          chain?: string
+          created_at?: string
+          executed_at?: string | null
+          expires_at?: string
+          id?: string
+          is_pump_fun?: boolean
+          liquidity?: number
+          metadata?: Json
+          price_usd?: number | null
+          priority?: string
+          reasons?: string[]
+          risk_score?: number
+          slippage?: number
+          source?: string | null
+          status?: string
+          token_address: string
+          token_name?: string
+          token_symbol?: string
+          trade_amount?: number
+          tx_signature?: string | null
+          user_id: string
+        }
+        Update: {
+          chain?: string
+          created_at?: string
+          executed_at?: string | null
+          expires_at?: string
+          id?: string
+          is_pump_fun?: boolean
+          liquidity?: number
+          metadata?: Json
+          price_usd?: number | null
+          priority?: string
+          reasons?: string[]
+          risk_score?: number
+          slippage?: number
+          source?: string | null
+          status?: string
+          token_address?: string
+          token_name?: string
+          token_symbol?: string
+          trade_amount?: number
+          tx_signature?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
       usage_logs: {
         Row: {
           api_intensive_count: number
@@ -1285,11 +1408,19 @@ export type Database = {
         | "trade_execution"
         | "rpc_provider"
         | "raydium"
+        | "helius"
+        | "pumpfun"
+        | "jupiter"
       app_role: "admin" | "user"
       coupon_discount_type: "percent" | "flat"
       coupon_duration: "once" | "three_months" | "lifetime"
       credit_tx_status: "pending" | "confirmed" | "failed" | "expired"
-      position_status: "open" | "closed" | "pending"
+      position_status:
+        | "open"
+        | "closed"
+        | "pending"
+        | "waiting_for_liquidity"
+        | "frozen"
       sniping_priority: "normal" | "fast" | "turbo"
       subscription_status:
         | "active"
@@ -1437,12 +1568,21 @@ export const Constants = {
         "trade_execution",
         "rpc_provider",
         "raydium",
+        "helius",
+        "pumpfun",
+        "jupiter",
       ],
       app_role: ["admin", "user"],
       coupon_discount_type: ["percent", "flat"],
       coupon_duration: ["once", "three_months", "lifetime"],
       credit_tx_status: ["pending", "confirmed", "failed", "expired"],
-      position_status: ["open", "closed", "pending"],
+      position_status: [
+        "open",
+        "closed",
+        "pending",
+        "waiting_for_liquidity",
+        "frozen",
+      ],
       sniping_priority: ["normal", "fast", "turbo"],
       subscription_status: [
         "active",

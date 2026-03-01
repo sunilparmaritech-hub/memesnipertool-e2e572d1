@@ -157,8 +157,10 @@ const TokenRow = ({ token, index }: { token: ScannedToken; index: number }) => {
         <div className="px-3 md:px-4 pb-3 md:pb-4 pl-[44px] md:pl-[60px] animate-fade-in">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-3 p-2 md:p-3 bg-secondary/30 rounded-lg text-[10px] md:text-xs">
             <div>
-              <span className="text-muted-foreground block mb-0.5">Buyers</span>
-              <span className="text-foreground font-semibold tabular-nums">{token.earlyBuyers}</span>
+              <span className="text-muted-foreground block mb-0.5">Holders</span>
+              <span className="text-foreground font-semibold tabular-nums">
+                {token.holders > 0 ? token.holders.toLocaleString() : '-'}
+              </span>
             </div>
             <div>
               <span className="text-muted-foreground block mb-0.5">Lock %</span>
@@ -173,6 +175,20 @@ const TokenRow = ({ token, index }: { token: ScannedToken; index: number }) => {
               <span className={`font-semibold tabular-nums ${token.riskScore < 40 ? 'text-success' : token.riskScore < 70 ? 'text-warning' : 'text-destructive'}`}>
                 {token.riskScore}/100
               </span>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-2 p-2 bg-secondary/20 rounded-lg text-[10px] md:text-xs mt-2">
+            <div>
+              <span className="text-muted-foreground block mb-0.5">Volume 24h</span>
+              <span className="text-foreground font-semibold tabular-nums">{formatLiquidity(token.volume24h)}</span>
+            </div>
+            <div>
+              <span className="text-muted-foreground block mb-0.5">Market Cap</span>
+              <span className="text-foreground font-semibold tabular-nums">{formatLiquidity(token.marketCap)}</span>
+            </div>
+            <div>
+              <span className="text-muted-foreground block mb-0.5">Early Buyers</span>
+              <span className="text-foreground font-semibold tabular-nums">{token.earlyBuyers}</span>
             </div>
           </div>
         </div>

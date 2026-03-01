@@ -376,7 +376,7 @@ export function useLiquidityWatcher() {
         await supabase
           .from('positions')
           .update({
-            status: 'waiting_for_liquidity' as any,
+            status: 'waiting_for_liquidity',
             waiting_for_liquidity_since: new Date().toISOString(),
             exit_reason: `frozen:${reason}`,
           })

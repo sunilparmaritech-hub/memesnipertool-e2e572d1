@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 
-// All supported API types (must match DB enum)
+// All supported API types (must match DB enum - includes legacy types)
 export type ApiType = 
   | 'dexscreener'
   | 'geckoterminal'
@@ -12,10 +12,10 @@ export type ApiType =
   | 'rpc_provider'
   | 'pumpfun'
   | 'helius'
-  | 'birdeye'
-  | 'dextools'
-  | 'liquidity_lock'
-  | 'trade_execution';
+  | 'birdeye';
+  
+// DB enum also includes these legacy types - keep separate to avoid breaking UI
+export type ApiTypeDB = ApiType | 'dextools' | 'liquidity_lock' | 'trade_execution';
 
 export type ApiStatus = 'active' | 'inactive' | 'error' | 'rate_limited';
 

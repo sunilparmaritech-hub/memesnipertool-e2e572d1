@@ -15,7 +15,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.90.1";
 import { getApiKey } from "../_shared/api-keys.ts";
 import { checkRateLimit, rateLimitResponse, GENERIC_LIMIT } from "../_shared/rate-limiter.ts";
 
-const HOLDER_LIMIT = { ...GENERIC_LIMIT, maxRequests: 10, windowMs: 60_000, functionName: 'token-holders' };
+const HOLDER_LIMIT = { ...GENERIC_LIMIT, maxRequests: 60, windowMs: 60_000, functionName: 'token-holders' };
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',

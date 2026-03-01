@@ -137,6 +137,14 @@ const TokenRow = ({ token, index }: { token: ScannedToken; index: number }) => {
           {getSafetyStatus()}
         </div>
         
+        {/* Holders (inline) */}
+        {token.holders > 0 && (
+          <div className="hidden md:block text-right min-w-[50px]">
+            <div className="text-[10px] text-muted-foreground">Holders</div>
+            <div className="text-xs font-semibold text-foreground tabular-nums">{token.holders.toLocaleString()}</div>
+          </div>
+        )}
+        
         {/* Price Change */}
         <div className="text-right min-w-[60px] md:min-w-[80px]">
           <div className={`flex items-center justify-end gap-0.5 md:gap-1 font-bold text-xs md:text-sm ${isPositive ? 'text-success' : 'text-destructive'}`}>

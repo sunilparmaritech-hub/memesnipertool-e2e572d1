@@ -37,7 +37,7 @@ export default function Leaderboard() {
               "w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold shrink-0",
               idx === 0 ? "bg-warning/20 text-warning" :
               idx === 1 ? "bg-muted-foreground/20 text-muted-foreground" :
-              idx === 2 ? "bg-orange-500/20 text-orange-500" :
+              idx === 2 ? "bg-primary/10 text-primary/70" :
               "bg-secondary text-muted-foreground"
             )}>
               {idx < 3 ? <Crown className="w-3.5 h-3.5" /> : idx + 1}

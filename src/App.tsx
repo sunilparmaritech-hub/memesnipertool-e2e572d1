@@ -43,6 +43,7 @@ const RiskDisclaimer = lazy(() => import("./pages/RiskDisclaimer"));
 const AmlPolicy = lazy(() => import("./pages/AmlPolicy"));
 const NonCustodialDisclosure = lazy(() => import("./pages/NonCustodialDisclosure"));
 const ComplianceDocs = lazy(() => import("./pages/ComplianceDocs"));
+const Community = lazy(() => import("./pages/Community"));
 
 const queryClient = new QueryClient();
 

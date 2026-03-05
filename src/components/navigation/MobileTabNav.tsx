@@ -93,6 +93,12 @@ export default function MobileTabNav() {
             className="w-48 bg-card border-border mb-2"
           >
             <DropdownMenuItem asChild className="cursor-pointer">
+              <Link to="/community" className="flex items-center gap-2">
+                <Users className="w-4 h-4" />
+                Community
+              </Link>
+            </DropdownMenuItem>
+            <DropdownMenuItem asChild className="cursor-pointer">
               <Link to="/risk" className="flex items-center gap-2">
                 <Shield className="w-4 h-4" />
                 Risk & Compliance

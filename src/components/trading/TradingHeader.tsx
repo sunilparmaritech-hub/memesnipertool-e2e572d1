@@ -75,6 +75,7 @@ const TradingHeader = forwardRef<HTMLElement, TradingHeaderProps>(function Tradi
       { label: "Portfolio", path: "/portfolio", icon: Briefcase },
       { label: "Risk", path: "/risk", icon: Shield },
       { label: "Settings", path: "/sniper-settings", icon: Settings },
+      { label: "Community", path: "/community", icon: Users },
       { label: "Guide", path: "/basics", icon: BookOpen },
     ];
 

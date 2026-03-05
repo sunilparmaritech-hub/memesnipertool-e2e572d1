@@ -14,7 +14,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useAuth } from "@/contexts/AuthContext";
-import { Shield, Crown, BarChart3, Bell, User, LogOut, BookOpen, Rocket, Info, Mail, CreditCard } from "lucide-react";
+import { Shield, Crown, BarChart3, Bell, User, LogOut, BookOpen, Rocket, Info, Mail, CreditCard, Users } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
 interface TabItem {

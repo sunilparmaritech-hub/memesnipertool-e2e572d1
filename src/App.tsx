@@ -181,6 +181,14 @@ const App = () => (
                 </ProtectedRoute>
               }
             />
+            <Route
+              path="/community"
+              element={
+                <ProtectedRoute>
+                  <SuspenseWrap><Community /></SuspenseWrap>
+                </ProtectedRoute>
+              }
+            />
             <Route path="*" element={<NotFound />} />
             </Routes>
             </ErrorBoundary>

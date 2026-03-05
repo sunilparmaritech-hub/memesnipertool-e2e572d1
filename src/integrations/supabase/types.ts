@@ -152,6 +152,108 @@ export type Database = {
         }
         Relationships: []
       }
+      chat_channels: {
+        Row: {
+          channel_type: string
+          created_at: string
+          description: string | null
+          icon: string | null
+          id: string
+          is_active: boolean
+          last_message_at: string | null
+          message_count: number
+          name: string
+          sort_order: number
+          token_address: string | null
+        }
+        Insert: {
+          channel_type?: string
+          created_at?: string
+          description?: string | null
+          icon?: string | null
+          id?: string
+          is_active?: boolean
+          last_message_at?: string | null
+          message_count?: number
+          name: string
+          sort_order?: number
+          token_address?: string | null
+        }
+        Update: {
+          channel_type?: string
+          created_at?: string
+          description?: string | null
+          icon?: string | null
+          id?: string
+          is_active?: boolean
+          last_message_at?: string | null
+          message_count?: number
+          name?: string
+          sort_order?: number
+          token_address?: string | null
+        }
+        Relationships: []
+      }
+      chat_messages: {
+        Row: {
+          channel_id: string
+          content: string
+          created_at: string
+          edited_at: string | null
+          id: string
+          is_deleted: boolean
+          is_pinned: boolean
+          message_type: string
+          metadata: Json | null
+          reactions: Json
+          reply_to_id: string | null
+          user_id: string
+        }
+        Insert: {
+          channel_id: string
+          content: string
+          created_at?: string
+          edited_at?: string | null
+          id?: string
+          is_deleted?: boolean
+          is_pinned?: boolean
+          message_type?: string
+          metadata?: Json | null
+          reactions?: Json
+          reply_to_id?: string | null
+          user_id: string
+        }
+        Update: {
+          channel_id?: string
+          content?: string
+          created_at?: string
+          edited_at?: string | null
+          id?: string
+          is_deleted?: boolean
+          is_pinned?: boolean
+          message_type?: string
+          metadata?: Json | null
+          reactions?: Json
+          reply_to_id?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "chat_messages_channel_id_fkey"
+            columns: ["channel_id"]
+            isOneToOne: false
+            referencedRelation: "chat_channels"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "chat_messages_reply_to_id_fkey"
+            columns: ["reply_to_id"]
+            isOneToOne: false
+            referencedRelation: "chat_messages"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       circuit_breaker_events: {
         Row: {
           cooldown_expires_at: string | null
@@ -185,6 +287,183 @@ export type Database = {
           trigger_type?: string
           triggered_at?: string
           user_id?: string
+        }
+        Relationships: []
+      }
+      community_comments: {
+        Row: {
+          body: string
+          created_at: string
+          id: string
+          is_best_answer: boolean
+          is_deleted: boolean
+          parent_id: string | null
+          post_id: string
+          updated_at: string
+          upvotes: number
+          user_id: string
+        }
+        Insert: {
+          body: string
+          created_at?: string
+          id?: string
+          is_best_answer?: boolean
+          is_deleted?: boolean
+          parent_id?: string | null
+          post_id: string
+          updated_at?: string
+          upvotes?: number
+          user_id: string
+        }
+        Update: {
+          body?: string
+          created_at?: string
+          id?: string
+          is_best_answer?: boolean
+          is_deleted?: boolean
+          parent_id?: string | null
+          post_id?: string
+          updated_at?: string
+          upvotes?: number
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "community_comments_parent_id_fkey"
+            columns: ["parent_id"]
+            isOneToOne: false
+            referencedRelation: "community_comments"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "community_comments_post_id_fkey"
+            columns: ["post_id"]
+            isOneToOne: false
+            referencedRelation: "community_posts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      community_posts: {
+        Row: {
+          best_answer_id: string | null
+          body: string
+          comment_count: number
+          created_at: string
+          id: string
+          is_deleted: boolean
+          is_locked: boolean
+          is_pinned: boolean
+          tag: string
+          title: string
+          token_address: string | null
+          token_symbol: string | null
+          updated_at: string
+          upvotes: number
+          user_id: string
+          views: number
+        }
+        Insert: {
+          best_answer_id?: string | null
+          body: string
+          comment_count?: number
+          created_at?: string
+          id?: string
+          is_deleted?: boolean
+          is_locked?: boolean
+          is_pinned?: boolean
+          tag?: string
+          title: string
+          token_address?: string | null
+          token_symbol?: string | null
+          updated_at?: string
+          upvotes?: number
+          user_id: string
+          views?: number
+        }
+        Update: {
+          best_answer_id?: string | null
+          body?: string
+          comment_count?: number
+          created_at?: string
+          id?: string
+          is_deleted?: boolean
+          is_locked?: boolean
+          is_pinned?: boolean
+          tag?: string
+          title?: string
+          token_address?: string | null
+          token_symbol?: string | null
+          updated_at?: string
+          upvotes?: number
+          user_id?: string
+          views?: number
+        }
+        Relationships: []
+      }
+      community_reports: {
+        Row: {
+          created_at: string
+          details: string | null
+          id: string
+          reason: string
+          reporter_id: string
+          reviewed_at: string | null
+          reviewed_by: string | null
+          status: string
+          target_id: string
+          target_type: string
+        }
+        Insert: {
+          created_at?: string
+          details?: string | null
+          id?: string
+          reason: string
+          reporter_id: string
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          status?: string
+          target_id: string
+          target_type: string
+        }
+        Update: {
+          created_at?: string
+          details?: string | null
+          id?: string
+          reason?: string
+          reporter_id?: string
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          status?: string
+          target_id?: string
+          target_type?: string
+        }
+        Relationships: []
+      }
+      community_votes: {
+        Row: {
+          created_at: string
+          id: string
+          target_id: string
+          target_type: string
+          user_id: string
+          vote_type: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          target_id: string
+          target_type: string
+          user_id: string
+          vote_type?: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          target_id?: string
+          target_type?: string
+          user_id?: string
+          vote_type?: string
         }
         Relationships: []
       }
@@ -1023,6 +1302,30 @@ export type Database = {
         }
         Relationships: []
       }
+      token_sentiment: {
+        Row: {
+          created_at: string
+          id: string
+          sentiment: string
+          token_address: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          sentiment: string
+          token_address: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          sentiment?: string
+          token_address?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       trade_history: {
         Row: {
           amount: number
@@ -1254,6 +1557,51 @@ export type Database = {
         }
         Relationships: []
       }
+      user_reputation: {
+        Row: {
+          accurate_insights: number
+          badge: string
+          comments_count: number
+          created_at: string
+          helpful_answers: number
+          id: string
+          is_moderator: boolean
+          posts_count: number
+          reputation_score: number
+          updated_at: string
+          upvotes_received: number
+          user_id: string
+        }
+        Insert: {
+          accurate_insights?: number
+          badge?: string
+          comments_count?: number
+          created_at?: string
+          helpful_answers?: number
+          id?: string
+          is_moderator?: boolean
+          posts_count?: number
+          reputation_score?: number
+          updated_at?: string
+          upvotes_received?: number
+          user_id: string
+        }
+        Update: {
+          accurate_insights?: number
+          badge?: string
+          comments_count?: number
+          created_at?: string
+          helpful_answers?: number
+          id?: string
+          is_moderator?: boolean
+          posts_count?: number
+          reputation_score?: number
+          updated_at?: string
+          upvotes_received?: number
+          user_id?: string
+        }
+        Relationships: []
+      }
       user_roles: {
         Row: {
           created_at: string
@@ -1383,6 +1731,15 @@ export type Database = {
       get_user_role: {
         Args: { _user_id: string }
         Returns: Database["public"]["Enums"]["app_role"]
+      }
+      handle_community_vote: {
+        Args: {
+          _target_id: string
+          _target_type: string
+          _user_id: string
+          _vote_type?: string
+        }
+        Returns: Json
       }
       has_role: {
         Args: {

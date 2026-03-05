@@ -16,6 +16,7 @@ import {
   BarChart3,
   Bot,
   BookOpen,
+  Users,
 } from "lucide-react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
@@ -75,6 +76,7 @@ const TradingHeader = forwardRef<HTMLElement, TradingHeaderProps>(function Tradi
       { label: "Portfolio", path: "/portfolio", icon: Briefcase },
       { label: "Risk", path: "/risk", icon: Shield },
       { label: "Settings", path: "/sniper-settings", icon: Settings },
+      { label: "Community", path: "/community", icon: Users },
       { label: "Guide", path: "/basics", icon: BookOpen },
     ];
 

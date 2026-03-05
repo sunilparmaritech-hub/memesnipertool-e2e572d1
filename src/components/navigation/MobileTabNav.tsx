@@ -14,7 +14,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useAuth } from "@/contexts/AuthContext";
-import { Shield, Crown, BarChart3, Bell, User, LogOut, BookOpen, Rocket, Info, Mail, CreditCard } from "lucide-react";
+import { Shield, Crown, BarChart3, Bell, User, LogOut, BookOpen, Rocket, Info, Mail, CreditCard, Users } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
 interface TabItem {
@@ -92,6 +92,12 @@ export default function MobileTabNav() {
             side="top" 
             className="w-48 bg-card border-border mb-2"
           >
+            <DropdownMenuItem asChild className="cursor-pointer">
+              <Link to="/community" className="flex items-center gap-2">
+                <Users className="w-4 h-4" />
+                Community
+              </Link>
+            </DropdownMenuItem>
             <DropdownMenuItem asChild className="cursor-pointer">
               <Link to="/risk" className="flex items-center gap-2">
                 <Shield className="w-4 h-4" />

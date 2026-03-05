@@ -29,8 +29,8 @@ export default function Leaderboard() {
           <div key={leader.user_id} className={cn(
             "flex items-center gap-3 px-3 py-2.5 rounded-lg border transition-colors",
             idx === 0 ? "border-warning/40 bg-warning/5" :
-            idx === 1 ? "border-muted-foreground/30 bg-secondary/30" :
-            idx === 2 ? "border-orange-500/30 bg-orange-500/5" :
+            idx === 1 ? "border-border/60 bg-secondary/30" :
+            idx === 2 ? "border-primary/20 bg-primary/3" :
             "border-border bg-card"
           )}>
             <div className={cn(

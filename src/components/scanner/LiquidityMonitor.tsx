@@ -943,7 +943,7 @@ const LiquidityMonitor = forwardRef<HTMLDivElement, LiquidityMonitorProps>(funct
             </div>
             
             <TabsContent value="pools" className="mt-0">
-              {/* Search + Pause/Start Controls */}
+              {/* Search + Controls */}
               <div className="px-4 pb-3 space-y-2">
                 <div className="flex items-center gap-2">
                   <div className="relative flex-1">
@@ -955,91 +955,119 @@ const LiquidityMonitor = forwardRef<HTMLDivElement, LiquidityMonitorProps>(funct
                       className="pl-9 bg-secondary/40 border-border/30 h-9 text-sm"
                     />
                   </div>
+
+                  {/* Grid / List toggle */}
+                  <div className="flex bg-secondary/60 rounded-lg p-0.5">
+                    <button
+                      onClick={() => setPoolViewMode('grid')}
+                      className={cn(
+                        "p-1.5 rounded-md transition-all",
+                        poolViewMode === 'grid' ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+                      )}
+                      title="Grid view"
+                    >
+                      <LayoutGrid className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={() => setPoolViewMode('list')}
+                      className={cn(
+                        "p-1.5 rounded-md transition-all",
+                        poolViewMode === 'list' ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+                      )}
+                      title="List view"
+                    >
+                      <List className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+
                   {onToggleScanning && (
                     <Button
                       variant={isScanningPaused ? "default" : "outline"}
                       size="sm"
                       onClick={onToggleScanning}
                       className={cn(
-                        "h-9 gap-1.5 min-w-[90px]",
-                        isScanningPaused 
-                          ? "bg-success hover:bg-success/90 text-success-foreground" 
+                        "h-9 gap-1.5 min-w-[80px]",
+                        isScanningPaused
+                          ? "bg-success hover:bg-success/90 text-success-foreground"
                           : "border-warning/50 text-warning hover:bg-warning/10"
                       )}
                     >
                       {isScanningPaused ? (
-                        <>
-                          <Play className="w-3.5 h-3.5" />
-                          Start
-                        </>
+                        <><Play className="w-3.5 h-3.5" />Start</>
                       ) : (
-                        <>
-                          <Pause className="w-3.5 h-3.5" />
-                          Pause
-                        </>
+                        <><Pause className="w-3.5 h-3.5" />Pause</>
                       )}
                     </Button>
                   )}
                 </div>
               </div>
-              
-              {/* Column Headers */}
-              <div className="grid grid-cols-[1fr_auto] md:grid-cols-[minmax(180px,2fr)_60px_90px_100px_72px_80px_56px_56px_52px_32px] items-center gap-0 px-4 py-2.5 text-[10px] uppercase tracking-wider text-muted-foreground/70 border-y border-border/30 bg-secondary/20 font-medium">
-                <div className="pl-1">Pair Info</div>
-                <div className="hidden md:block text-center">Age</div>
-                <div className="hidden md:block text-right px-2">Liquidity</div>
-                <div className="hidden md:block text-right px-2">MCap</div>
-                <div className="hidden md:block text-center">Holders</div>
-                <div className="hidden md:block text-right px-2">Volume</div>
-                <div className="hidden md:block text-center">Source</div>
-                <div className="hidden md:block text-center">B/S</div>
-                <div className="hidden md:block text-center">Risk</div>
-                <div></div>
-              </div>
-              
-              {/* Pool List - No scroll, auto expand */}
-              <div className="divide-y divide-border/10">
-                {loading && pools.length === 0 ? (
-                  // Only show skeleton on initial load
-                  <>
-                    {[1, 2, 3, 4, 5].map((i) => (
-                      <PoolSkeleton key={i} />
-                    ))}
-                  </>
-                ) : displayedPools.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
-                    <Zap className="w-10 h-10 mb-3 opacity-20" />
-                    <p className="font-medium text-sm mb-1">
-                      {searchTerm ? 'No matching pools' : 'No pools detected yet'}
-                    </p>
-                    <p className="text-xs text-muted-foreground/70">
-                      {searchTerm ? 'Try a different search term' : 'Enable the bot to start scanning'}
-                    </p>
-                  </div>
-                ) : (
-                  displayedPools.map((pool, idx) => (
-                    <PoolRow 
-                      key={pool.id} 
-                      pool={pool} 
+
+              {/* Column Headers — list mode only */}
+              {poolViewMode === 'list' && (
+                <div className="grid grid-cols-[1fr_auto] md:grid-cols-[minmax(180px,2fr)_60px_90px_100px_72px_80px_56px_56px_52px_32px] items-center gap-0 px-4 py-2.5 text-[10px] uppercase tracking-wider text-muted-foreground/70 border-y border-border/30 bg-secondary/20 font-medium">
+                  <div className="pl-1">Pair Info</div>
+                  <div className="hidden md:block text-center">Age</div>
+                  <div className="hidden md:block text-right px-2">Liquidity</div>
+                  <div className="hidden md:block text-right px-2">MCap</div>
+                  <div className="hidden md:block text-center">Holders</div>
+                  <div className="hidden md:block text-right px-2">Volume</div>
+                  <div className="hidden md:block text-center">Source</div>
+                  <div className="hidden md:block text-center">B/S</div>
+                  <div className="hidden md:block text-center">Risk</div>
+                  <div></div>
+                </div>
+              )}
+
+              {/* Pool content */}
+              {loading && pools.length === 0 ? (
+                <div className={cn(poolViewMode === 'grid' ? "p-3 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2.5" : "divide-y divide-border/10")}>
+                  {[1, 2, 3, 4, 5].map((i) => (
+                    <PoolSkeleton key={i} />
+                  ))}
+                </div>
+              ) : displayedPools.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
+                  <Zap className="w-10 h-10 mb-3 opacity-20" />
+                  <p className="font-medium text-sm mb-1">
+                    {searchTerm ? 'No matching pools' : 'No pools detected yet'}
+                  </p>
+                  <p className="text-xs text-muted-foreground/70">
+                    {searchTerm ? 'Try a different search term' : 'Enable the bot to start scanning'}
+                  </p>
+                </div>
+              ) : poolViewMode === 'grid' ? (
+                <div className="p-3 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2.5">
+                  {displayedPools.map((pool) => (
+                    <PoolGridCard
+                      key={pool.id}
+                      pool={pool}
+                      isNew={newTokenIds.has(pool.id)}
+                      onViewDetails={handleViewDetails}
+                      holderCount={holderData?.get(pool.address)?.holderCount}
+                      buyerPosition={holderData?.get(pool.address)?.buyerPosition}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <div className="divide-y divide-border/10">
+                  {displayedPools.map((pool, idx) => (
+                    <PoolRow
+                      key={pool.id}
+                      pool={pool}
                       colorIndex={idx}
                       isNew={newTokenIds.has(pool.id)}
                       onViewDetails={handleViewDetails}
                       holderCount={holderData?.get(pool.address)?.holderCount}
                       buyerPosition={holderData?.get(pool.address)?.buyerPosition}
                     />
-                  ))
-                )}
-              </div>
+                  ))}
+                </div>
+              )}
 
               {/* Load More */}
               {hasMore && (
                 <div className="px-4 py-3 border-t border-border/30">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={loadMore}
-                    className="w-full h-8 text-xs"
-                  >
+                  <Button variant="outline" size="sm" onClick={loadMore} className="w-full h-8 text-xs">
                     Show more ({filteredPools.length - displayCount} remaining)
                   </Button>
                 </div>

@@ -720,6 +720,7 @@ const LiquidityMonitor = forwardRef<HTMLDivElement, LiquidityMonitorProps>(funct
   
   const [isExpanded, setIsExpanded] = useState(true);
   const [displayCount, setDisplayCount] = useState(10);
+  const [poolViewMode, setPoolViewMode] = useState<'grid' | 'list'>('grid');
   
   // Handle navigation to token detail page
   const handleViewDetails = useCallback((pool: ScannedToken) => {

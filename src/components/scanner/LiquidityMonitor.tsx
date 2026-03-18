@@ -6,7 +6,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { ScannedToken } from "@/hooks/useTokenScanner";
 import { useScannerStore, type MonitorTab } from "@/stores/scannerStore";
-import { Zap, TrendingUp, TrendingDown, ExternalLink, ShieldCheck, ShieldX, Lock, Search, LogOut, ChevronDown, ChevronUp, DollarSign, Eye, Clock, Play, Pause, Users } from "lucide-react";
+import { Zap, TrendingUp, TrendingDown, ExternalLink, ShieldCheck, ShieldX, Lock, Search, LogOut, ChevronDown, ChevronUp, DollarSign, Eye, Clock, Play, Pause, Users, LayoutGrid, List, CheckCircle2, XCircle } from "lucide-react";
 import TokenImage from "@/components/ui/TokenImage";
 import { formatDistanceToNow } from "date-fns";
 import { Input } from "@/components/ui/input";

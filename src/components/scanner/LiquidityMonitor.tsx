@@ -6,7 +6,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { ScannedToken } from "@/hooks/useTokenScanner";
 import { useScannerStore, type MonitorTab } from "@/stores/scannerStore";
-import { Zap, TrendingUp, TrendingDown, ExternalLink, ShieldCheck, ShieldX, Lock, Search, LogOut, ChevronDown, ChevronUp, DollarSign, Eye, Clock, Play, Pause, Users } from "lucide-react";
+import { Zap, TrendingUp, TrendingDown, ExternalLink, ShieldCheck, ShieldX, Lock, Search, LogOut, ChevronDown, ChevronUp, DollarSign, Eye, Clock, Play, Pause, Users, LayoutGrid, List, CheckCircle2, XCircle } from "lucide-react";
 import TokenImage from "@/components/ui/TokenImage";
 import { formatDistanceToNow } from "date-fns";
 import { Input } from "@/components/ui/input";
@@ -551,6 +551,129 @@ const TradeRow = memo(({ trade, colorIndex, onExit }: {
 
 TradeRow.displayName = 'TradeRow';
 
+// ────────── Pool Grid Card ──────────
+const PoolGridCard = memo(({ pool, isNew, onViewDetails, holderCount, buyerPosition }: {
+  pool: ScannedToken;
+  isNew?: boolean;
+  onViewDetails: (pool: ScannedToken) => void;
+  holderCount?: number | null;
+  buyerPosition?: number | null;
+}) => {
+  const navigate = useNavigate();
+  const priceChange = pool.priceChange24h ?? 0;
+  const isPositive = priceChange >= 0;
+  const displayHolders = holderCount ?? pool.holders;
+  const isPumpFun = pool.isPumpFun || pool.source?.toLowerCase().includes('pump');
+  const canBuy = pool.canBuy === true;
+  const canSell = pool.canSell === true;
+  const displaySymbol = isPlaceholder(pool.symbol) ? shortAddress(pool.address) : pool.symbol;
+  const displayName = isPlaceholder(pool.name) ? `Token ${shortAddress(pool.address)}` : pool.name;
+
+  const handleSolscanClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    window.open(`https://solscan.io/token/${pool.address}`, '_blank', 'noopener,noreferrer');
+  };
+
+  const statRows = [
+    { label: 'MCAP',    valueA: formatCompact(pool.marketCap),  labelB: 'LIQUIDITY', valueB: formatCompact(pool.liquidity) },
+    { label: 'VOLUME',  valueA: formatCompact(pool.volume24h),  labelB: 'AGE',       valueB: formatAge(pool.createdAt) },
+    { label: 'HOLDERS', valueA: displayHolders ? formatCompactNum(displayHolders) : '—', labelB: 'RISK', valueB: `${pool.riskScore}/100` },
+  ];
+
+  return (
+    <div
+      className={cn(
+        "group relative rounded-xl border border-border/40 bg-card overflow-hidden hover:border-primary/40 hover:shadow-[0_0_18px_hsl(var(--primary)/0.15)] transition-all duration-200 cursor-pointer flex flex-col",
+        isNew && "animate-fade-in border-primary/60"
+      )}
+      onClick={() => navigate(`/token/${pool.address}`)}
+    >
+      {/* Top accent stripe */}
+      <div className={cn("h-[2px] w-full", isPositive ? "bg-gradient-to-r from-success/60 via-success to-success/20" : "bg-gradient-to-r from-destructive/60 via-destructive to-destructive/20")} />
+
+      {/* Header */}
+      <div className="flex items-center gap-2.5 px-3 pt-3 pb-2">
+        <TokenImage symbol={displaySymbol} address={pool.address} imageUrl={pool.imageUrl} size="lg" className="shrink-0" />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="font-bold text-foreground text-sm truncate leading-tight">
+              {displayName.length > 10 ? displayName.slice(0, 10) + '…' : displayName}
+            </span>
+            {isNew && <Badge className="bg-primary/20 text-primary text-[8px] px-1 py-0 h-3.5">NEW</Badge>}
+            {pool.riskScore >= 70 && <Badge className="bg-destructive/20 text-destructive text-[8px] px-1 py-0 h-3.5 border border-destructive/30">RUG</Badge>}
+          </div>
+          <div className="flex items-center gap-1 text-[10px] text-muted-foreground mt-0.5">
+            <span className="font-mono">{pool.address.slice(0, 4)}…{pool.address.slice(-4)}</span>
+            <ExternalLink className="w-2.5 h-2.5 opacity-50 hover:opacity-100 hover:text-primary shrink-0" onClick={handleSolscanClick} />
+          </div>
+        </div>
+      </div>
+
+      {/* Price change hero */}
+      <div className="px-3 pb-2">
+        <div className={cn("flex items-baseline gap-1", isPositive ? "text-success" : "text-destructive")}>
+          <span className="text-2xl font-black tabular-nums leading-none">
+            {isPositive ? '+' : ''}{priceChange.toFixed(1)}%
+          </span>
+          <span className="text-[10px] text-muted-foreground ml-1">(24h)</span>
+          {isPositive ? <TrendingUp className="w-4 h-4 ml-auto" /> : <TrendingDown className="w-4 h-4 ml-auto" />}
+        </div>
+      </div>
+
+      <div className="mx-3 border-t border-border/25" />
+
+      {/* Stats */}
+      <div className="px-3 py-2 flex-1 space-y-1.5">
+        {statRows.map(({ label, valueA, labelB, valueB }) => (
+          <div key={label} className="flex items-center">
+            <div className="flex-1 flex items-center justify-between pr-2 border-r border-border/20">
+              <span className="text-[9px] font-semibold text-muted-foreground tracking-widest uppercase">{label}</span>
+              <span className="text-[11px] font-bold tabular-nums text-foreground">{valueA}</span>
+            </div>
+            <div className="flex-1 flex items-center justify-between pl-2">
+              <span className="text-[9px] font-semibold text-muted-foreground tracking-widest uppercase">{labelB}</span>
+              <span className={cn(
+                "text-[11px] font-bold tabular-nums",
+                labelB === 'RISK'
+                  ? pool.riskScore < 40 ? "text-success" : pool.riskScore < 70 ? "text-warning" : "text-destructive"
+                  : "text-foreground"
+              )}>{valueB}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="mx-3 border-t border-border/25" />
+
+      {/* Footer */}
+      <div className="flex items-center px-3 py-2 gap-2">
+        <div className="flex items-center gap-1 text-[10px] font-semibold">
+          <span className="text-[9px] text-muted-foreground tracking-widest uppercase">BUY/SELL</span>
+          {canBuy ? <CheckCircle2 className="w-3.5 h-3.5 text-success" /> : <XCircle className="w-3.5 h-3.5 text-destructive" />}
+          <span className="text-muted-foreground">/</span>
+          {canSell ? <CheckCircle2 className="w-3.5 h-3.5 text-success" /> : <XCircle className="w-3.5 h-3.5 text-destructive" />}
+        </div>
+        <div className="flex-1" />
+        <span className="text-[9px] text-muted-foreground tracking-widest uppercase font-semibold">SOURCE</span>
+        <Badge variant="outline" className={cn(
+          "text-[9px] px-1.5 py-0 h-4 border",
+          isPumpFun ? "border-orange-400/40 text-orange-400 bg-orange-400/10" : "border-purple-400/40 text-purple-400 bg-purple-400/10"
+        )}>
+          {isPumpFun ? 'Pump' : 'Dex'}
+        </Badge>
+      </div>
+
+      {/* Safety icons overlay */}
+      <div className="absolute top-3 right-2.5 flex gap-1">
+        {pool.riskScore < 50 ? <ShieldCheck className="w-3 h-3 text-success opacity-70" /> : <ShieldX className="w-3 h-3 text-destructive opacity-70" />}
+        {pool.liquidityLocked && <Lock className="w-3 h-3 text-success opacity-70" />}
+      </div>
+    </div>
+  );
+});
+
+PoolGridCard.displayName = 'PoolGridCard';
+
 // Initial loading skeleton
 const PoolSkeleton = memo(() => (
   <div className="grid grid-cols-[1fr_auto] md:grid-cols-[2fr_70px_100px_90px_70px_90px] items-center gap-1 md:gap-2 px-3 py-2.5 border-b border-border/20 animate-pulse">
@@ -597,6 +720,7 @@ const LiquidityMonitor = forwardRef<HTMLDivElement, LiquidityMonitorProps>(funct
   
   const [isExpanded, setIsExpanded] = useState(true);
   const [displayCount, setDisplayCount] = useState(10);
+  const [poolViewMode, setPoolViewMode] = useState<'grid' | 'list'>('grid');
   
   // Handle navigation to token detail page
   const handleViewDetails = useCallback((pool: ScannedToken) => {
@@ -819,7 +943,7 @@ const LiquidityMonitor = forwardRef<HTMLDivElement, LiquidityMonitorProps>(funct
             </div>
             
             <TabsContent value="pools" className="mt-0">
-              {/* Search + Pause/Start Controls */}
+              {/* Search + Controls */}
               <div className="px-4 pb-3 space-y-2">
                 <div className="flex items-center gap-2">
                   <div className="relative flex-1">
@@ -831,91 +955,119 @@ const LiquidityMonitor = forwardRef<HTMLDivElement, LiquidityMonitorProps>(funct
                       className="pl-9 bg-secondary/40 border-border/30 h-9 text-sm"
                     />
                   </div>
+
+                  {/* Grid / List toggle */}
+                  <div className="flex bg-secondary/60 rounded-lg p-0.5">
+                    <button
+                      onClick={() => setPoolViewMode('grid')}
+                      className={cn(
+                        "p-1.5 rounded-md transition-all",
+                        poolViewMode === 'grid' ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+                      )}
+                      title="Grid view"
+                    >
+                      <LayoutGrid className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={() => setPoolViewMode('list')}
+                      className={cn(
+                        "p-1.5 rounded-md transition-all",
+                        poolViewMode === 'list' ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+                      )}
+                      title="List view"
+                    >
+                      <List className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+
                   {onToggleScanning && (
                     <Button
                       variant={isScanningPaused ? "default" : "outline"}
                       size="sm"
                       onClick={onToggleScanning}
                       className={cn(
-                        "h-9 gap-1.5 min-w-[90px]",
-                        isScanningPaused 
-                          ? "bg-success hover:bg-success/90 text-success-foreground" 
+                        "h-9 gap-1.5 min-w-[80px]",
+                        isScanningPaused
+                          ? "bg-success hover:bg-success/90 text-success-foreground"
                           : "border-warning/50 text-warning hover:bg-warning/10"
                       )}
                     >
                       {isScanningPaused ? (
-                        <>
-                          <Play className="w-3.5 h-3.5" />
-                          Start
-                        </>
+                        <><Play className="w-3.5 h-3.5" />Start</>
                       ) : (
-                        <>
-                          <Pause className="w-3.5 h-3.5" />
-                          Pause
-                        </>
+                        <><Pause className="w-3.5 h-3.5" />Pause</>
                       )}
                     </Button>
                   )}
                 </div>
               </div>
-              
-              {/* Column Headers */}
-              <div className="grid grid-cols-[1fr_auto] md:grid-cols-[minmax(180px,2fr)_60px_90px_100px_72px_80px_56px_56px_52px_32px] items-center gap-0 px-4 py-2.5 text-[10px] uppercase tracking-wider text-muted-foreground/70 border-y border-border/30 bg-secondary/20 font-medium">
-                <div className="pl-1">Pair Info</div>
-                <div className="hidden md:block text-center">Age</div>
-                <div className="hidden md:block text-right px-2">Liquidity</div>
-                <div className="hidden md:block text-right px-2">MCap</div>
-                <div className="hidden md:block text-center">Holders</div>
-                <div className="hidden md:block text-right px-2">Volume</div>
-                <div className="hidden md:block text-center">Source</div>
-                <div className="hidden md:block text-center">B/S</div>
-                <div className="hidden md:block text-center">Risk</div>
-                <div></div>
-              </div>
-              
-              {/* Pool List - No scroll, auto expand */}
-              <div className="divide-y divide-border/10">
-                {loading && pools.length === 0 ? (
-                  // Only show skeleton on initial load
-                  <>
-                    {[1, 2, 3, 4, 5].map((i) => (
-                      <PoolSkeleton key={i} />
-                    ))}
-                  </>
-                ) : displayedPools.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
-                    <Zap className="w-10 h-10 mb-3 opacity-20" />
-                    <p className="font-medium text-sm mb-1">
-                      {searchTerm ? 'No matching pools' : 'No pools detected yet'}
-                    </p>
-                    <p className="text-xs text-muted-foreground/70">
-                      {searchTerm ? 'Try a different search term' : 'Enable the bot to start scanning'}
-                    </p>
-                  </div>
-                ) : (
-                  displayedPools.map((pool, idx) => (
-                    <PoolRow 
-                      key={pool.id} 
-                      pool={pool} 
+
+              {/* Column Headers — list mode only */}
+              {poolViewMode === 'list' && (
+                <div className="grid grid-cols-[1fr_auto] md:grid-cols-[minmax(180px,2fr)_60px_90px_100px_72px_80px_56px_56px_52px_32px] items-center gap-0 px-4 py-2.5 text-[10px] uppercase tracking-wider text-muted-foreground/70 border-y border-border/30 bg-secondary/20 font-medium">
+                  <div className="pl-1">Pair Info</div>
+                  <div className="hidden md:block text-center">Age</div>
+                  <div className="hidden md:block text-right px-2">Liquidity</div>
+                  <div className="hidden md:block text-right px-2">MCap</div>
+                  <div className="hidden md:block text-center">Holders</div>
+                  <div className="hidden md:block text-right px-2">Volume</div>
+                  <div className="hidden md:block text-center">Source</div>
+                  <div className="hidden md:block text-center">B/S</div>
+                  <div className="hidden md:block text-center">Risk</div>
+                  <div></div>
+                </div>
+              )}
+
+              {/* Pool content */}
+              {loading && pools.length === 0 ? (
+                <div className={cn(poolViewMode === 'grid' ? "p-3 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2.5" : "divide-y divide-border/10")}>
+                  {[1, 2, 3, 4, 5].map((i) => (
+                    <PoolSkeleton key={i} />
+                  ))}
+                </div>
+              ) : displayedPools.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
+                  <Zap className="w-10 h-10 mb-3 opacity-20" />
+                  <p className="font-medium text-sm mb-1">
+                    {searchTerm ? 'No matching pools' : 'No pools detected yet'}
+                  </p>
+                  <p className="text-xs text-muted-foreground/70">
+                    {searchTerm ? 'Try a different search term' : 'Enable the bot to start scanning'}
+                  </p>
+                </div>
+              ) : poolViewMode === 'grid' ? (
+                <div className="p-3 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2.5">
+                  {displayedPools.map((pool) => (
+                    <PoolGridCard
+                      key={pool.id}
+                      pool={pool}
+                      isNew={newTokenIds.has(pool.id)}
+                      onViewDetails={handleViewDetails}
+                      holderCount={holderData?.get(pool.address)?.holderCount}
+                      buyerPosition={holderData?.get(pool.address)?.buyerPosition}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <div className="divide-y divide-border/10">
+                  {displayedPools.map((pool, idx) => (
+                    <PoolRow
+                      key={pool.id}
+                      pool={pool}
                       colorIndex={idx}
                       isNew={newTokenIds.has(pool.id)}
                       onViewDetails={handleViewDetails}
                       holderCount={holderData?.get(pool.address)?.holderCount}
                       buyerPosition={holderData?.get(pool.address)?.buyerPosition}
                     />
-                  ))
-                )}
-              </div>
+                  ))}
+                </div>
+              )}
 
               {/* Load More */}
               {hasMore && (
                 <div className="px-4 py-3 border-t border-border/30">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={loadMore}
-                    className="w-full h-8 text-xs"
-                  >
+                  <Button variant="outline" size="sm" onClick={loadMore} className="w-full h-8 text-xs">
                     Show more ({filteredPools.length - displayCount} remaining)
                   </Button>
                 </div>
